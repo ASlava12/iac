@@ -4,8 +4,10 @@
 --   * audit_events.drift_id stays as INTEGER. drift_events.id is BIGSERIAL
 --     (BIGINT) — narrowing the FK-ish reference to INTEGER risks overflow
 --     after ~2^31 drift rows, but matching the existing on-the-wire shape
---     (we serialize as i64) is more important. Bump to BIGINT in Phase 8+
---     when we audit binds across both dialects.
+--     (we serialize as i64) is more important. Promote to BIGINT once a
+--     real-fleet trial gets within striking distance of 2^31 drift rows;
+--     the audit-bind machinery can absorb the dialect divergence at the
+--     wire layer when that happens.
 
 CREATE TABLE audit_events (
     id              BIGSERIAL PRIMARY KEY,

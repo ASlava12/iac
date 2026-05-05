@@ -5,8 +5,10 @@
 //! look up the saved token automatically when `IAC_ADMIN_TOKEN` is not set.
 //!
 //! Tokens are 24-hour bearer credentials handed out by `POST /v1/auth/login`.
-//! When they expire the next call will get 401 and the operator should
-//! re-run `iac login`. Phase 7+ will add silent refresh.
+//! Phase 7co.4 added silent refresh: when a saved token is within its
+//! refresh window the next CLI call exchanges it via `POST /v1/auth/refresh`
+//! transparently (see `try_refresh` below). Past the refresh window the
+//! call gets 401 and the operator re-runs `iac login`.
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;

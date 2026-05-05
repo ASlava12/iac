@@ -253,14 +253,18 @@ kind: package
 spec:
   name: nginx
   state: present           # present|absent|latest
+  version: "1.18.0-6.1"    # опциональный pin — только при state=present
 ```
 
 * **Allowlist:** секция `packages:` (name globs, allow-only); идентификатор = `spec.name`
 * **Подводные камни:** Backend-autodetect (apt → dnf → pacman) читает
   `/etc/os-release`; на нестандартных дистрах может выбрать не тот.
   `latest` запускает upgrade на каждый apply — осторожно во время
-  canary, может неожиданно поднять версию. Pin на конкретную версию
-  пока не поддерживается (Phase 8 backlog).
+  canary, может неожиданно поднять версию. Используйте
+  `version: "<точная>"` чтобы зафиксировать конкретную версию (apt:
+  `apt-get install name=version`); pin-mismatch триггерит update step
+  на следующем apply. `state: absent` вместе с `version` отвергается
+  на validate-этапе.
 
 ### `docker.container`
 

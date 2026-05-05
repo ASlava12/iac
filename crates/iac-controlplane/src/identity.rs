@@ -5,8 +5,12 @@
 //!     Carries a list of roles loaded from the `users` table.
 //!   * `Agent` — programmatic caller, registered via `POST /v1/agents/register`.
 //!   * `LegacyAdmin` — the static `admin_token` from server config. Always
-//!     grants the `Admin` role. Will be removed in Phase 7+ once user-based
-//!     auth is fully rolled out.
+//!     grants the `Admin` role. Kept on purpose as the **bootstrap path**:
+//!     a fresh control-plane has no users yet, and the admin must be able
+//!     to call `iac users create` to seed the user table. Operators who
+//!     don't want it in production set `admin_token = null` after
+//!     bootstrapping. Originally slated for removal in Phase 7+; the
+//!     design landed on "keep, gate behind config" instead.
 //!
 //! Endpoint handlers call [`require_role`] which walks the resolution chain
 //! (admin_token → user_tokens → agents) and returns an [`Identity`] the

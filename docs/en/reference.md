@@ -249,14 +249,18 @@ kind: package
 spec:
   name: nginx
   state: present           # present|absent|latest
+  version: "1.18.0-6.1"    # optional pin — only with state=present
 ```
 
 * **Allowlist:** section `packages:` (name globs, allow-only); identifier = `spec.name`
 * **Pitfalls:** Backend autodetect (apt → dnf → pacman) reads
   `/etc/os-release`; on bespoke distros the agent may pick the wrong
   backend. State `latest` runs an upgrade on every apply — use it
-  sparingly to avoid surprise upgrades during canary rollouts. No
-  version pinning yet (Phase 8 backlog).
+  sparingly to avoid surprise upgrades during canary rollouts. Use
+  `version: "<exact>"` to pin a specific version instead (apt:
+  `apt-get install name=version`); a pin mismatch triggers an
+  update step on the next apply. `state: absent` with `version`
+  set is rejected at validate-time.
 
 ### `docker.container`
 
