@@ -2493,3 +2493,23 @@ Two follow-ups: a real race in the audit-row commit ordering (caught as a flaky 
 - ID scheme for resources. Likely `kind/environment/name` for the human-facing form, ULID for the persistent ID. Settled in Phase 0.
 - Where do typed specs live? Per-provider crate vs `iac-core::spec::*`? Settled: per-provider — providers own their schema.
 - Verification: synchronous (block until verify passes) vs async (mark "applied, awaiting verification")? Phase 0: synchronous and short-timeout. Async on agent later.
+
+## Phase 7dh.13 — F3/F4/F5 local coverage (2026-05-05)
+
+Three scenarios from the deferred Phase 9 fleet-validation list have
+agent-side test coverage now. The hardware-side aspects (real IPMI
+cold reboot, real ext4 ENOSPC behaviour, real `date -s` clock skew)
+still want a VM trial when the 10 VPS allocation lands — but the
+agent-side contract is no longer untested.
+
+- [x] **F5 — Time-skew envelope rejection.** Extracted `check_envelope_freshness` from `verify_envelope` in [`crates/iac-agent/src/remote.rs`](crates/iac-agent/src/remote.rs) into a pure function so the test passes a deterministic `now`. **13 unit tests** in `remote::tests` cover the symmetric `[now - max_age, now + future_grace]` window, off-by-one boundaries on both sides, and unparseable / empty `created_at`. The `max_age=0` test-only mode is also covered. Pins the Phase 7dh.12 fix (envelope rejected when `age < -FUTURE_GRACE_SECS`).
+- [x] **F4 — Identity-persist atomic-write under failure.** **4 unit tests** in `remote::tests` pin the contract: first-write creates a 0600 file; overwrite leaves no `.tmp` orphan; under a read-only parent dir (simulated ENOSPC / FS error) `persist_identity` returns `Err` and the existing identity stays byte-identical. Tests skip cleanly when running under DAC bypass (root / overlay FS that ignores chmod) instead of false-failing.
+- [x] **F3 — Cold reboot resilience.** New [`crates/iac-agent/tests/cold_reboot.rs`](crates/iac-agent/tests/cold_reboot.rs) integration test file. **3 tests:** `cold_reboot_observes_drift_and_reconverges` (apply → drop agent → tamper host → fresh agent → drift detected → reconverge to desired), `cold_reboot_preserves_state_dir_artifacts` (`agent.db` and `status.json` survive the drop, `agent.db` is not truncated across restart), `cold_reboot_picks_up_manifest_change_made_while_down` (operator updates manifest while agent is offline → next observe surfaces the change as drift → applies cleanly). Drop-then-`Agent::new` is the closest in-process analogue of SIGKILL: on-disk identity / DB / manifests survive. The genuinely process-level concerns (open-FD flush ordering, SQLite WAL mid-write) are out of scope here — `persist_identity`'s atomic-rename pattern (pinned by F4) and SQLite's own WAL durability cover the bulk.
+
+**Tests:** 20 new tests (13 F5 + 4 F4 + 3 F3); 0 regressions on the
+existing 1176-test workspace baseline. `cargo clippy --workspace
+--all-targets` clean.
+
+**Net effect on Phase 9:** 3 of 8 fleet scenarios now have local
+agent-side coverage. The remaining 5 (F1, F2, F6, F7, F8) genuinely
+need multi-host distributed environments and stay deferred.

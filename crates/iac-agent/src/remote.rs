@@ -415,51 +415,13 @@ impl Client {
                 self.verifiers.len()
             )
         })?;
-        // Phase 7cq.2 (security fix #4.7): replay protection. The
-        // signature itself is valid forever — Ed25519 has no built-in
-        // expiry. Without an age check, an attacker who once captured
-        // a valid envelope (PCAP, backup, compromised agent restored
-        // from disk image) can replay it months later: agent verifies
-        // signature, applies the stale desired state, downgrades the
-        // host's config silently. We refuse anything older than
-        // `MAX_ENVELOPE_AGE_SECS` (default 24h, env-overridable).
-        //
-        // Phase 7dh.12 (invariant audit): the window is now symmetric.
-        // Pre-fix the check was `age > max_age` only; a future-dated
-        // envelope (server clock skewed forward, or signing-key holder
-        // pre-issuing for the future) had a *negative* age and slipped
-        // past. The honest threat is small (signatures bind created_at,
-        // so an attacker can't mint future dates without the key) but
-        // the asymmetric window doesn't match the docstring's "X-hour
-        // window" claim. `FUTURE_GRACE_SECS` (5 minutes) tolerates
-        // small wall-clock skew between server and agent.
-        const FUTURE_GRACE_SECS: i64 = 300;
         if let Some(max_age) = max_envelope_age_secs() {
-            if let Ok(created) = env.created_at.parse::<jiff::Timestamp>() {
-                let now = jiff::Timestamp::now();
-                let age = now.as_second().saturating_sub(created.as_second());
-                if age > max_age as i64 {
-                    anyhow::bail!(
-                        "envelope created_at {} is {}s old (cap {}s) — replay rejected",
-                        env.created_at,
-                        age,
-                        max_age
-                    );
-                }
-                if age < -FUTURE_GRACE_SECS {
-                    anyhow::bail!(
-                        "envelope created_at {} is {}s in the future (grace {}s) — replay rejected",
-                        env.created_at,
-                        -age,
-                        FUTURE_GRACE_SECS
-                    );
-                }
-            } else {
-                anyhow::bail!(
-                    "envelope created_at {:?} unparseable — refusing to verify",
-                    env.created_at
-                );
-            }
+            check_envelope_freshness(
+                jiff::Timestamp::now(),
+                &env.created_at,
+                max_age,
+                FUTURE_GRACE_SECS,
+            )?;
         }
         let payload_json = serde_json::to_vec(&env.payload)?;
         let msg = canonical_assignment_message(
@@ -650,6 +612,53 @@ async fn fetch_signing_bundle(
     Ok(bundle)
 }
 
+/// Phase 7dh.12: how far into the future an envelope's `created_at`
+/// is allowed to be relative to the agent's wall clock. Tolerates
+/// small NTP-scale skew (<= 5 min) between server and agent without
+/// dropping legitimate work. Larger skew (server clock drifting hours
+/// ahead, or a forged envelope) is treated as a replay attempt.
+const FUTURE_GRACE_SECS: i64 = 300;
+
+/// Phase 7dh.12: pure-function age check, extracted from
+/// `verify_envelope` so it can be tested with a deterministic `now`
+/// instead of the system clock. Returns `Ok(())` when `created_at` is
+/// inside the symmetric window `[now - max_age, now + future_grace]`
+/// and an `Err` describing the failure otherwise.
+///
+/// Errors:
+/// * unparseable `created_at` → "refusing to verify"
+/// * `created_at` older than `max_age` seconds → too-old reject
+/// * `created_at` more than `future_grace` seconds in the future →
+///   future-dated reject
+fn check_envelope_freshness(
+    now: jiff::Timestamp,
+    created_at: &str,
+    max_age: u64,
+    future_grace: i64,
+) -> Result<()> {
+    let created = match created_at.parse::<jiff::Timestamp>() {
+        Ok(t) => t,
+        Err(_) => {
+            anyhow::bail!(
+                "envelope created_at {created_at:?} unparseable — refusing to verify"
+            );
+        }
+    };
+    let age = now.as_second().saturating_sub(created.as_second());
+    if age > max_age as i64 {
+        anyhow::bail!(
+            "envelope created_at {created_at} is {age}s old (cap {max_age}s) — replay rejected"
+        );
+    }
+    if age < -future_grace {
+        anyhow::bail!(
+            "envelope created_at {created_at} is {}s in the future (grace {future_grace}s) — replay rejected",
+            -age
+        );
+    }
+    Ok(())
+}
+
 /// Phase 7cf: compile the agent's pinned set into a `key_id` →
 /// `VerifyingKey` map for O(1) lookup during envelope verification.
 /// Phase 7cq.2: maximum age (in seconds) the agent will accept on a
@@ -787,4 +796,261 @@ pub fn build_http_client(tls: &crate::config::AgentTlsConfig) -> Result<reqwest:
     }
 
     builder.build().context("build http client")
+}
+
+#[cfg(test)]
+mod tests {
+    //! F5 (Phase 9 deferred → done locally): time-skew handling on the
+    //! envelope freshness check. The window must be symmetric and
+    //! deterministic across the agent fleet — every operator running
+    //! mismatched clocks (NTP not yet converged on a fresh boot, or a
+    //! genuinely-skewed VM) reaches these branches in production. The
+    //! tests use a fixed `now` so the assertions don't drift with the
+    //! system clock.
+    use super::*;
+
+    /// Helper: build a Timestamp at a known offset from `now`.
+    fn ts(now: jiff::Timestamp, offset_secs: i64) -> String {
+        now.checked_add(jiff::Span::new().seconds(offset_secs))
+            .unwrap()
+            .to_string()
+    }
+
+    fn fixed_now() -> jiff::Timestamp {
+        // 2026-05-05T12:00:00Z — pinned so test traces are easy to
+        // reason about regardless of what the host clock says.
+        "2026-05-05T12:00:00Z".parse().unwrap()
+    }
+
+    const MAX_AGE: u64 = 24 * 60 * 60; // 24h, matches the production default
+    const GRACE: i64 = FUTURE_GRACE_SECS;
+
+    // ---- accept paths ----
+
+    #[test]
+    fn accepts_envelope_at_exactly_now() {
+        let now = fixed_now();
+        check_envelope_freshness(now, &ts(now, 0), MAX_AGE, GRACE).unwrap();
+    }
+
+    #[test]
+    fn accepts_envelope_one_second_old() {
+        let now = fixed_now();
+        check_envelope_freshness(now, &ts(now, -1), MAX_AGE, GRACE).unwrap();
+    }
+
+    #[test]
+    fn accepts_envelope_within_future_grace() {
+        // Server clock 4 minutes ahead of agent clock — common after a
+        // VM resume before NTP catches up. Should pass.
+        let now = fixed_now();
+        check_envelope_freshness(now, &ts(now, 4 * 60), MAX_AGE, GRACE).unwrap();
+    }
+
+    #[test]
+    fn accepts_envelope_at_max_age_boundary() {
+        // Exactly at the 24h boundary — rule is `> max_age` rejects,
+        // so equal must pass.
+        let now = fixed_now();
+        check_envelope_freshness(now, &ts(now, -(MAX_AGE as i64)), MAX_AGE, GRACE).unwrap();
+    }
+
+    #[test]
+    fn accepts_envelope_at_future_grace_boundary() {
+        // Exactly at the 5-min future grace — rule is `< -grace`
+        // rejects, so `age == -grace` (i.e. exactly grace seconds
+        // ahead) must pass.
+        let now = fixed_now();
+        check_envelope_freshness(now, &ts(now, GRACE), MAX_AGE, GRACE).unwrap();
+    }
+
+    // ---- reject paths ----
+
+    #[test]
+    fn rejects_envelope_older_than_max_age() {
+        // 25 hours old — past the 24h replay window. The canonical
+        // "stolen envelope from yesterday" scenario.
+        let now = fixed_now();
+        let err = check_envelope_freshness(now, &ts(now, -(25 * 60 * 60)), MAX_AGE, GRACE)
+            .unwrap_err();
+        assert!(err.to_string().contains("old"), "got: {err}");
+        assert!(err.to_string().contains("replay rejected"));
+    }
+
+    #[test]
+    fn rejects_envelope_one_second_past_max_age() {
+        // Off-by-one regression test: max_age + 1 must reject.
+        let now = fixed_now();
+        let err =
+            check_envelope_freshness(now, &ts(now, -(MAX_AGE as i64 + 1)), MAX_AGE, GRACE)
+                .unwrap_err();
+        assert!(err.to_string().contains("old"));
+    }
+
+    #[test]
+    fn rejects_envelope_25h_in_the_future() {
+        // F5 directly: agent's clock is 25 hours behind. Pre-7dh.12
+        // this passed silently (negative `age`, `if age > max_age`
+        // false, `if age < -GRACE` branch absent). Must reject now.
+        let now = fixed_now();
+        let err = check_envelope_freshness(now, &ts(now, 25 * 60 * 60), MAX_AGE, GRACE)
+            .unwrap_err();
+        assert!(err.to_string().contains("future"), "got: {err}");
+        assert!(err.to_string().contains("replay rejected"));
+    }
+
+    #[test]
+    fn rejects_envelope_one_second_past_future_grace() {
+        // Off-by-one regression test for the future-side boundary.
+        let now = fixed_now();
+        let err = check_envelope_freshness(now, &ts(now, GRACE + 1), MAX_AGE, GRACE)
+            .unwrap_err();
+        assert!(err.to_string().contains("future"));
+    }
+
+    // ---- malformed input ----
+
+    #[test]
+    fn rejects_unparseable_created_at() {
+        let err = check_envelope_freshness(fixed_now(), "not-a-timestamp", MAX_AGE, GRACE)
+            .unwrap_err();
+        assert!(err.to_string().contains("unparseable"));
+    }
+
+    #[test]
+    fn rejects_empty_created_at() {
+        let err = check_envelope_freshness(fixed_now(), "", MAX_AGE, GRACE).unwrap_err();
+        assert!(err.to_string().contains("unparseable"));
+    }
+
+    // ---- edge cases on max_age = 0 (test-only mode) ----
+
+    #[test]
+    fn max_age_zero_rejects_anything_in_the_past() {
+        // `max_age = 0` is the "reject everything" testing knob. A 1s-
+        // old envelope must reject.
+        let now = fixed_now();
+        let err = check_envelope_freshness(now, &ts(now, -1), 0, GRACE).unwrap_err();
+        assert!(err.to_string().contains("old"));
+    }
+
+    #[test]
+    fn max_age_zero_still_accepts_envelopes_within_future_grace() {
+        // Asymmetry by design: max_age=0 disallows past-dated, but the
+        // future-grace window is independent (driven by `future_grace`).
+        let now = fixed_now();
+        check_envelope_freshness(now, &ts(now, 30), 0, GRACE).unwrap();
+    }
+
+    // ----- F4 (Phase 9 deferred → done locally): identity-persist
+    // atomic-write semantics under a write failure. Disk-full / read-
+    // only filesystem / quota-exceeded all surface the same way at
+    // this layer (`std::fs::write` returns `Err`). The contract: the
+    // existing identity.json must survive intact; a half-written
+    // identity that would lose a token rotation is the failure mode
+    // we're guarding against.
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    fn synthetic_identity(token: &str) -> Identity {
+        Identity {
+            agent_id: "01TESTAGENTID".into(),
+            token: token.into(),
+            server_url: "https://example/".into(),
+            registered_at: "2026-05-05T12:00:00Z".into(),
+            server_pubkeys: vec![],
+            server_key_id: None,
+            server_public_key: None,
+            token_expires_at: None,
+        }
+    }
+
+    fn read_identity(path: &Path) -> Identity {
+        let bytes = std::fs::read(path).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[test]
+    fn persist_identity_creates_file_on_first_write() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("identity.json");
+        persist_identity(&path, &synthetic_identity("first")).unwrap();
+        assert_eq!(read_identity(&path).token, "first");
+
+        // The 0600-on-the-tempfile pattern means the final file is
+        // 0600. Verifying so a future change that breaks the
+        // permission step (which is silent if permissions match the
+        // umask default) gets caught by this test.
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "identity must be 0600");
+    }
+
+    #[test]
+    fn persist_identity_replaces_atomically_on_overwrite() {
+        // The .tmp + rename pattern is the contract; this test asserts
+        // we don't accidentally regress to "open + write" (which would
+        // briefly truncate the file).
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("identity.json");
+        persist_identity(&path, &synthetic_identity("v1")).unwrap();
+        persist_identity(&path, &synthetic_identity("v2")).unwrap();
+        assert_eq!(read_identity(&path).token, "v2");
+        // No `.tmp` orphan should be left behind on the happy path.
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn persist_identity_failure_preserves_prior_identity() {
+        // F4 main case. Pre-load a valid identity; then make the
+        // parent directory read-only so the next write to .tmp fails.
+        // The original identity.json must remain readable and
+        // unchanged — losing it would force a fresh re-registration
+        // and break the tight "this agent IS this agent" guarantee.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("identity.json");
+        persist_identity(&path, &synthetic_identity("good")).unwrap();
+        let canonical_bytes = std::fs::read(&path).unwrap();
+
+        // 0o500 = read+execute, no write — `fs::write` to .tmp errors.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
+            .unwrap();
+        let result = persist_identity(&path, &synthetic_identity("rotated"));
+        // Restore so the TempDir drop can clean up.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+
+        if result.is_ok() {
+            // DAC bypass (running as root) or a filesystem that
+            // ignored chmod (some FUSE / overlay setups). The
+            // failure-injection didn't fire; skip the assertions
+            // since they wouldn't be exercising the path we mean.
+            eprintln!(
+                "persist_identity_failure_preserves_prior_identity: chmod 0500 didn't \
+                 block the write; skipping (root or special FS?)"
+            );
+            return;
+        }
+
+        // The original file is untouched.
+        assert_eq!(std::fs::read(&path).unwrap(), canonical_bytes);
+        let still_loadable = read_identity(&path);
+        assert_eq!(still_loadable.token, "good");
+    }
+
+    #[test]
+    fn persist_identity_does_not_leak_tmp_when_rename_succeeds() {
+        // Defensive: confirm the .tmp file does NOT remain after a
+        // successful persist. Some Linux fs cleanup races could in
+        // theory leave it; the rename target is the canonical path
+        // so a leftover .tmp would mean rename copied instead of
+        // moved (it doesn't, but the test pins the invariant).
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("identity.json");
+        let tmp = path.with_extension("json.tmp");
+        for token in ["a", "b", "c", "d", "e"] {
+            persist_identity(&path, &synthetic_identity(token)).unwrap();
+            assert!(!tmp.exists(), "leftover .tmp after persist of {token:?}");
+        }
+    }
+
 }

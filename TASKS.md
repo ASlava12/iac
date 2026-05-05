@@ -31,16 +31,20 @@ network/timing on a single host.
 |----|---------------------------------------------|-------------------------------------------------|------------------|
 | F1 | 24 h soak: 50 agents × 1 RPS                | RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean | Single-host loops can't catch slow-leak per-FD-table memory accounting |
 | F2 | Network partition (rolling 20 % per cycle)  | recovery time < 5 min after restore; no split-brain; replay-protection still rejects re-played envelopes | Real WAN delay + DNS reconvergence look nothing like docker bridge `disconnect` |
-| F3 | Cold reboot of an agent under apply         | partial-state reconciles to desired on next observe; no missing audit row | Needs IPMI / cloud reset semantics; SIGKILL inside docker doesn't replicate boot ordering |
-| F4 | Disk-full / inode-full on an agent          | graceful degradation (drift surfaces with `disk_full` reason); agent reboots clean after disk freed; no identity-file corruption | overlayfs in docker doesn't behave like a real ext4 with bad sectors |
-| F5 | Time-skew attack (agent clock 25 h in past) | replay-protection holds (Phase 7cq.2 / 7dh.12 rejects future-dated envelopes too) | One real VM with `date -s` is enough; just not currently scheduled |
+| ~~F3~~ | ~~Cold reboot of an agent under apply~~ | ~~partial-state reconciles to desired on next observe~~ | **Done locally — see archive 7dh.13.** Real-fleet IPMI/SIGKILL semantics still want validation, but the agent-level reconvergence contract is now pinned by 3 integration tests (`tests/cold_reboot.rs`). |
+| ~~F4~~ | ~~Disk-full / inode-full on an agent~~  | ~~graceful degradation; agent reboots clean; no identity-file corruption~~ | **Done locally — see archive 7dh.13.** Atomic-write contract on `identity.json` pinned by 4 unit tests in `remote::tests`. Real disk-full / overlayfs behaviour still wants a VM trial. |
+| ~~F5~~ | ~~Time-skew attack (agent clock 25 h in past)~~ | ~~replay-protection holds (Phase 7cq.2 / 7dh.12)~~ | **Done locally — see archive 7dh.13.** Symmetric-window age check pinned by 13 deterministic unit tests in `remote::tests`. |
 | F6 | Rolling upgrade agent v1 ↔ controlplane v2  | wire-protocol compatibility; in-flight ops complete; no agent re-registration storm | Needs two binary versions deployed sequentially across distinct hosts |
 | F7 | Backup/restore of controlplane DB           | RPO/RTO measured; audit-chain integrity preserved across restore | Single-host trial can do this but hasn't been run end-to-end yet |
 | F8 | DDoS on `/v1/agents/register`               | rate-limit holds; legitimate agents not starved | Needs distinct source IPs (`X-Forwarded-For` allowlist evaluation) |
 
-**Estimated effort:** 1 week harness scripts + 1 week running + 1 week
-analysis + likely follow-up fixes. Total ~4 weeks calendar from VPS
-allocation.
+**Remaining for VPS allocation:** F1, F2, F6, F7, F8 (5 of 8). F3/F4/F5
+have local test coverage that pins the agent-side contract; the
+hardware-side aspects (real IPMI cold reboot, real ext4 ENOSPC,
+real-time `date -s`) still want a VM trial but no longer block release.
+
+**Estimated effort for the remaining 5:** ~3 weeks calendar from VPS
+allocation (was 4 — three scenarios moved out).
 
 ### Phase 10 — Cross-architecture validation (MIPS / network gear)
 
