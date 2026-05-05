@@ -2556,3 +2556,28 @@ imaginable defence — one `tokio::sync::Mutex` lookup per request,
 zero new dependencies, sub-microsecond overhead. The default cap is
 permissive enough that no legitimate fleet operation hits it; the
 limit only fires under abuse.
+
+## Phase 9-F7 — Backup / restore harness, validated against the live F1 CP (2026-05-05)
+
+The pass criteria for F7 were: hot backup without restarting the
+control plane (so it doesn't violate F1's "0 unaccounted restarts"),
+restored CP comes up clean on a different host with the same audit-
+chain tip, `/v1/audit/verify` returns ok, and a fresh write extends
+the chain cleanly. All four held; F7 ran end-to-end against the live
+F1-loaded prod CP without disturbing it.
+
+- [x] **Harness:** [`trial/scenarios/fleet-f7-backup-restore.sh`](trial/scenarios/fleet-f7-backup-restore.sh). 6-step pipeline: stage binary on the restore host → `VACUUM INTO` snapshot on prod CP → SCP to restore host → boot a fresh CP on a separate port + state dir → integrity check + post-restore write probe → tear down. Reusable: `RESTORE_HOST` derived from inventory (uses cp-spare-02 by default), restore port and token are constants but trivial to override.
+- [x] **Backup approach: SQLite `VACUUM INTO`, not `.backup`.** The first attempt used the `sqlite3 db ".backup file"` API. Under the live F1 write load (~3 ops/sec hitting the audit_events / agents / operations tables), `.backup` retried on every page-level SQLITE_BUSY and stalled at 40 % progress after 30 minutes on the 947 MB DB — never recovering. Switched to `VACUUM INTO`, which is a single-statement transactional snapshot: it acquires a SHARED lock on the source for the duration of the copy, so it doesn't restart on concurrent writes (writes wait briefly behind it). Completed in **45.6 s** for the same DB. Bonus side effect: the snapshot file is defragmented, so it deserialises faster on the restore side.
+- [x] **No prod-CP restart.** Captured `systemctl show iac-controlplane --property=ActiveEnterTimestampMonotonic --value` before and during the restore — value unchanged across the entire harness, so F1's "0 unaccounted systemd restarts" criterion is preserved. F1 continued to run normally throughout.
+- [x] **Restore + integrity verdict (against live F1 prod CP):**
+  - **RPO** (snapshot duration): **45.6 s.** Writes happening during the snapshot land in the source's WAL and are NOT in the snapshot — they would be lost on restore. Production target: < 5 s with WAL-based replication (litestream / a custom WAL tail), out of scope here.
+  - **RTO** (start-restored-CP → 200 on `/v1/health`): **1.6 s.** Cold start including SQLite open + schema migration check + axum bind. Wire-time for the snapshot is separate (1298 s for 1.47 GB through the operator host because of the missing inter-VPS SSH key — production VPS-to-VPS direct copy at gigabit would be ≈12 s).
+  - **Audit-tip match:** restored = 12896, snapshot = 12896. PASS.
+  - **Agents-table count:** restored = 9, snapshot = 9. PASS (7 fleet agents + 2 legit-agent leftovers from the F8 smoke).
+  - **`/v1/audit/verify` ok = true.** PASS — the chain hash sequence is unbroken across the restore.
+  - **Post-restore write extends chain cleanly:** registered a probe agent, tip advanced 12896 → 12897, `/v1/audit/verify` ok = true at the new tip. PASS — the chain is not just frozen but writeable, and the new tip's hash chains correctly to the restored state. This was the integrity check most likely to surface a subtle restore bug (e.g. missed sequence counter, stale identity-blob), and it didn't.
+- [x] **Cleanup:** restored CP and snapshot files removed from cp-spare-02 + prod CP after the verdict; local 1.5 GB snapshot in `/tmp/iac-f7-results/` removed.
+
+**Why this matters for the IaC philosophy.** "Works on weak hardware" demands that backup not require taking the service down — a Mikrotik-class device with a 16 MiB flash partition can't afford to be offline for the duration of a snapshot, and a NAS-class home server can't afford ten minutes of unavailability for a routine backup. `VACUUM INTO` plus the harness above gives you "snapshot in O(disk-write-time) with zero downtime" — a property the SQLite engine has had since 3.27 but most operators don't know. Documenting it in the harness makes it the default posture for this project. The 45 s snapshot of a hot 950 MB DB is the upper bound; on a routine-sized fleet (< 100 MB DB) it's sub-second.
+
+**Open follow-up:** WAL-based incremental backup (litestream-style) for sub-second RPO. Not a blocker — the trial harness validates the worst-case "single full snapshot" recovery story. Phase 11+ if anyone needs it.
