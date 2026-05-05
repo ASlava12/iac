@@ -1,0 +1,60 @@
+# Real-world deploy demo: postgres on a single host through iac.
+#
+# Three resources, layered via dependsOn:
+#   1. file/postgres-data — ensure the data directory exists.
+#   2. docker.container/postgres — run the postgres image with
+#      bind-mounted data dir.
+#   3. monitoring.check/postgres-up — TCP probe localhost:5432 with
+#      retries; fails the apply if postgres doesn't come up.
+#
+# Apply with:
+#   iac apply postgres-deploy.yaml --yes
+#
+# All three resources reach `succeeded` only if postgres is alive.
+---
+apiVersion: iac.example/v1
+kind: file
+metadata:
+  name: postgres-data
+  environment: smoke
+  dependsOn: []
+spec:
+  # User-writable path so iac doesn't need sudo for the data dir.
+  path: /home/admin/iac-postgres-data/.keep
+  mode: "0644"
+  content: ""
+---
+apiVersion: iac.example/v1
+kind: docker.container
+metadata:
+  name: postgres
+  environment: smoke
+  dependsOn: ["file/smoke/postgres-data"]
+spec:
+  name: iac-postgres
+  image: postgres:16-alpine
+  ports:
+    - "5432:5432"
+  env:
+    POSTGRES_PASSWORD: "iac-test-pwd"
+    POSTGRES_DB: "smoke"
+    POSTGRES_USER: "iac"
+    PGDATA: /var/lib/postgresql/data/pgdata
+  volumes:
+    - /home/admin/iac-postgres-data:/var/lib/postgresql/data
+  restart_policy: unless-stopped
+  state: present
+---
+apiVersion: iac.example/v1
+kind: monitoring.check
+metadata:
+  name: postgres-up
+  environment: smoke
+  dependsOn: ["docker.container/smoke/postgres"]
+spec:
+  name: postgres-up
+  type: tcp
+  target: 127.0.0.1:5432
+  timeout_secs: 3
+  retries: 10
+  retry_interval_secs: 2

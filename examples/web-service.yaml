@@ -1,0 +1,62 @@
+# Example: a small web service with health gate.
+#
+# Demonstrates dependsOn graph + monitoring.check as a canary gate.
+# When applied through the control plane with --canary-pct 25, this
+# composes:
+#   * Layer 0: file (config) + docker.container (server) + monitoring.check
+#     dependsOn graph: container needs file, check needs container.
+#   * The check probes localhost:8080/health with retries — if the
+#     service doesn't come up healthy within ~10s of apply, the
+#     check fails, the assignment fails, canary fails, baseline
+#     batch is cancelled. Operator sees the failure in the audit log
+#     before the bad config rolls fleet-wide.
+---
+apiVersion: iac.example/v1
+kind: file
+metadata:
+  name: webapp-config
+  environment: prod
+  dependsOn: []
+spec:
+  path: /etc/webapp/config.json
+  mode: "0644"
+  content: |
+    {
+      "listen": "0.0.0.0:8080",
+      "log_level": "info",
+      "feature_flag_x": true
+    }
+---
+apiVersion: iac.example/v1
+kind: docker.container
+metadata:
+  name: webapp
+  environment: prod
+  # Container can't run without its config file.
+  dependsOn: ["file/prod/webapp-config"]
+spec:
+  name: webapp
+  image: ghcr.io/example/webapp:v1.2.3
+  ports: ["8080:8080"]
+  volumes:
+    - "/etc/webapp/config.json:/app/config.json:ro"
+  restart: unless-stopped
+  state: present
+---
+apiVersion: iac.example/v1
+kind: monitoring.check
+metadata:
+  name: webapp-health
+  environment: prod
+  # Health check waits for the container to come up.
+  dependsOn: ["docker.container/prod/webapp"]
+spec:
+  type: http
+  target: http://localhost:8080/healthz
+  expected_status: 200
+  timeout_secs: 3
+  # Phase 7cj: retry budget = (1 + retries) * timeout + retries * interval.
+  # 5 retries * 2s interval + 6 attempts * 3s timeout = 28s of grace.
+  # Tune to your service's startup time.
+  retries: 5
+  retry_interval_secs: 2

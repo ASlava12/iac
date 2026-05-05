@@ -1,0 +1,26 @@
+# Phase 7dd: minimal component-model plugin fixture used by the
+# `wasm::component` round-trip tests. NOT a workspace member —
+# tests bootstrap-build it on demand so the parent workspace
+# doesn't pay the wasm-target cost for unrelated builds.
+
+[package]
+name = "iac-test-component-plugin"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.36"
+
+[workspace]
+# Stand-alone — opt out of the parent workspace.
+
+[profile.release]
+# Strip + opt-z keeps the fixture under 100 KB so the test suite
+# stays fast.
+opt-level = "z"
+lto = true
+strip = true

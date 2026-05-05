@@ -1,0 +1,51 @@
+[package]
+name = "iac-agent"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "iac_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "iac-agent"
+path = "src/main.rs"
+
+[dependencies]
+iac-core = { workspace = true }
+iac-providers = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+jiff = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+toml = { workspace = true }
+indexmap = { workspace = true }
+reqwest = { workspace = true }
+globset = { workspace = true }
+rustls-pemfile = { workspace = true }
+ed25519-dalek = { workspace = true }
+base64 = { workspace = true }
+# Phase 7cz.14: non-poisoning Mutex for rusqlite connection guard.
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# Phase 7dc: e2e wasm-provider test compiles its fixture from WAT at
+# test time so we don't need a wasm32 toolchain in CI.
+wat = { workspace = true }
+# Phase 7dd: e2e component-model test wraps a pre-built core wasm
+# fixture into a WIT component on the fly.
+wit-component = { workspace = true }

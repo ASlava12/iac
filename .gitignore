@@ -1,0 +1,52 @@
+# Cargo build artefacts. The workspace target/ + per-crate fuzz target/.
+# Keep Cargo.lock (binaries — iac, iac-agent, iac-controlplane, iac-trial —
+# need a pinned dep tree for reproducible builds).
+/target/
+/fuzz/target/
+
+# Fuzz outputs. `fuzz/artifacts/` collects libfuzzer crash repros;
+# `fuzz/corpus/` is the seed pool. Both grow without bound during a
+# campaign; commit only the shrunk repros that get promoted into a
+# real test under `crates/*/tests/`.
+/fuzz/artifacts/
+/fuzz/corpus/
+
+# Coverage instrumentation drops these next to the binary.
+*.profraw
+*.profdata
+
+# Clippy / rustfix leaves `.rs.bk` next to anything it edits when run
+# without `--allow-no-vcs`; we gitignore so they don't leak into a
+# commit if someone forgets to clean up.
+**/*.rs.bk
+
+# Editor / IDE state — different operators use different tools; nobody
+# wants a teammate's IDE settings sneaking into the diff.
+/.idea/
+/.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Runtime state directories that the tool itself creates when run from
+# the workspace root (smoke-testing the local CLI). Operators running
+# the binaries from a real install path see these under /var/lib/iac/.
+/state/
+/checkpoints/
+
+# Local agent / controlplane configs that might be dropped at the repo
+# root for ad-hoc testing. Production configs live under /etc/iac/;
+# never commit a config carrying a real `admin_token` / signing key.
+/agent.toml
+/server.toml
+/iac-trial.toml
+
+# Per-developer scratch — the `temp` file at the repo root is the
+# personal session prompt notebook (nothing meaningful for source);
+# `/.claude/` is the project-local directory the editor extension
+# creates for caching.
+/temp
+/.claude/
+
+# OS metadata that nothing useful is going to come out of.
+Thumbs.db

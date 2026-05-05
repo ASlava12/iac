@@ -1,0 +1,198 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/iac-core",
+    "crates/iac-providers",
+    "crates/iac-cli",
+    "crates/iac-agent",
+    "crates/iac-controlplane",
+    "crates/iac-trial",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# Group lints we actually want enforced — pedantic is too noisy for Phase 0.
+todo = "warn"
+dbg_macro = "warn"
+# Phase 7cz.16: surface unwrap/expect/panic in production code so future
+# additions get pushback at PR time. Existing sites carry per-call
+# `#[allow(clippy::unwrap_used)]` (or are inside `#[cfg(test)]` modules
+# that the lint exempts by virtue of `cfg_attr` in each crate's
+# lib.rs / main.rs). The lints are `warn`, not `deny`, so a stray
+# unwrap from a quick experiment doesn't break the build — but `cargo
+# clippy --workspace` reports it.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[workspace.dependencies]
+# core data
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+indexmap = { version = "2.7", features = ["serde"] }
+
+# errors
+thiserror = "2.0"
+anyhow = "1.0"
+
+# cli
+clap = { version = "4.5", features = ["derive"] }
+
+# crypto / hashing
+sha2 = "0.10"
+hex = "0.4"
+
+# ids
+ulid = { version = "1.2", features = ["serde"] }
+
+# time
+jiff = { version = "0.1", features = ["serde"] }
+
+# tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# fs walking
+walkdir = "2.5"
+
+# tests
+tempfile = "3.14"
+
+# async runtime (Phase 1 agent)
+tokio = { version = "1.41", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "fs", "io-util", "io-std", "process"] }
+
+# embedded storage (Phase 1 agent)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# config
+toml = "0.8"
+
+# HTTP server (Phase 2 control-plane)
+axum = { version = "0.8", features = ["macros"] }
+tower = { version = "0.5", features = ["util", "timeout"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "limit", "timeout"] }
+
+# Phase 7ak: TLS + mTLS termination for the control-plane. Plain
+# `axum::serve` doesn't take a generic TLS listener, so we wrap with
+# `axum-server` (which itself uses tokio-rustls under the hood).
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+tokio-rustls = "0.26"
+
+# Async DB driver — sqlx with sqlite (default) and postgres (Phase 7al).
+# Pinned to 0.8 to avoid the 0.7 CVE (RUSTSEC-2024-0363).
+# We explicitly DO NOT enable `macros` (the `query!` / `migrate!` family).
+# sqlx-macros-core unconditionally pulls in sqlx-mysql in the dep graph, and
+# sqlx-mysql depends on the unmaintained `rsa` crate (RUSTSEC-2023-0071,
+# Marvin attack on RSA timing). We use runtime `sqlx::query` / `sqlx::query_as`
+# and run migrations as plain SQL embedded via `include_str!`.
+#
+# `any` enables `sqlx::AnyPool` so the control-plane can pick its driver at
+# runtime from the database URL scheme (sqlite vs postgres). Postgres-only
+# binaries set up at compile time are unnecessary churn for our use case.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "any", "json"] }
+
+# HTTP client (agent → server)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Argon2id for human passwords (Phase 6e). Agent / user tokens stay on
+# sha256 — they're 256-bit random, not chosen by humans.
+argon2 = { version = "0.5", features = ["std"] }
+password-hash = "0.5"
+
+# Random tokens (use OS RNG only)
+rand = "0.9"
+
+# base64 for token serialization
+base64 = "0.22"
+
+# bytes
+bytes = "1"
+
+# glob matching for capability allowlists
+globset = "0.4"
+
+# Interactive password prompt for `iac login` (Phase 6f). Test paths use a
+# `--password` flag or `IAC_LOGIN_PASSWORD` env var instead.
+rpassword = "7"
+
+# Ed25519 signing for assignment payloads (Phase 6b).
+# Phase 6b uses a single signing key; rotation lives in Phase 6c.
+# We don't enable the `rand_core` feature because ed25519-dalek 2.x is on
+# rand_core 0.6 while our `rand` is 0.9 — to avoid pulling two `rand_core`
+# versions we generate the 32-byte secret with `getrandom` directly.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
+getrandom = "0.3"
+
+# Phase 7ak: X.509 certificate generation for mTLS bootstrap. `rcgen`
+# wraps `ring`/`rustls` so we can issue a self-signed CA + server/client
+# certs without shelling out to OpenSSL. Used only in tests + the
+# server's `tls bootstrap` admin command.
+rcgen = "0.14"
+
+# Phase 7ak: rustls types so the agent + server can load PEM-encoded
+# certs/keys at runtime. `rustls` itself comes in transitively via
+# `reqwest` (rustls-tls feature) and `axum-server`.
+rustls-pemfile = "2"
+
+# Phase 7bx: lock-free atomic Arc swap for SIGHUP hot-reload of
+# server config. Read path is essentially an atomic load — no overhead
+# vs. plain Arc<Config>. Smaller than parking_lot::RwLock<Arc<...>>
+# and lock-free, so we don't pay scheduling cost on the hot path.
+arc-swap = "1"
+
+# Phase 7cz.14: non-poisoning Mutex around the agent's rusqlite
+# connection. std::sync::Mutex poisons when a holder panics; the
+# agent then has to .expect("poisoned") on every subsequent lock,
+# making any panic in a locked section cascade into a process kill.
+# parking_lot::Mutex doesn't poison — a panic inside the locked
+# section just unblocks the next waiter, with state in whatever
+# state it was when the panic fired (rusqlite ops are atomic, so
+# either the SQL committed or rolled back).
+parking_lot = "0.12"
+
+# Phase 7dc: WebAssembly plugin runtime. wasmtime gives us a sandboxed
+# execution model — fuel-based CPU limits, hard memory caps, no
+# default I/O — for plugins from less-trusted sources than the
+# external-process variant. `wat` is dev-only: tests compile inline
+# WAT modules instead of bootstrapping a wasm32 toolchain.
+# We disable wasmtime's default features to keep the binary small —
+# the runtime feature gives us module compilation+execution without
+# pulling in async, jit code-cache, or debugger hooks we don't use.
+wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime", "std", "gc", "component-model"] }
+# Phase 7de: WASI preview2 imports for component-model plugins —
+# capability-driven I/O (preopen-only filesystem, scoped env, opt-in
+# stdio). Plugins that don't declare any wasi capabilities still see
+# the empty linker we ship today.
+wasmtime-wasi = "26"
+wat = "1"
+# Phase 7dd: convert core-wasm + WIT into component bytes at test
+# time. Lets the test fixture stay as plain WAT — we promote it to
+# a component before instantiation. Production plugins ship pre-
+# componentised .wasm files so this dep is dev-only.
+wit-component = "0.218"
+# Phase 7de: property-based fuzzing of YAML/JSON parsers in the
+# providers + manifest loader. We use proptest (stable Rust, works
+# under `cargo test`) for normal CI and ship a cargo-fuzz directory
+# for those running coverage-guided fuzzing on nightly.
+proptest = "1"
+
+# internal
+iac-core = { path = "crates/iac-core" }
+iac-providers = { path = "crates/iac-providers" }
+iac-agent = { path = "crates/iac-agent" }
+iac-controlplane = { path = "crates/iac-controlplane" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

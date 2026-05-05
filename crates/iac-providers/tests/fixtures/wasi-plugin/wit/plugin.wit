@@ -1,0 +1,149 @@
+/// Phase 7dd: typed plugin interface for the WASM component-model
+/// runtime.
+///
+/// Plugins target this `world` to get a typed Rust binding via
+/// wit-bindgen — no manual memory layout, no JSON serialisation
+/// dance, the host hands them strongly-typed values. Same lifecycle
+/// as core-wasm `WasmProvider` (Phase 7dc): observe / diff / apply /
+/// verify / rollback, with optional methods opt-in via the
+/// `methods` export.
+package iac:plugin@0.1.0;
+
+interface provider {
+    /// Resource metadata pulled from the manifest. Mirrors the
+    /// fields the host-side `Resource::metadata` exposes that
+    /// plugins are likely to care about. Labels and annotations are
+    /// flattened to lists of `(key,value)` pairs because WIT lacks
+    /// generic maps in 0.x.
+    record metadata {
+        name: string,
+        environment: string,
+        labels: list<tuple<string, string>>,
+        annotations: list<tuple<string, string>>,
+    }
+
+    /// What the plugin sees on the host right now.
+    record observed {
+        present: bool,
+        /// JSON-encoded spec of the observed resource. Empty string
+        /// is allowed when `present == false`. We use a string here
+        /// rather than a `record` because resource specs are
+        /// schema-less from the plugin runtime's perspective —
+        /// individual plugins parse their own shape.
+        spec-json: string,
+    }
+
+    /// Outcome of an apply call.
+    record apply-outcome {
+        ok: bool,
+        message: string,
+    }
+
+    /// Phases the host drives a plugin through.
+    enum phase {
+        create,
+        update,
+        delete,
+    }
+
+    /// Phase 7df: typed diff output. Mirrors `iac_core::diff::Diff`
+    /// — same shape, just routed through the canonical-ABI instead
+    /// of JSON.
+    enum diff-kind {
+        no-change,
+        create,
+        update,
+        delete,
+    }
+
+    /// One field-level change inside a `diff`. The `from-json` /
+    /// `to-json` pair carries the JSON-encoded old/new value; an
+    /// absent option means "field didn't exist on that side". Plugins
+    /// produce these for human-readable plan output, not as a
+    /// machine contract — the host's apply path uses the full spec,
+    /// not these field deltas.
+    record field-change {
+        field: string,
+        from-json: option<string>,
+        to-json: option<string>,
+        sensitive: bool,
+    }
+
+    /// Renamed from `diff` to avoid clashing with the function of
+    /// the same name in this interface. The Rust binding surfaces
+    /// it as `DiffResult`.
+    record diff-result {
+        kind: diff-kind,
+        changes: list<field-change>,
+        reasons: list<string>,
+        reversible: bool,
+    }
+
+    /// Phase 7df: typed verify output. `ok` means observed agrees
+    /// with desired; `mismatch` carries the field-level deltas the
+    /// operator should see in the plan output. (We avoid the WIT
+    /// keyword `match` here.)
+    variant verify-outcome {
+        ok,
+        mismatch(list<field-change>),
+    }
+
+    /// Resource kind this plugin handles. Validated against config.
+    kind: func() -> string;
+
+    /// Optional: list of method names beyond the required pair
+    /// (`observe`, `apply`) the plugin opts into. Recognised values:
+    /// `"diff"`, `"verify"`, `"rollback"`, `"pre-apply"`. Empty
+    /// means "host falls back" — picking the typed methods up below
+    /// requires listing them here.
+    methods: func() -> list<string>;
+
+    /// Snapshot the world for this resource. `spec-json` is the
+    /// desired spec the host wants applied, passed in case the
+    /// plugin needs identity hints from it (e.g. resource name)
+    /// to look up live state.
+    observe: func(metadata: metadata, spec-json: string) -> result<observed, string>;
+
+    /// Phase 7df: typed diff. Plugins that opt into `"diff"` via
+    /// `methods()` get to decide how spec-vs-observed compares —
+    /// the host's spec-equality fallback is fine for record-shaped
+    /// providers but loses precision when the observed shape is
+    /// derived (e.g. a checksum vs. content). Plugins that don't
+    /// opt in keep the fallback.
+    diff: func(metadata: metadata, desired-spec-json: string, observed: observed) -> diff-result;
+
+    /// Phase 7dg: typed pre-apply. Plugins that opt into
+    /// `"pre-apply"` via `methods()` return a JSON-encoded checkpoint
+    /// the host stores verbatim; the same string is later handed
+    /// back to `rollback`. Host doesn't interpret the bytes — the
+    /// plugin owns the shape end-to-end. Plugins that don't opt in
+    /// keep the host's "snapshot prior observed state" fallback.
+    pre-apply: func(metadata: metadata, spec-json: string) -> result<string, string>;
+
+    /// Mutate the world to match `spec-json`. `phase` distinguishes
+    /// create / update / delete; the plugin can ignore it when its
+    /// apply path is idempotent.
+    apply: func(metadata: metadata, spec-json: string, phase: phase) -> apply-outcome;
+
+    /// Phase 7df: typed verify. Re-checks post-apply state. Same
+    /// opt-in pattern as `diff` — list `"verify"` in `methods()`
+    /// to get this called instead of the host's re-observe-and-diff
+    /// fallback.
+    verify: func(metadata: metadata, spec-json: string) -> verify-outcome;
+
+    /// Phase 7dg: typed rollback. Receives the same `checkpoint-json`
+    /// string the plugin produced from `pre-apply`. Returns a result
+    /// with a string error on failure; success carries no value.
+    /// Plugins that don't opt into `"rollback"` get the host's
+    /// fallback (re-apply the prior observed spec).
+    rollback: func(metadata: metadata, checkpoint-json: string) -> result<_, string>;
+
+    /// Capability keys for the agent's allowlist. Empty list means
+    /// "this resource isn't gated by capability rules".
+    capability-keys: func(metadata: metadata, spec-json: string) -> list<string>;
+}
+
+/// World a plugin author targets. Exporting `provider` is mandatory.
+world plugin {
+    export provider;
+}

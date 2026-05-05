@@ -1,0 +1,43 @@
+[Unit]
+Description=IaC Agent (declarative infrastructure manager)
+Documentation=https://github.com/yourorg/iac
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/iac-agent run
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# State directory. Created on first run.
+StateDirectory=iac-agent
+WorkingDirectory=/var/lib/iac-agent
+ConfigurationDirectory=iac-agent
+
+# Sensible default environment.
+Environment="RUST_LOG=info"
+
+# Default: run as root because the agent applies system configuration.
+# Operators wanting unprivileged operation should override these via a
+# drop-in (e.g. /etc/systemd/system/iac-agent.service.d/sandbox.conf):
+#   [Service]
+#   User=iac-agent
+#   Group=iac-agent
+#   AmbientCapabilities=CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN
+
+# Basic hardening (operators should layer on top).
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,47 @@
+# Phase 8: trial agent image.
+#
+# Build context is the repo root: `docker build -f trial/docker/Dockerfile.agent .`
+
+FROM rust:1.95-slim-bookworm AS build
+WORKDIR /src
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+RUN cargo build --release --bin iac-agent
+
+# Runtime stage. Trial agents need:
+#   * iproute2 → tc/netem for chaos scripts that operate from inside
+#     containers (mounting the chaos script in is also an option,
+#     but having it on PATH is convenient).
+#   * curl → for the workload generator's liveness probes.
+#   * jq, sed, coreutils → already in slim; we use them in the
+#     entrypoint script for templated config.
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    iproute2 \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid 1501 iac && \
+    useradd --system --uid 1501 --gid 1501 --no-create-home iac
+
+COPY --from=build /src/target/release/iac-agent /usr/local/bin/iac-agent
+COPY trial/docker/entrypoint-agent.sh /usr/local/bin/entrypoint-agent.sh
+RUN chmod +x /usr/local/bin/entrypoint-agent.sh
+
+RUN mkdir -p /var/lib/iac-agent /etc/iac-agent /var/lib/iac-agent/manifests.d && \
+    chown -R iac:iac /var/lib/iac-agent /etc/iac-agent
+
+USER iac
+WORKDIR /var/lib/iac-agent
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-agent.sh"]

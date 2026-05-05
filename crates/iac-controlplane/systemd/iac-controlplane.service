@@ -1,0 +1,46 @@
+[Unit]
+Description=IaC Control Plane (operator-facing API + state machine)
+Documentation=https://github.com/yourorg/iac
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/iac-controlplane --config /etc/iac/server.toml
+ExecReload=/bin/kill -HUP $MAINPROCESS
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# State directory holds the SQLite DB (when SQLite backend) + signing
+# key set under <state_dir>/signing-keys/. Owned by the service user.
+StateDirectory=iac-controlplane
+WorkingDirectory=/var/lib/iac-controlplane
+ConfigurationDirectory=iac-controlplane
+
+Environment="RUST_LOG=info"
+
+# Run unprivileged. The control plane only reads/writes its own
+# state dir + listens on a TCP port; no system-wide privileges
+# needed. Operators binding to a privileged port (<1024) should add
+# AmbientCapabilities=CAP_NET_BIND_SERVICE.
+DynamicUser=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+NoNewPrivileges=true
+RestrictNamespaces=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,61 @@
+[package]
+name = "iac-providers"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+iac-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+indexmap = { workspace = true }
+ulid = { workspace = true }
+jiff = { workspace = true }
+# Phase 7cw: docker.compose source-digest detection.
+sha2 = { workspace = true }
+# Phase 7dh.4: hex encoding for the module/binary SHA-256 pin
+# values. Already a workspace dep; pulling it in here keeps the
+# verify helper one-line.
+hex = { workspace = true }
+# Phase 7cz.4: secret-file scratch dir for the ACME provider.
+tempfile = { workspace = true }
+# Phase 7cz.10: replaces inline base64 impl in acme/ops.rs.
+base64 = { workspace = true }
+# Phase 7db.2: external-process plugin handle uses an unpoisonable mutex
+# to guard the child process + I/O streams across method calls.
+parking_lot = { workspace = true }
+# Phase 7dc: WebAssembly plugin runtime. Sandboxed third extension
+# point — hard memory cap + fuel-based CPU limit, no default I/O.
+wasmtime = { workspace = true }
+# Phase 7de: capability-driven WASI preview2 imports — component
+# plugins can opt into preopened directories / env vars / stdio.
+wasmtime-wasi = { workspace = true }
+# wasmtime's `ResourceLimiter` trait surfaces errors as `anyhow::Error`
+# and `iac.log` host-import wires plugin diagnostics to `tracing`.
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# Phase 7db.1: shellout provider config tests use the same TOML loader
+# the agent uses; pulling it in here lets `ShellOutSpec` tests live
+# next to the impl.
+toml = { workspace = true }
+# Phase 7dc: tests compile WAT (WebAssembly text format) into
+# `.wasm` bytes on the fly — avoids bootstrapping a `wasm32` Rust
+# target just to run unit tests against the WASM provider.
+wat = { workspace = true }
+# Phase 7dd: tests promote core-wasm modules into components so
+# we can drive the WIT-typed entry points without shipping a
+# wasm32 toolchain or fixture binaries.
+wit-component = { workspace = true }
+# Phase 7de: property-based smoke fuzzing of provider spec parsers.
+# Asserts no input shape panics — a stronger invariant than
+# hand-rolled negative-test cases catch.
+proptest = { workspace = true }

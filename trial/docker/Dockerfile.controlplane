@@ -1,0 +1,58 @@
+# Phase 8: trial control-plane image.
+#
+# Two-stage build: cargo-chef would speed iteration in CI, but for a
+# trial harness operators run from a clean checkout occasionally; the
+# straightforward `cargo build --release` is plenty fast on the
+# 64 GiB / 12-thread host this is meant to run on.
+#
+# Build context is the repo root: `docker build -f trial/docker/Dockerfile.controlplane .`
+
+FROM rust:1.95-slim-bookworm AS build
+WORKDIR /src
+
+# System deps for sqlx-sqlite + sha2 / x509 build chain. Keep
+# minimal — anything not in this list isn't used at runtime either.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cache cargo registry across builds so iterating on src/ doesn't
+# re-download deps every time.
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+# Build the binary. We don't need workspace-wide build — the
+# control-plane crate's bin pulls in everything it needs.
+RUN cargo build --release --bin iac-controlplane
+
+# Runtime stage: debian-slim, just enough to host the binary +
+# sqlite + curl (for liveness probes from the harness).
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    sqlite3 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Run as a non-root user. UID 1500 chosen to avoid colliding with
+# host-side ranges in case the trial mounts host volumes.
+RUN groupadd --system --gid 1500 iac && \
+    useradd --system --uid 1500 --gid 1500 --no-create-home iac
+
+COPY --from=build /src/target/release/iac-controlplane /usr/local/bin/iac-controlplane
+
+# State + config volumes. Operators of the trial mount these or
+# leave them tmpfs-backed for ephemeral runs.
+RUN mkdir -p /var/lib/iac-controlplane /etc/iac-controlplane && \
+    chown -R iac:iac /var/lib/iac-controlplane /etc/iac-controlplane
+
+USER iac
+WORKDIR /var/lib/iac-controlplane
+
+EXPOSE 8443
+
+# Default is to read config from the standard path. Operators
+# override CMD when they need a different config.
+CMD ["iac-controlplane", "--config", "/etc/iac-controlplane/server.toml"]

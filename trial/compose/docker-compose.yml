@@ -1,0 +1,90 @@
+# Phase 8 trial harness — N agents + 1 control-plane + Prometheus.
+#
+# Quick start (from repo root):
+#   docker compose -f trial/compose/docker-compose.yml build
+#   docker compose -f trial/compose/docker-compose.yml up -d --scale agent=50
+#
+# The agent service is replicable via `--scale agent=N`. Compose
+# names replicas `trial-agent-1`, `trial-agent-2`, … and each one
+# registers under that hostname.
+
+services:
+  controlplane:
+    build:
+      # Build context is the repo root so the Dockerfile can copy
+      # `crates/` and `Cargo.toml` directly.
+      context: ../..
+      dockerfile: trial/docker/Dockerfile.controlplane
+    image: iac-controlplane:trial
+    hostname: controlplane
+    restart: unless-stopped
+    networks:
+      iac-trial:
+        aliases:
+          - controlplane
+    ports:
+      - "8443:8443"   # API for the workload generator on the host
+    volumes:
+      - ./server.toml:/etc/iac-controlplane/server.toml:ro
+      - controlplane-state:/var/lib/iac-controlplane
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8443/v1/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
+      start_period: 10s
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: trial/docker/Dockerfile.agent
+    image: iac-agent:trial
+    restart: unless-stopped
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    networks:
+      - iac-trial
+    environment:
+      IAC_CONTROLPLANE_URL: "http://controlplane:8443"
+      IAC_ENVIRONMENT: trial
+      IAC_OBSERVE_INTERVAL: "10"
+      IAC_RUST_LOG: "iac_agent=info,iac_core=warn"
+    cap_add:
+      # tc/netem inside the container needs CAP_NET_ADMIN. We add
+      # it to *every* agent so chaos scripts can pin specific
+      # replicas without compose orchestration.
+      - NET_ADMIN
+    # Per-agent resource limits — keep one runaway plugin from
+    # OOMing the host. 256 MiB is plenty for the agent itself
+    # plus a typical wasm plugin's heap.
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    hostname: prometheus
+    restart: unless-stopped
+    networks:
+      - iac-trial
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=2h"
+      - "--web.enable-lifecycle"
+
+networks:
+  iac-trial:
+    driver: bridge
+
+volumes:
+  controlplane-state:
+  prometheus-data:

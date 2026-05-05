@@ -1,0 +1,33 @@
+# Phase 8: trial workload generator + scenario runner.
+#
+# Stand-alone bin crate inside the workspace. Operators run it
+# from outside the docker-compose network (talks to control-plane
+# on 127.0.0.1:8443 by default).
+
+[package]
+name = "iac-trial"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "iac-trial"
+path = "src/main.rs"
+
+[dependencies]
+iac-core = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+jiff = { workspace = true }
+ulid = { workspace = true }

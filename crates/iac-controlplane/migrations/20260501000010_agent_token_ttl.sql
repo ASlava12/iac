@@ -1,0 +1,23 @@
+-- Phase 7cc: agent token TTL + explicit rotation.
+--
+-- Pre-7cc tokens were long-lived bearer secrets — once issued, valid
+-- forever until manually revoked (which the API didn't even expose).
+-- Production deployments need short-lived tokens with rotation.
+--
+-- This migration adds `token_expires_at`. Semantics:
+--   * NULL — token is grandfathered (pre-7cc behavior, no expiry).
+--   * <timestamp> — token expires at that absolute time. Auth rejects
+--     401 with "token expired" reason after the deadline.
+--
+-- New agents registered when `[server].agent_token_ttl_secs` is set
+-- get a token with `token_expires_at = now + ttl`. Operators on
+-- existing fleets either keep the default (no TTL → tokens stay
+-- grandfathered) or opt in (new registrations get TTL; old agents
+-- keep working until manually re-registered).
+--
+-- Rotation: the `POST /v1/agents/{id}/rotate-token` endpoint issues a
+-- fresh token (with a new expiry computed from current TTL config)
+-- and updates `token_hash` + `token_expires_at` atomically. The old
+-- token is invalidated immediately on next request.
+
+ALTER TABLE agents ADD COLUMN token_expires_at TEXT;

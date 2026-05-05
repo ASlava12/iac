@@ -1,0 +1,21 @@
+apiVersion: iac.example/v1
+kind: file
+metadata:
+  name: greeting
+  environment: local
+spec:
+  path: /tmp/iac-demo/greeting.txt
+  mode: "0644"
+  content: |
+    hello from iac
+    line 2
+---
+apiVersion: iac.example/v1
+kind: file
+metadata:
+  name: motd-fragment
+  environment: local
+spec:
+  path: /tmp/iac-demo/motd.d/00-iac
+  mode: "0644"
+  content: "managed by iac\n"

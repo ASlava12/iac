@@ -1,0 +1,48 @@
+# Phase 7de: cargo-fuzz harness for coverage-guided fuzzing of the
+# YAML parsers + manifest loader.
+#
+# Stand-alone — opts out of the parent workspace so a `cargo build
+# --workspace` doesn't pull in libfuzzer-sys (nightly + nasm
+# dependencies). Run via:
+#
+#   cd fuzz
+#   cargo +nightly fuzz run fuzz_provider_specs       # specs
+#   cargo +nightly fuzz run fuzz_manifest_documents   # YAML loader
+#
+# Crashes shrink to small reproducers under `fuzz/artifacts/`.
+# Treat any crash as a sev-2 bug — these parsers run on attacker-
+# controlled input shapes when the manifest source is git or a
+# multi-tenant control-plane.
+
+[package]
+name = "iac-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+# Stand-alone — opt out of the parent workspace.
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_yaml_ng = "0.10"
+
+iac-core = { path = "../crates/iac-core" }
+iac-providers = { path = "../crates/iac-providers" }
+
+[[bin]]
+name = "fuzz_provider_specs"
+path = "fuzz_targets/fuzz_provider_specs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_manifest_documents"
+path = "fuzz_targets/fuzz_manifest_documents.rs"
+test = false
+doc = false
+bench = false

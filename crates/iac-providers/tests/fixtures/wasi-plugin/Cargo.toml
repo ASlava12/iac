@@ -1,0 +1,24 @@
+# Phase 7de: WASI-using fixture plugin. Reads a file from a host
+# preopen and embeds the content in the observed spec — proves the
+# capability boundary actually carries bytes across.
+#
+# Stand-alone — not a workspace member; tests bootstrap-build it.
+
+[package]
+name = "iac-test-wasi-plugin"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.36"
+
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

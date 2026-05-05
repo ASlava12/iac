@@ -1,0 +1,24 @@
+# Phase 8 trial control-plane config.
+# Minimal — the trial harness exercises the runtime, not the
+# config surface. Operators tweaking specific scenarios drop
+# their own server.toml in.
+
+bind = "0.0.0.0:8443"
+state_dir = "/var/lib/iac-controlplane"
+database_url = "sqlite:///var/lib/iac-controlplane/server.db?mode=rwc"
+max_body_bytes = 4194304
+admin_token = "trial-admin-token"
+
+# Generous rate limits — the trial workload generator can push
+# 100+ ops/sec; production ops would set these much lower.
+# `None` (omitted) disables; large positive values are effectively
+# uncapped under realistic trial loads.
+[rate_limit]
+operations_per_minute = 100000
+
+[retention]
+audit_days = 7
+
+[tls]
+mode = "none"
+

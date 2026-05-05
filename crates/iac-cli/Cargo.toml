@@ -1,0 +1,36 @@
+[package]
+name = "iac-cli"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "iac"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+iac-core = { workspace = true }
+iac-providers = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+jiff = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+rpassword = { workspace = true }
+indexmap = { workspace = true }
+sha2 = { workspace = true }
+# Phase 7da.1: SshConnectionPool owns a TempDir for ControlMaster sockets.
+tempfile = { workspace = true }

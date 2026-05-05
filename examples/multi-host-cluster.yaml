@@ -1,0 +1,117 @@
+# Example: 3-tier deployment across distinct hosts using hostSelector.
+#
+# - vm-db hosts Postgres
+# - vm-api hosts the application server (depends on db)
+# - vm-lb hosts nginx + monitoring (depends on api)
+#
+# Phase 7by phased apply layers this automatically: layer 0 = db,
+# layer 1 = api, layer 2 = lb. Each layer fully completes before the
+# next dispatches. Add --canary-pct 50 on submit to also gate within
+# each layer.
+---
+apiVersion: iac.example/v1
+kind: docker.container
+metadata:
+  name: postgres
+  environment: prod
+  dependsOn: []
+spec:
+  name: postgres
+  image: postgres:16
+  ports: ["5432:5432"]
+  env:
+    POSTGRES_PASSWORD: "${secret://env/POSTGRES_PASSWORD}"
+    POSTGRES_DB: app
+  volumes:
+    - "/var/lib/postgres/data:/var/lib/postgresql/data"
+  restart: unless-stopped
+  hostSelector:
+    name: vm-db
+---
+apiVersion: iac.example/v1
+kind: monitoring.check
+metadata:
+  name: postgres-up
+  environment: prod
+  dependsOn: ["docker.container/prod/postgres"]
+spec:
+  type: tcp
+  target: localhost:5432
+  timeout_secs: 5
+  retries: 10
+  retry_interval_secs: 1
+  hostSelector:
+    name: vm-db
+---
+apiVersion: iac.example/v1
+kind: docker.container
+metadata:
+  name: api
+  environment: prod
+  # Depends on db being up (in layer 0). Phase 7by ensures this
+  # container won't dispatch to vm-api until the db layer fully
+  # succeeds.
+  dependsOn:
+    - "monitoring.check/prod/postgres-up"
+spec:
+  name: api
+  image: ghcr.io/example/api:v2.4.1
+  ports: ["8080:8080"]
+  env:
+    DATABASE_URL: "postgres://app:${secret://env/POSTGRES_PASSWORD}@vm-db.internal:5432/app"
+  restart: unless-stopped
+  hostSelector:
+    name: vm-api
+---
+apiVersion: iac.example/v1
+kind: monitoring.check
+metadata:
+  name: api-health
+  environment: prod
+  dependsOn: ["docker.container/prod/api"]
+spec:
+  type: http
+  target: http://localhost:8080/healthz
+  retries: 10
+  retry_interval_secs: 2
+  hostSelector:
+    name: vm-api
+---
+apiVersion: iac.example/v1
+kind: file
+metadata:
+  name: nginx-conf
+  environment: prod
+  dependsOn: []
+spec:
+  path: /etc/nginx/sites-available/api.conf
+  mode: "0644"
+  content: |
+    upstream api { server vm-api.internal:8080; }
+    server {
+      listen 443 ssl;
+      server_name api.example.com;
+      ssl_certificate     /etc/iac/tls/api.crt;
+      ssl_certificate_key /etc/iac/tls/api.key;
+      location / { proxy_pass http://api; }
+    }
+  hostSelector:
+    name: vm-lb
+---
+apiVersion: iac.example/v1
+kind: systemd.unit
+metadata:
+  name: nginx
+  environment: prod
+  # nginx reload depends on its config AND on the api being healthy
+  # (no point pointing the load balancer at a dead backend).
+  dependsOn:
+    - "file/prod/nginx-conf"
+    - "monitoring.check/prod/api-health"
+spec:
+  name: nginx
+  state: present
+  active: true
+  enabled: true
+  hostSelector:
+    name: vm-lb
