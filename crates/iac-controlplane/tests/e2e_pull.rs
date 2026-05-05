@@ -73,7 +73,7 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app)
+            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .with_graceful_shutdown(async move { signal.notified().await })
                 .await
                 .unwrap();
@@ -266,7 +266,7 @@ async fn submit_with_no_admin_configured_returns_400() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();

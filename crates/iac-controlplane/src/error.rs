@@ -45,6 +45,12 @@ impl RateLimitBucket {
     pub fn client(name: impl Into<String>) -> Self {
         Self { r#type: "client".into(), name: name.into() }
     }
+    /// Phase 9-F8: per-IP bucket on `POST /v1/agents/register`. Kept
+    /// distinct from `client` so register storms and login attacks
+    /// don't share a counter (and so dashboards can split them).
+    pub fn register_ip(name: impl Into<String>) -> Self {
+        Self { r#type: "register_ip".into(), name: name.into() }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

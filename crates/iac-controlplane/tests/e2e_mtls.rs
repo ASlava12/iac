@@ -131,7 +131,7 @@ impl TestServer {
         let serve_handle = tokio::spawn(async move {
             axum_server::from_tcp_rustls(listener, server_cfg)
                 .handle(handle)
-                .serve(app.into_make_service())
+                .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .await
                 .unwrap();
         });

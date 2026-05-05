@@ -69,7 +69,7 @@ impl MockReceiver {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app)
+            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
                 .with_graceful_shutdown(async move { signal.notified().await })
                 .await
                 .unwrap();
@@ -596,7 +596,7 @@ async fn semaphore_caps_in_flight_requests() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -972,7 +972,7 @@ async fn metrics_count_each_response_class() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -1052,7 +1052,7 @@ async fn metrics_track_in_flight_peak_against_semaphore_cap() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -1115,7 +1115,7 @@ async fn metrics_semaphore_wait_micros_increases_under_contention() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -1188,7 +1188,7 @@ async fn receiver_429_with_retry_after_pauses_subsequent_ticks() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -1265,7 +1265,7 @@ async fn receiver_429_without_retry_after_does_not_back_off() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -1583,7 +1583,7 @@ async fn backoff_survives_dispatcher_restart() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -1732,7 +1732,7 @@ async fn per_webhook_metrics_attribute_outcomes_to_each_receiver() {
     let bad_shutdown = Arc::new(Notify::new());
     let bad_signal = bad_shutdown.clone();
     let bad_handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { bad_signal.notified().await })
             .await
             .unwrap();
@@ -1834,7 +1834,7 @@ async fn http_date_retry_after_triggers_backoff() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -1980,7 +1980,7 @@ async fn per_receiver_cap_limits_concurrent_requests() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -2361,7 +2361,7 @@ async fn per_receiver_semaphore_wait_counter_increases_under_contention() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -2479,7 +2479,7 @@ async fn dispatch_duration_records_round_trip_time_per_receiver() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();

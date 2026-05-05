@@ -81,7 +81,7 @@ async fn spawn(with_dispatcher: bool) -> TestServer {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -331,7 +331,7 @@ async fn maintenance_counters_track_admit_block_bypass() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -474,7 +474,7 @@ async fn maintenance_recurring_block_increments_per_type_counter() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();
@@ -592,7 +592,7 @@ async fn rate_limit_counters_increment_after_submissions() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .with_graceful_shutdown(async move { signal.notified().await })
             .await
             .unwrap();

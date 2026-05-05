@@ -4,8 +4,13 @@
 use crate::api::BearerToken;
 use crate::error::{ApiError, ApiResult};
 use crate::server::AppState;
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::{ConnectInfo, State},
+    routing::post,
+    Json, Router,
+};
 use iac_core::protocol::v1::{LoginRequest, LoginResponse};
+use std::net::SocketAddr;
 
 /// 24-hour token lifetime. Refresh by re-logging-in until Phase 6f introduces
 /// a refresh-token endpoint.
@@ -20,6 +25,7 @@ pub fn router() -> Router<AppState> {
 
 async fn login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResponse>> {
     if req.username.is_empty() || req.password.is_empty() {
@@ -32,9 +38,14 @@ async fn login(
     // (thousands of parallel logins exhausting CPU) is also bounded
     // because the limiter rejects the flood before any password
     // hashing happens.
+    //
+    // Phase 9-F8: previously this passed an empty client_ip (the
+    // ConnectInfo extractor wasn't wired), so the per-IP login bucket
+    // was a no-op even when the config had a non-zero cap. Now the
+    // real socket address is plumbed through.
     state
         .rate_limiter
-        .check_and_record_login(&req.username, "")
+        .check_and_record_login(&req.username, &addr.ip().to_string())
         .await?;
     let outcome = state
         .store

@@ -50,6 +50,17 @@ pub struct RateLimitConfig {
     /// username, keep guessing" spread-out attack. Default 30.
     #[serde(default = "default_login_per_minute_ip")]
     pub login_per_minute_per_ip: Option<u32>,
+    /// Phase 9-F8 (security fix): cap on `POST /v1/agents/register`
+    /// per source IP per 60 seconds. Default 20 — covers a normal
+    /// fleet rollout (where ~10 agents come up roughly together) with
+    /// headroom, but stops storm/DDoS attempts dead. The endpoint is
+    /// unauthenticated by design (agents need it to bootstrap), so a
+    /// per-IP cap is the only line of defence; without it, a single
+    /// host can flood the agents table + audit chain at line rate.
+    /// `None` / `0` disables (not recommended for any fleet larger
+    /// than dev).
+    #[serde(default = "default_register_per_minute_ip")]
+    pub register_per_minute_per_ip: Option<u32>,
 }
 
 fn default_login_per_minute() -> Option<u32> {
@@ -57,6 +68,9 @@ fn default_login_per_minute() -> Option<u32> {
 }
 fn default_login_per_minute_ip() -> Option<u32> {
     Some(30)
+}
+fn default_register_per_minute_ip() -> Option<u32> {
+    Some(20)
 }
 
 #[derive(Debug)]
@@ -68,6 +82,8 @@ pub struct RateLimiter {
     login_user_max_per_minute: Option<u32>,
     /// Phase 7co: per-client-IP login cap.
     login_ip_max_per_minute: Option<u32>,
+    /// Phase 9-F8: per-client-IP register cap.
+    register_ip_max_per_minute: Option<u32>,
     state: Mutex<HashMap<String, VecDeque<Instant>>>,
     /// Phase 7ae: lock-free counters for the metrics endpoint.
     metrics: RateLimitMetrics,
@@ -99,6 +115,7 @@ impl RateLimiter {
             agent_max_per_minute: cfg.agent_requests_per_minute.filter(|n| *n > 0),
             login_user_max_per_minute: cfg.login_per_minute_per_user.filter(|n| *n > 0),
             login_ip_max_per_minute: cfg.login_per_minute_per_ip.filter(|n| *n > 0),
+            register_ip_max_per_minute: cfg.register_per_minute_per_ip.filter(|n| *n > 0),
             state: Mutex::new(HashMap::new()),
             metrics: RateLimitMetrics::default(),
         }
@@ -130,6 +147,29 @@ impl RateLimiter {
             .await?;
         }
         Ok(())
+    }
+
+    /// Phase 9-F8: rate-limit a register attempt by source IP. The
+    /// endpoint is unauthenticated by design (agents must be able to
+    /// bootstrap before they have credentials), so the only useful
+    /// throttle is per-IP. `None` / `0` short-circuits to `Ok(())`
+    /// (limit disabled).
+    ///
+    /// Whitespace / empty client IP is treated as the bucket name
+    /// `unknown` rather than panicking — it should not happen in
+    /// practice (axum's `ConnectInfo<SocketAddr>` always populates),
+    /// but a misconfigured proxy header could conceivably yield it,
+    /// and we'd rather rate-limit unknowns together than skip the
+    /// check.
+    pub async fn check_and_record_register(&self, client_ip: &str) -> ApiResult<()> {
+        let Some(max) = self.register_ip_max_per_minute else { return Ok(()); };
+        let key = if client_ip.trim().is_empty() { "unknown" } else { client_ip };
+        self.check_and_record_keyed_at(
+            RateLimitBucket::register_ip(key),
+            max,
+            Instant::now(),
+        )
+        .await
     }
 
     pub fn metrics(&self) -> RateLimitMetricsSnapshot {
@@ -375,5 +415,91 @@ mod tests {
         let b = RateLimitBucket::agent("foo");
         assert_eq!(b.r#type, "agent");
         assert_eq!(b.name, "foo");
+    }
+
+    #[tokio::test]
+    async fn register_cap_disabled_when_unset() {
+        let cfg = RateLimitConfig {
+            register_per_minute_per_ip: None,
+            ..Default::default()
+        };
+        let lim = RateLimiter::from_config(&cfg);
+        for _ in 0..100 {
+            assert!(lim.check_and_record_register("1.2.3.4").await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn register_cap_zero_disabled() {
+        let cfg = RateLimitConfig {
+            register_per_minute_per_ip: Some(0),
+            ..Default::default()
+        };
+        let lim = RateLimiter::from_config(&cfg);
+        for _ in 0..100 {
+            assert!(lim.check_and_record_register("1.2.3.4").await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn register_cap_isolates_per_ip() {
+        let cfg = RateLimitConfig {
+            register_per_minute_per_ip: Some(2),
+            ..Default::default()
+        };
+        let lim = RateLimiter::from_config(&cfg);
+        // Two storm IPs spamming, one legit IP should still get through.
+        assert!(lim.check_and_record_register("10.0.0.1").await.is_ok());
+        assert!(lim.check_and_record_register("10.0.0.1").await.is_ok());
+        let err = lim.check_and_record_register("10.0.0.1").await.unwrap_err();
+        match err {
+            ApiError::TooManyRequests { bucket, .. } => {
+                assert_eq!(bucket.r#type, "register_ip");
+                assert_eq!(bucket.name, "10.0.0.1");
+            }
+            other => panic!("expected TooManyRequests, got {other:?}"),
+        }
+        // Different IP gets a fresh budget — fleet bootstrap from
+        // multiple hosts is unaffected.
+        assert!(lim.check_and_record_register("10.0.0.2").await.is_ok());
+        assert!(lim.check_and_record_register("10.0.0.2").await.is_ok());
+        assert!(lim.check_and_record_register("10.0.0.2").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn register_cap_empty_ip_falls_back_to_unknown() {
+        let cfg = RateLimitConfig {
+            register_per_minute_per_ip: Some(1),
+            ..Default::default()
+        };
+        let lim = RateLimiter::from_config(&cfg);
+        assert!(lim.check_and_record_register("").await.is_ok());
+        let err = lim.check_and_record_register("   ").await.unwrap_err();
+        match err {
+            ApiError::TooManyRequests { bucket, .. } => {
+                assert_eq!(bucket.name, "unknown");
+            }
+            other => panic!("expected TooManyRequests, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn register_and_login_buckets_dont_share_counter() {
+        // Same source IP hitting register and login should have two
+        // independent budgets — register storms shouldn't lock out
+        // legitimate login attempts and vice versa.
+        let cfg = RateLimitConfig {
+            register_per_minute_per_ip: Some(1),
+            login_per_minute_per_user: None,
+            login_per_minute_per_ip: Some(1),
+            ..Default::default()
+        };
+        let lim = RateLimiter::from_config(&cfg);
+        assert!(lim.check_and_record_register("9.9.9.9").await.is_ok());
+        // Same IP has a separate login budget.
+        assert!(lim.check_and_record_login("alice", "9.9.9.9").await.is_ok());
+        // Both are now exhausted independently.
+        assert!(lim.check_and_record_register("9.9.9.9").await.is_err());
+        assert!(lim.check_and_record_login("alice", "9.9.9.9").await.is_err());
     }
 }

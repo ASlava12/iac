@@ -36,15 +36,15 @@ network/timing on a single host.
 | ~~F5~~ | ~~Time-skew attack (agent clock 25 h in past)~~ | ~~replay-protection holds (Phase 7cq.2 / 7dh.12)~~ | **Done locally — see archive 7dh.13.** Symmetric-window age check pinned by 13 deterministic unit tests in `remote::tests`. |
 | F6 | Rolling upgrade agent v1 ↔ controlplane v2  | wire-protocol compatibility; in-flight ops complete; no agent re-registration storm | Needs two binary versions deployed sequentially across distinct hosts |
 | F7 | Backup/restore of controlplane DB           | RPO/RTO measured; audit-chain integrity preserved across restore | Single-host trial can do this but hasn't been run end-to-end yet |
-| F8 | DDoS on `/v1/agents/register`               | rate-limit holds; legitimate agents not starved | Needs distinct source IPs (`X-Forwarded-For` allowlist evaluation) |
+| ~~F8~~ | ~~DDoS on `/v1/agents/register`~~       | ~~rate-limit holds; legitimate agents not starved~~ | **Done — see archive 9-F8.** Empirical storm proved the gap (250 req / 10 s from one IP, 0 × 429); per-IP register cap (default 20/min) + axum `ConnectInfo` plumbing land in this fix. Re-storm at 30 s × 50 against the fixed binary returned 20 × 200 / 880 × 429 as expected. Multi-source-IP / `X-Forwarded-For` allowlist still wants a real-fleet pass once F1 finishes and the prod CP can be restarted. |
 
-**Remaining for VPS allocation:** F1, F2, F6, F7, F8 (5 of 8). F3/F4/F5
+**Remaining for VPS allocation:** F1 (running), F2, F6, F7 (4 of 8). F3/F4/F5/F8
 have local test coverage that pins the agent-side contract; the
 hardware-side aspects (real IPMI cold reboot, real ext4 ENOSPC,
 real-time `date -s`) still want a VM trial but no longer block release.
 
-**Estimated effort for the remaining 5:** ~3 weeks calendar from VPS
-allocation (was 4 — three scenarios moved out).
+**Estimated effort for the remaining 4:** ~2½ weeks calendar from VPS
+allocation (was 3 — F8 moved out after the per-IP register-cap fix).
 
 ### Phase 10 — Cross-architecture validation (MIPS / network gear)
 

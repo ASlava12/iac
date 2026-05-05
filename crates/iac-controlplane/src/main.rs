@@ -297,19 +297,25 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             shutdown_signal.notified().await;
             handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
         });
+        // Phase 9-F8: `with_connect_info` plumbs the source SocketAddr
+        // through to handlers via `ConnectInfo<SocketAddr>`. Required
+        // for the per-IP register / login rate limits.
         axum_server::bind_rustls(addr, server_cfg)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .await
             .context("tls server error")?;
     } else {
         let listener = tokio::net::TcpListener::bind(addr).await.context("binding")?;
         let actual = listener.local_addr().context("local_addr")?;
         tracing::info!(addr = %actual, "plain HTTP listener bound");
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move { shutdown_signal.notified().await })
-            .await
-            .context("server error")?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { shutdown_signal.notified().await })
+        .await
+        .context("server error")?;
     }
 
     // Stop the retention + webhook loops and wait for them to drain.

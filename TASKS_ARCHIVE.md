@@ -2513,3 +2513,46 @@ existing 1176-test workspace baseline. `cargo clippy --workspace
 **Net effect on Phase 9:** 3 of 8 fleet scenarios now have local
 agent-side coverage. The remaining 5 (F1, F2, F6, F7, F8) genuinely
 need multi-host distributed environments and stay deferred.
+
+## Phase 9-F8 — Register-endpoint DDoS, found AND fixed (2026-05-05)
+
+F8 was originally framed as "validate that rate-limit on
+`/v1/agents/register` holds under storm." Pre-test inspection of
+[`crates/iac-controlplane/src/api/agents.rs`](crates/iac-controlplane/src/api/agents.rs)
+revealed the rate-limit **did not exist** for that endpoint — the four
+`RateLimiter` buckets covered `operations` (env-keyed), `agent` (per
+agent_id, post-auth), `login_user`, and `login_per_ip`, with nothing
+on the unauthenticated register path. The scenario was reframed as
+"demonstrate the gap, then fix it, then re-storm."
+
+- [x] **Empirical confirmation of the gap.** Wrote
+  [`trial/scenarios/fleet-f8-register-ddos.sh`](trial/scenarios/fleet-f8-register-ddos.sh)
+  — storm originates from `cp-spare-01` (104.128.140.48) so the traffic
+  crosses the network like a real attacker, not a localhost flood. A
+  parallel "legit registrant" loop runs from the operator host every
+  5 s to measure starvation. **Smoke run (10 s × 5 parallel) result:
+  250 requests, 250 × HTTP 200, 0 × HTTP 429.** Agents-table grew
+  from 8 to 259 rows; audit chain absorbed the same count cleanly.
+  Severity HIGH: a single attacker IP — or a misbehaving operator
+  bootstrap script with a retry loop — can fill the agents table +
+  audit chain at line rate.
+- [x] **Fix: per-IP register rate-limit + ConnectInfo plumbing.**
+  - [`crates/iac-controlplane/src/rate_limit.rs`](crates/iac-controlplane/src/rate_limit.rs) — new `RateLimitConfig::register_per_minute_per_ip` field (default `Some(20)`). 20/min/IP covers a legitimate fleet-rollout cadence (10 agents coming up at boot in ~30 s is fine) but caps storms at the 60 s sliding-window edge. New `check_and_record_register(client_ip)` enforces it; empty / whitespace IP falls back to bucket name `"unknown"` rather than panicking.
+  - [`crates/iac-controlplane/src/error.rs`](crates/iac-controlplane/src/error.rs) — new `RateLimitBucket::register_ip(name)`. Distinct from `client` so register storms and login attacks don't share a counter (avoids the case where a legit register from the same IP locks out a legit login retry).
+  - [`crates/iac-controlplane/src/api/agents.rs`](crates/iac-controlplane/src/api/agents.rs) — `register` handler now extracts `ConnectInfo<SocketAddr>` and calls `rate_limiter.check_and_record_register(&addr.ip().to_string())` before touching the store.
+  - [`crates/iac-controlplane/src/api/auth.rs`](crates/iac-controlplane/src/api/auth.rs) — fixed a Phase 7co latent bug: `login` was passing an empty string for `client_ip`, so the per-IP login bucket was a no-op even when the config had a non-zero cap. Now the real socket address is plumbed through. The username bucket worked; the IP bucket did not, until now.
+  - [`crates/iac-controlplane/src/main.rs`](crates/iac-controlplane/src/main.rs) — both the plain-HTTP and TLS server paths swapped to `app.into_make_service_with_connect_info::<std::net::SocketAddr>()`. Without this layer the `ConnectInfo` extractor returns 500 — required even though the existing test fixtures bypassed it via `oneshot`.
+  - **Tests:** all 21 test fixtures in `crates/iac-controlplane/tests/` updated to use `into_make_service_with_connect_info` so the post-fix register endpoint serves correctly under integration tests. **5 new unit tests** in `rate_limit::tests` (`register_cap_disabled_when_unset`, `register_cap_zero_disabled`, `register_cap_isolates_per_ip`, `register_cap_empty_ip_falls_back_to_unknown`, `register_and_login_buckets_dont_share_counter`). Full controlplane suite: 481 / 481 green; total workspace baseline preserved.
+- [x] **Re-storm against the fixed binary.** Built release binary, deployed to `cp-spare-02` (104.128.140.49) on port 8444 with a fresh SQLite DB so F1 wasn't disturbed. Ran the same xargs-parallel storm from `cp-spare-01` for 30 s × 50 parallel. **Result: 900 requests, 20 × HTTP 200, 880 × HTTP 429.** Storm completes in 30 s as intended; the 20 admitted equal exactly the 60 s sliding-window cap (the cap allows up to 20 in any 60 s; 30 s ≈ ½ window, so admitted count tracks the cap, not the duration). Latency p50 = 576 ms / p99 = 902 ms — the 429 path is fast on the server but the storm host saturates its own outbound; on a normal client the 429 returns in single-digit ms. Test CP and storm artefacts cleaned up afterwards.
+- [ ] **Pending — deploy fix to prod CP.** The fix is empirically validated against the new binary on a clean spare; the live `iac-controlplane` on cp-01 (104.128.140.54) is still the F1-running pre-fix version. Restarting it now would break F1's "0 unaccounted systemd restarts" pass criterion. Sequence: F1 finalize ⟶ `systemctl stop iac-controlplane` ⟶ `scp` new binary ⟶ start ⟶ smoke health check. Estimated 5 min after F1 finishes.
+
+**Why this matters for an IaC tool that targets weak hardware.** The
+register endpoint is the bootstrap path; agents must reach it before
+they have credentials, so it can't be gated by auth. Without per-IP
+caps, a Mikrotik-class device on a flaky link with a buggy retry loop
+DoS's its own controlplane the first time the operator copies a config
+that loops on transient network errors. The fix is also the cheapest
+imaginable defence — one `tokio::sync::Mutex` lookup per request,
+zero new dependencies, sub-microsecond overhead. The default cap is
+permissive enough that no legitimate fleet operation hits it; the
+limit only fires under abuse.

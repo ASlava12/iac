@@ -3,7 +3,7 @@ use crate::identity::Role;
 use crate::error::ApiResult;
 use crate::server::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     routing::{get, post},
     Json, Router,
 };
@@ -11,6 +11,7 @@ use iac_core::protocol::v1::{
     AgentSummary, AssignmentList, AssignmentResultRequest, DesiredStateBatch, DriftAck, DriftBatch,
     HeartbeatRequest, ObservationAck, ObservationBatch, RegisterRequest, RegisterResponse,
 };
+use std::net::SocketAddr;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -36,8 +37,19 @@ pub fn router() -> Router<AppState> {
 
 async fn register(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<Json<RegisterResponse>> {
+    // Phase 9-F8 (security fix): per-IP rate-limit. The endpoint is
+    // unauthenticated by design (agents need to bootstrap before they
+    // have a token), so without this cap a single source could flood
+    // both the agents table and the audit chain at line rate. Empirical
+    // F8 storm test showed 250+ inserts in 10 s from one host before
+    // this fix.
+    state
+        .rate_limiter
+        .check_and_record_register(&addr.ip().to_string())
+        .await?;
     // Phase 7cc: read TTL config from live snapshot so SIGHUP reload
     // picks up changes for new registrations without a restart.
     let ttl = state.config().agent_token_ttl_secs;
