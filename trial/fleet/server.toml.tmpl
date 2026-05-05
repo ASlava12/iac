@@ -1,0 +1,23 @@
+# Phase 9 fleet trial: control-plane config.
+#
+# Plain HTTP for the trial — TLS is orthogonal to what F1-F8 measure
+# (throughput, longevity, partition recovery, replay protection,
+# upgrade compat, backup/restore, DDoS rate-limit). Production would
+# pair this with a TLS reverse proxy or a real cert via Phase 7ak.
+
+bind          = "0.0.0.0:__CP_PORT__"
+state_dir     = "/var/lib/iac-controlplane"
+database_url  = "sqlite:///var/lib/iac-controlplane/server.db?mode=rwc"
+max_body_bytes = 4194304
+admin_token   = "__ADMIN_TOKEN__"
+
+# Generous limits — fleet workload generators push hundreds of ops
+# per minute; production tuning is much tighter.
+[rate_limit]
+operations_per_minute = 100000
+
+[retention]
+audit_days = 7
+
+[tls]
+mode = "none"

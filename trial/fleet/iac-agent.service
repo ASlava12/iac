@@ -1,0 +1,20 @@
+[Unit]
+Description=iac agent (Phase 9 fleet trial)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/iac-agent --config /etc/iac/agent.toml run
+Restart=on-failure
+RestartSec=2
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iac-agent
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

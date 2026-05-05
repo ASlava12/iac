@@ -1,0 +1,9 @@
+# Phase 9 fleet trial: per-agent config (rendered per-host by
+# bootstrap.sh — `__AGENT_NAME__`, `__SERVER_URL__` substituted).
+state_dir         = "/var/lib/iac-agent"
+manifests_dir     = "/var/lib/iac-agent/manifests.d"
+observe_interval_secs = 10
+environment       = "fleet"
+actor             = "fleet-agent"
+server_url        = "__SERVER_URL__"
+agent_name        = "__AGENT_NAME__"

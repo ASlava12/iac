@@ -41,6 +41,17 @@ struct Cli {
     #[arg(long, default_value = "trial")]
     environment: String,
 
+    /// Phase 9: comma-separated list of agent names to round-robin
+    /// `spec.hostSelector.name` through. The single-host docker-compose
+    /// trial got away without this because the controlplane routes
+    /// no-selector resources to the only agent in the env. A real
+    /// fleet has N>1 agents and the routing rule rejects ambiguous
+    /// resources as unrouted (see `route_resource` in
+    /// `iac-controlplane::store`). Empty = no hostSelector (legacy
+    /// single-agent behaviour).
+    #[arg(long, default_value = "", value_delimiter = ',')]
+    targets: Vec<String>,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -121,10 +132,27 @@ fn build_client(_token: &str) -> Result<reqwest::Client> {
 }
 
 /// One synthetic file-resource manifest. Each call generates a
-/// fresh ResourceId so submissions never collide on dedup.
-fn make_file_manifest(env: &str) -> serde_json::Value {
+/// fresh ResourceId so submissions never collide on dedup. When
+/// `host_selector` is `Some`, the resource pins to that agent name —
+/// required when the controlplane has more than one agent in the
+/// target environment (the routing rule rejects ambiguous resources;
+/// see `route_resource` in `iac-controlplane::store`).
+fn make_file_manifest(env: &str, host_selector: Option<&str>) -> serde_json::Value {
     let id = ulid::Ulid::new();
     let path = format!("/tmp/trial-{id}.txt");
+    let mut spec = serde_json::json!({
+        "path": path,
+        "mode": "0644",
+        "content": format!("trial run {id}\n"),
+    });
+    if let Some(host) = host_selector
+        && let Some(map) = spec.as_object_mut()
+    {
+        map.insert(
+            "hostSelector".into(),
+            serde_json::json!({ "name": host }),
+        );
+    }
     serde_json::json!({
         "apiVersion": "iac.example/v1",
         "kind": "file",
@@ -132,11 +160,7 @@ fn make_file_manifest(env: &str) -> serde_json::Value {
             "name": format!("trial-{id}"),
             "environment": env,
         },
-        "spec": {
-            "path": path,
-            "mode": "0644",
-            "content": format!("trial run {id}\n"),
-        }
+        "spec": spec,
     })
 }
 
@@ -145,13 +169,14 @@ async fn submit_one(
     server_url: &str,
     admin_token: &str,
     environment: &str,
+    target: Option<&str>,
 ) -> Result<Duration> {
     let body = serde_json::json!({
         "environment": environment,
         "requested_by": "iac-trial",
         "source_commit": null,
         "summary": "trial submit-burst",
-        "resources": [make_file_manifest(environment)],
+        "resources": [make_file_manifest(environment, target)],
         "canary": null,
     });
     let started = Instant::now();
@@ -270,6 +295,7 @@ async fn submit_burst(
         rps,
         concurrency,
         url = %cli.server_url,
+        targets = ?cli.targets,
         "submit-burst starting"
     );
     let stats = Arc::new(Stats::new());
@@ -282,6 +308,15 @@ async fn submit_burst(
         Duration::ZERO
     };
     let mut next_dispatch = Instant::now();
+    // Filter empty entries from `--targets ""` (clap value-delimiter
+    // splits even empty strings into a single empty element).
+    let targets: Vec<String> = cli
+        .targets
+        .iter()
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .collect();
+    let target_idx = Arc::new(AtomicU64::new(0));
 
     for _ in 0..count {
         let now = Instant::now();
@@ -295,9 +330,18 @@ async fn submit_burst(
         let server_url = cli.server_url.clone();
         let token = cli.admin_token.clone();
         let env = cli.environment.clone();
+        // Pre-pick the target so each submit binds to a deterministic
+        // agent name rather than letting concurrent tasks race on the
+        // index. Round-robin via fetch-and-increment.
+        let target = if targets.is_empty() {
+            None
+        } else {
+            let i = target_idx.fetch_add(1, Ordering::Relaxed) as usize;
+            Some(targets[i % targets.len()].clone())
+        };
         handles.push(tokio::spawn(async move {
             let _permit = permit;
-            match submit_one(&client, &server_url, &token, &env).await {
+            match submit_one(&client, &server_url, &token, &env, target.as_deref()).await {
                 Ok(d) => stats.record(d),
                 Err(e) => {
                     stats.fail();
@@ -331,9 +375,31 @@ async fn longevity(
     let interval = Duration::from_secs_f64(1.0 / rps);
     let deadline = started + Duration::from_secs(duration_secs);
 
+    let targets: Vec<String> = cli
+        .targets
+        .iter()
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .collect();
+    let mut idx: u64 = 0;
     while Instant::now() < deadline {
         let begin = Instant::now();
-        match submit_one(client, &cli.server_url, &cli.admin_token, &cli.environment).await {
+        let target = if targets.is_empty() {
+            None
+        } else {
+            let t = &targets[(idx as usize) % targets.len()];
+            idx = idx.wrapping_add(1);
+            Some(t.as_str())
+        };
+        match submit_one(
+            client,
+            &cli.server_url,
+            &cli.admin_token,
+            &cli.environment,
+            target,
+        )
+        .await
+        {
             Ok(d) => stats.record(d),
             Err(e) => {
                 stats.fail();

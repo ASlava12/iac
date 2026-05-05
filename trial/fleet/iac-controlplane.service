@@ -1,0 +1,25 @@
+[Unit]
+Description=iac control-plane (Phase 9 fleet trial)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/iac-controlplane --config /etc/iac/server.toml
+Restart=on-failure
+RestartSec=2
+# Phase 9: cp runs as root for /var/lib/iac-controlplane setup ease;
+# production would run as a dedicated `iac` UID with appropriate
+# perms on the state dir.
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iac-controlplane
+# Light hardening — kernel namespace tricks aren't needed for the
+# trial but cost nothing. NoNewPrivileges only.
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
