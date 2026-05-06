@@ -65,6 +65,18 @@ start_sampler() {
         set -eu
         mkdir -p $F1_DIR
         chmod +x /usr/local/bin/iac-trial-f1-sampler.sh
+        # Phase 9-F1-fix: kill any prior sampler so re-runs don't
+        # leave duplicates writing the same CSV. Use the saved PID,
+        # NOT \`pkill -f 'iac-trial-f1-sampler.sh'\` — the latter
+        # matches the running shell's own cmdline (which contains the
+        # pattern as a string literal) and kills the very ssh session
+        # spawning the new sampler.
+        if [ -f $F1_DIR/sampler.pid ]; then
+            old=\$(cat $F1_DIR/sampler.pid 2>/dev/null || echo '')
+            if [ -n \"\$old\" ]; then
+                kill \"\$old\" 2>/dev/null || true
+            fi
+        fi
         rm -f /var/log/iac-trial-f1-stop /var/log/iac-trial-f1-rss.csv
         nohup /usr/local/bin/iac-trial-f1-sampler.sh $binary $SAMPLE_INTERVAL \
             > /var/log/iac-trial-f1-sampler.log 2>&1 &

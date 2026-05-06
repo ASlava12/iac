@@ -5,6 +5,18 @@
 #
 # Run from the iac repo root after `cargo build --release`:
 #   ./trial/fleet/bootstrap.sh
+#
+# Env knobs:
+#   RESET_AGENT_STATE=1
+#       Wipe each agent's persistent state (agent.db / identity.json)
+#       before restart. Use after the CP DB has been recreated from
+#       scratch — without it, the agents come up with credentials the
+#       new CP doesn't recognise and 401 on every heartbeat. Default
+#       is unset (preserves state across upgrades).
+#   RESET_CP_STATE=1
+#       Same idea on the controlplane side: wipe `server.db*` before
+#       restart. Use deliberately — this drops every agent / op /
+#       audit row.
 
 set -eu
 
@@ -38,6 +50,11 @@ echo
 echo "=== bootstrapping controlplane on $CP_IP ==="
 say "$CP_IP" "stopping any existing service"
 ssh_to "$CP_IP" 'systemctl stop iac-controlplane 2>/dev/null || true'
+
+if [ "${RESET_CP_STATE:-0}" = "1" ]; then
+    say "$CP_IP" "RESET_CP_STATE=1 — wiping server.db*"
+    ssh_to "$CP_IP" 'rm -f /var/lib/iac-controlplane/server.db /var/lib/iac-controlplane/server.db-wal /var/lib/iac-controlplane/server.db-shm'
+fi
 
 say "$CP_IP" "installing binary + config + unit"
 ssh_to "$CP_IP" '
@@ -85,6 +102,10 @@ bootstrap_agent() {
 
     say "$ip" "($name, region=$region) installing"
     ssh_to "$ip" 'systemctl stop iac-agent 2>/dev/null || true' || true
+    if [ "${RESET_AGENT_STATE:-0}" = "1" ]; then
+        say "$ip" "($name) RESET_AGENT_STATE=1 — wiping agent.db + identity.json"
+        ssh_to "$ip" 'rm -f /var/lib/iac-agent/agent.db /var/lib/iac-agent/agent.db-wal /var/lib/iac-agent/agent.db-shm /var/lib/iac-agent/identity.json'
+    fi
     ssh_to "$ip" '
         set -eu
         mkdir -p /etc/iac /var/lib/iac-agent /var/lib/iac-agent/manifests.d

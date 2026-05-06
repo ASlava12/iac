@@ -30,8 +30,8 @@ fi
 
 echo
 echo "=== submission progress ==="
-submitted=$(ssh_to "$CP_IP" "grep -c '\"longevity progress\"' $F1_DIR/trial.log 2>/dev/null || echo 0")
-last_prog=$(ssh_to "$CP_IP" "grep '\"longevity progress\"' $F1_DIR/trial.log 2>/dev/null | tail -1 || true")
+submitted=$(ssh_to "$CP_IP" "grep -c 'longevity progress' $F1_DIR/trial.log 2>/dev/null || echo 0")
+last_prog=$(ssh_to "$CP_IP" "grep 'longevity progress' $F1_DIR/trial.log 2>/dev/null | tail -1 || true")
 echo "  progress lines: $submitted"
 [ -n "$last_prog" ] && echo "  last:           $last_prog"
 
