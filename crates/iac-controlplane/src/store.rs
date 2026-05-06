@@ -239,30 +239,47 @@ impl Store {
         self.dialect
     }
 
-    /// Phase 9-F1: aggressive WAL truncate. PASSIVE auto-checkpoint
-    /// (which SQLite runs every 1000 frames by default) page-backs
-    /// to the main DB but never *shrinks* the WAL file — only a
+    /// Phase 9-F1: bounded WAL maintenance. SQLite's default
+    /// `wal_autocheckpoint = 1000` runs PASSIVE checkpoints (page-back
+    /// to the main DB) but never shrinks the WAL file — only a
     /// TRUNCATE checkpoint does. Under sustained mixed read/write
-    /// load, that means the WAL grows without bound until something
-    /// quiesces enough for the autocheckpoint to find a no-readers
-    /// window.
+    /// load, the WAL grows unboundedly without explicit TRUNCATEs.
     ///
-    /// This method runs `PRAGMA wal_checkpoint(TRUNCATE)`. SQLite
-    /// returns a single row (`busy, log_frames, checkpointed_frames`);
-    /// for the background task we only need to know whether the
-    /// query succeeded — a busy outcome simply means we'll try again
-    /// next tick.
+    /// Phase 9-F1-fix-3 (real-fleet finding): TRUNCATE is too
+    /// disruptive to run every cycle — under a busy fleet it requires
+    /// exclusive access, which can take 30 s of blocking against
+    /// concurrent retention DELETE + agent fan-out writes. F1
+    /// attempt #3 saw 5xx error rate climb from 0.03 % to 0.5 %
+    /// because every minute the CP froze for ~30 s on TRUNCATE.
+    ///
+    /// New behaviour: run cheap PASSIVE checkpoints by default — they
+    /// page-back without blocking — and run an actual TRUNCATE only
+    /// every Nth tick so the WAL file size still gets reclaimed
+    /// periodically. PASSIVE returns immediately on contention with
+    /// `busy=1`, so the cost is at most one no-op syscall per tick.
+    /// `journal_size_limit` (set per-connection) caps WAL file growth
+    /// regardless, so even in pathological reader-blocking scenarios
+    /// the WAL can't exceed the cap.
+    ///
+    /// `force_truncate=true` forces a TRUNCATE this call (used for
+    /// the periodic-truncate cycle and for tests).
     ///
     /// No-op on Postgres — Postgres has its own vacuum / WAL story.
-    pub async fn wal_checkpoint_truncate(&self) -> ApiResult<()> {
+    pub async fn wal_checkpoint(&self, force_truncate: bool) -> ApiResult<()> {
         if self.dialect != Dialect::Sqlite {
             return Ok(());
         }
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        let mode = if force_truncate { "TRUNCATE" } else { "PASSIVE" };
+        sqlx::query(&format!("PRAGMA wal_checkpoint({mode})"))
             .execute(&self.pool)
             .await
-            .map_err(|e| ApiError::Internal(format!("wal_checkpoint: {e}")))?;
+            .map_err(|e| ApiError::Internal(format!("wal_checkpoint({mode}): {e}")))?;
         Ok(())
+    }
+
+    /// Backwards-compat alias used by older call sites; always TRUNCATEs.
+    pub async fn wal_checkpoint_truncate(&self) -> ApiResult<()> {
+        self.wal_checkpoint(true).await
     }
 
     // ---- agents ---------------------------------------------------------

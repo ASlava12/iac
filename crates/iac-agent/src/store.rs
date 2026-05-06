@@ -22,6 +22,14 @@ use std::path::Path;
 // than corrupting state.
 const SCHEMA_VERSION: i64 = 2;
 
+/// Phase 9-F1-fix-3: how many observation rows the agent keeps per
+/// `resource_id`. The agent's runtime only needs the single newest row
+/// (for drift detection in `last_observation`); the rest is rolling
+/// debugging history. 10 ≈ 10 minutes of observations at the typical
+/// 1/min poll cadence — enough to investigate a recent regression
+/// without ballooning the agent's local DB.
+const AGENT_OBSERVATION_HISTORY_CAP: i64 = 10;
+
 #[derive(Debug)]
 pub struct Store {
     conn: Mutex<Connection>,
@@ -225,6 +233,30 @@ impl Store {
                 spec_json,
                 facts_json,
             ],
+        )?;
+        // Phase 9-F1-fix-3: cap per-resource observation history. The
+        // agent's only consumer of the table is `last_observation`,
+        // which reads the single newest row for drift detection.
+        // Older rows are pure history — useful for post-hoc debugging
+        // but not for the runtime path. Without this cap, every poll
+        // cycle (~1/min/resource) appends one row forever, so a
+        // 24-hour soak with 2 000 resources fills the agent's disk:
+        // F1 attempt #3 saw 2.5 M rows / 1.4 GB on each agent.db
+        // after 5.5 h. Keeping 10 newest per resource gives plenty of
+        // debugging headroom (~10 minutes of history at 1/min) while
+        // bounding the table at resources × 10 ≈ 20 K rows ≈ 20 MB.
+        // Inline DELETE on every INSERT is OK because the LIMIT-OFFSET
+        // SELECT hits only the index `idx_observations_resource` and
+        // touches at most a handful of rows.
+        conn.execute(
+            "DELETE FROM observations
+             WHERE id IN (
+                 SELECT id FROM observations
+                 WHERE resource_id = ?
+                 ORDER BY observed_at DESC, id DESC
+                 LIMIT -1 OFFSET ?
+             )",
+            params![resource_id.to_string(), AGENT_OBSERVATION_HISTORY_CAP],
         )?;
         Ok(())
     }
@@ -503,6 +535,44 @@ mod tests {
         let row = s.last_observation(&id.to_string()).unwrap().unwrap();
         assert_eq!(row.resource_id, id.to_string());
         assert!(row.present);
+    }
+
+    #[test]
+    fn observation_history_capped_per_resource() {
+        // Phase 9-F1-fix-3: insert (cap + 5) observations for one
+        // resource and confirm only `cap` remain. `last_observation`
+        // must always return the newest.
+        let (s, _dir) = store();
+        let id = ResourceId::new("file", "test", "capped");
+        let cap = AGENT_OBSERVATION_HISTORY_CAP as usize;
+        for _ in 0..(cap + 5) {
+            s.record_observation(&id, &make_observed()).unwrap();
+        }
+        let conn = s.conn.lock();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM observations WHERE resource_id = ?",
+                params![id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, AGENT_OBSERVATION_HISTORY_CAP);
+    }
+
+    #[test]
+    fn observation_cap_isolates_per_resource() {
+        // The cap must be per-resource, not global — observing
+        // resource A many times must not evict resource B's history.
+        let (s, _dir) = store();
+        let a = ResourceId::new("file", "test", "a");
+        let b = ResourceId::new("file", "test", "b");
+        s.record_observation(&b, &make_observed()).unwrap();
+        for _ in 0..(AGENT_OBSERVATION_HISTORY_CAP as usize + 5) {
+            s.record_observation(&a, &make_observed()).unwrap();
+        }
+        // b still has its single row.
+        let row_b = s.last_observation(&b.to_string()).unwrap();
+        assert!(row_b.is_some(), "resource b's observation must survive");
     }
 
     #[test]

@@ -2710,3 +2710,74 @@ deployed (WAL bound + observation cap + 5 min retention). Deadline
 `2026-05-07T13:23:53Z`. All three security/operational fixes from this
 session — F8 register cap (`9da4475`), F1 WAL fix (`227f65e`),
 F1 observation cap (this commit) — active in the running CP.
+
+## Phase 9-F1-fix-3 — WAL TRUNCATE blocking + agent observations cap (2026-05-06)
+
+F1 attempt #3 ran 5 h 38 m before being aborted. Two new real-fleet
+findings surfaced before the run hit any pass-criteria failure:
+
+1. **`PRAGMA wal_checkpoint(TRUNCATE)` was blocking 30 s every cycle.**
+   The `wal_autocheckpoint` we added in `227f65e` ran TRUNCATE every
+   60 s; under sustained mixed read/write load (retention DELETEs
+   ~325 K observations every 5 min, agents fan-out heartbeat /
+   observation / drift writes ~2/s), TRUNCATE couldn't acquire its
+   exclusive lock without waiting for readers to release frame
+   pointers. The `slow_threshold=1s` warning fired ~once per minute
+   with 30 s elapsed, and the 5xx rate climbed from 0.03 % (F1 #2 in
+   the equivalent window) to **0.54 %** because the CP froze for
+   half of every minute. Still inside the 1 % SLA, but visibly
+   stressed.
+2. **`agent.db` grew unbounded (2.5 M rows / 1.4 GB at 5.5 h)** —
+   different table from the CP-side observations bug. Each iac-agent
+   poll cycle calls `record_observation`, which inserts one row per
+   observed resource (~2 000 resources × 1 cycle/min). The agent's
+   only consumer is `last_observation` (used for drift detection,
+   reads only the newest row per resource); the rest is rolling
+   debug history with no cap, no retention. Agent disk on the 3.9 GB
+   VPS would have hit 100 % at ~12 h — before the F1 24 h deadline.
+
+**Fixes landed:**
+- [`crates/iac-controlplane/src/store.rs`](crates/iac-controlplane/src/store.rs) — split `wal_checkpoint_truncate` into a parameterised `wal_checkpoint(force_truncate)` plus a back-compat alias. PASSIVE returns immediately on contention (`busy=1`) and is the cheap default; TRUNCATE only runs when needed.
+- [`crates/iac-controlplane/src/main.rs`](crates/iac-controlplane/src/main.rs) — background WAL task now runs PASSIVE every tick and TRUNCATE every 10th tick (so on the default 60 s cadence, TRUNCATE fires every 10 min instead of every 1 min). PASSIVE alone would let the WAL grow up to `journal_size_limit = 256 MiB` over time, so periodic TRUNCATE is still required to reclaim file size — just not every cycle.
+- [`crates/iac-agent/src/store.rs`](crates/iac-agent/src/store.rs) — new `AGENT_OBSERVATION_HISTORY_CAP = 10` constant. After every successful INSERT in `record_observation`, an inline DELETE keeps only the 10 newest rows per `resource_id`. Per-resource isolation matters: a chatty resource doesn't evict observations from a quiet one. The DELETE uses the existing `idx_observations_resource (resource_id, observed_at DESC)` index so it touches at most a handful of rows per call.
+- **Tests:** 2 new agent-side unit tests — `observation_history_capped_per_resource` (asserts cap is enforced after cap+5 inserts) and `observation_cap_isolates_per_resource` (asserts inserts on resource A don't evict B's history). 481 / 481 controlplane tests + 45 / 45 agent lib tests green.
+
+**Forensic numbers from F1 attempt #3 (preserved for benchmarking):**
+- 5 h 38 m runtime; 18 900 ops submitted / 102 failures = 0.54 %.
+- CP `server.db = 829 MB` at abort (vs 7.0 GB at F1 #2's equivalent point — observation cap was working).
+- CP `observations` table = 1.07 M rows (vs 10.6 M without cap).
+- Retention pass deleted ~325 K observations every 5 min — sustaining the cap.
+- WAL stayed at 28 MiB (vs 256 MiB cap) — TRUNCATEs ran but cost too much per call.
+- Agent `agent.db = 1.4 GB` × 7 (no cap on agent side, this is the new finding).
+
+**Why these defaults are right.** PASSIVE-most/TRUNCATE-rare gives
+the same disk-bound semantics as before (the WAL still gets
+truncated regularly, just on a 10× longer cycle) but eliminates the
+30 s freeze. Agents storing only 10 newest observations per resource
+keeps their local DB at resources × 10 ≈ 20 K rows ≈ 20 MB
+regardless of soak duration — a property that holds equally on a
+64-MiB-flash router agent and a 1-TB-disk SSD agent. The runtime
+path needs only the latest observation; everything older is for
+post-hoc debugging, and 10 minutes of history covers the realistic
+debugging window.
+
+**F1 attempt #4 launched** at `2026-05-06T20:17:12Z` with all three
+F1 fixes deployed: WAL bound + PASSIVE/TRUNCATE rotation
+(`commit-this`), observations cap on CP + 5-min retention
+(`aebbfb9`), agent-side observations cap (`commit-this`). Deadline
+`2026-05-07T20:17:12Z`. Predicted steady-state DB sizes:
+- CP `server.db ≤ 1 GB` (700 K obs × ~700 B ≈ 500 MB + audit + ops)
+- Agent `agent.db ≤ 50 MB` each (cap × resources × row size)
+- WAL ≤ 256 MiB on CP, ≤ 4 MiB on agents.
+
+**Lessons-learned bank.** Three F1 attempts have now each surfaced a
+distinct real-fleet production gap that no Pi 4 trial or
+docker-compose harness would catch:
+- Attempt #1: SQLite WAL grows unboundedly under sustained reads.
+- Attempt #2: CP observations table grows unboundedly without cap.
+- Attempt #3: agent.db observations table grows unboundedly + WAL
+  TRUNCATE blocks too long under contention.
+The pattern — "every soak attempt finds a new ceiling, fix it in the
+defaults, retry" — is exactly the value of a real long-running soak
+on real hardware. Each fix tightens the IaC tool's defaults to be
+"no-surprise" on production-class load.

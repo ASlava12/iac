@@ -266,11 +266,21 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             // First tick fires immediately; skip it so we let the
             // server warm up before the first checkpoint runs.
             tick.tick().await;
+            // Phase 9-F1-fix-3: most cycles run a non-blocking
+            // PASSIVE checkpoint; every TRUNCATE_EVERY_N-th cycle
+            // runs a TRUNCATE to actually reclaim WAL file size.
+            // PASSIVE alone would let the WAL grow up to
+            // `journal_size_limit` over time, so we still need
+            // periodic TRUNCATE — just not on every tick.
+            const TRUNCATE_EVERY_N: u64 = 10;
+            let mut cycle: u64 = 0;
             loop {
                 tokio::select! {
                     _ = tick.tick() => {
-                        match wal_state.store.wal_checkpoint_truncate().await {
-                            Ok(()) => tracing::debug!("wal_checkpoint(TRUNCATE) ok"),
+                        cycle = cycle.wrapping_add(1);
+                        let force = cycle % TRUNCATE_EVERY_N == 0;
+                        match wal_state.store.wal_checkpoint(force).await {
+                            Ok(()) => tracing::debug!(force_truncate = force, "wal_checkpoint ok"),
                             Err(e) => tracing::warn!(error = %e, "wal_checkpoint failed; will retry next tick"),
                         }
                     }
@@ -281,7 +291,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         });
-        tracing::info!(interval_secs = wal_interval, "WAL checkpoint task scheduled");
+        tracing::info!(interval_secs = wal_interval, "WAL checkpoint task scheduled (PASSIVE most ticks, TRUNCATE every 10th)");
     } else {
         tracing::info!("WAL checkpoint task disabled (interval = 0)");
     }
