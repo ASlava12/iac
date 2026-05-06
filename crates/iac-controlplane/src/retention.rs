@@ -289,6 +289,7 @@ mod tests {
             modules: vec![],
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
+            wal_checkpoint_interval_secs: 0,
         };
         Store::connect(&cfg.database_url).await.unwrap()
     }

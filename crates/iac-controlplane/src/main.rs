@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Notify;
 
@@ -248,6 +249,42 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         }
         signaler.notify_waiters();
     });
+
+    // Phase 9-F1: periodic WAL truncate. SQLite's auto-checkpoint
+    // pages back to the main DB but doesn't shrink the WAL file —
+    // only TRUNCATE-mode does. Without this task, sustained mixed
+    // read/write traffic grows the WAL unboundedly (the F1 24-h soak
+    // hit disk-full on an 8.5 GB VPS at ~3 h with a 4 GB WAL).
+    // Disabled by setting `wal_checkpoint_interval_secs = 0`. No-op
+    // on Postgres; see `Store::wal_checkpoint_truncate`.
+    let wal_interval = state.config().wal_checkpoint_interval_secs;
+    if wal_interval > 0 {
+        let wal_state = state.clone();
+        let wal_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(wal_interval));
+            // First tick fires immediately; skip it so we let the
+            // server warm up before the first checkpoint runs.
+            tick.tick().await;
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        match wal_state.store.wal_checkpoint_truncate().await {
+                            Ok(()) => tracing::debug!("wal_checkpoint(TRUNCATE) ok"),
+                            Err(e) => tracing::warn!(error = %e, "wal_checkpoint failed; will retry next tick"),
+                        }
+                    }
+                    _ = wal_shutdown.notified() => {
+                        tracing::info!("WAL checkpoint task shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+        tracing::info!(interval_secs = wal_interval, "WAL checkpoint task scheduled");
+    } else {
+        tracing::info!("WAL checkpoint task disabled (interval = 0)");
+    }
 
     // Phase 7bx: separate task for SIGHUP — re-reads the config file
     // and atomically swaps the live state. Failures (parse error,

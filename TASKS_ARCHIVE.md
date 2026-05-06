@@ -2581,3 +2581,71 @@ F1-loaded prod CP without disturbing it.
 **Why this matters for the IaC philosophy.** "Works on weak hardware" demands that backup not require taking the service down — a Mikrotik-class device with a 16 MiB flash partition can't afford to be offline for the duration of a snapshot, and a NAS-class home server can't afford ten minutes of unavailability for a routine backup. `VACUUM INTO` plus the harness above gives you "snapshot in O(disk-write-time) with zero downtime" — a property the SQLite engine has had since 3.27 but most operators don't know. Documenting it in the harness makes it the default posture for this project. The 45 s snapshot of a hot 950 MB DB is the upper bound; on a routine-sized fleet (< 100 MB DB) it's sub-second.
 
 **Open follow-up:** WAL-based incremental backup (litestream-style) for sub-second RPO. Not a blocker — the trial harness validates the worst-case "single full snapshot" recovery story. Phase 11+ if anyone needs it.
+
+## Phase 9-F1-fix — disk-full incident, root-cause + fix (2026-05-06)
+
+The first F1 attempt failed at **3 h 14 m / 24 h** with disk-full on the
+8.5 GB CP VPS. Root cause: SQLite WAL grew unboundedly under the
+sustained mixed read/write load. Headline numbers at failure:
+`server.db = 3.7 GB`, `server.db-wal = 4.0 GB`, free = 0. iac-trial
+longevity submitted ≈ 8 100 ops with 5 failures (0.06 %) before the
+disk filled and writes started returning 500 (`disk is full`); the
+trial process itself died shortly after. CP itself stayed up but
+returned 500 to all writes for the next ~7 hours until I noticed.
+
+**The mechanism (SQLite-specific).** WAL mode separates the durability
+write (append a frame to `server.db-wal`) from the page-level write to
+the main DB. A *checkpoint* copies WAL frames back to the main DB; the
+default `wal_autocheckpoint = 1000` fires every 1000 frames (~4 MiB).
+But `autocheckpoint` runs in **PASSIVE** mode: it page-backs as much as
+possible without blocking concurrent readers/writers, then *leaves the
+WAL file at its current size* — the WAL file is never truncated, only
+overwritten in place. Under sustained read traffic (the heartbeat /
+observation / drift fan-out keeps a stream of readers active),
+PASSIVE-mode checkpoints can never *truncate* — only TRUNCATE-mode can,
+and SQLite never runs that on its own. The WAL keeps growing in 4 KiB
+page increments until something quiesces enough for a TRUNCATE
+checkpoint to find a no-readers window. Which, under steady-state F1
+traffic, never happens. Documented in the SQLite docs but easy to miss
+without a 24 h soak to surface it.
+
+**Forensics in the post-incident state were unrecoverable.** I tried to
+free space by stopping iac-controlplane, deleting the WAL, and running
+VACUUM. Removing the WAL while it still contained un-checkpointed
+frames left the main DB inconsistent — `database disk image is
+malformed`. `.dump` also failed. Lesson: in this kind of disk-full
+recovery, **always checkpoint first** (`PRAGMA wal_checkpoint(FULL)` or
+`(TRUNCATE)`) and only then move WAL aside. We lost the corrupt DB
+(moved to `server.db.f1-disk-full-corrupt` for forensics, deleted
+after fix landed).
+
+**Fix landed:**
+- [`crates/iac-controlplane/src/store.rs`](crates/iac-controlplane/src/store.rs) — `PRAGMA journal_size_limit = 268435456` (256 MiB) added to the per-connection PRAGMA set. After every successful checkpoint, SQLite shrinks the WAL file back to this cap, so even if the explicit checkpoint task drifts, disk usage stays bounded.
+- [`crates/iac-controlplane/src/store.rs`](crates/iac-controlplane/src/store.rs) — new `Store::wal_checkpoint_truncate()`. Runs `PRAGMA wal_checkpoint(TRUNCATE)`. No-op on Postgres.
+- [`crates/iac-controlplane/src/main.rs`](crates/iac-controlplane/src/main.rs) — new background tokio task that calls `wal_checkpoint_truncate` every `wal_checkpoint_interval_secs` seconds (default **60**). Honours the existing graceful-shutdown `Notify`. Logs at WARN on failure, DEBUG on success — failures are non-fatal (the next tick retries).
+- [`crates/iac-controlplane/src/config.rs`](crates/iac-controlplane/src/config.rs) — `wal_checkpoint_interval_secs: u64` (default 60). `0` disables. Operators tuning latency-vs-disk on tiny-flash targets can drop it to 30 s; large-disk SSD boxes can raise it to 300 s.
+- **Tests:** 26 `Config{}` fixtures across the test corpus updated to include the new field. Full controlplane suite **481 / 481 green**, build clean.
+- **Deployed and observed on prod CP** (`104.128.140.54`) immediately. Startup log line: `WAL checkpoint task scheduled interval_secs=60`. WAL stayed at 0 bytes for the first 90 s with no traffic — checkpoint task drove it to zero on the first tick. Disk free recovered from 0 → 7.5 GB after corrupt-DB cleanup.
+
+**Why this matters for an IaC tool that targets weak hardware.** The
+worst place for a default to silently kill you is on a router-class
+target with 32–64 MiB of flash. SQLite WAL was already a problem on
+SD-card storage (Phase 8.7 fixed the 5s→30s busy_timeout); now WAL
+*size* is also bounded. The IaC philosophy demands the same defaults
+work whether you have 8.5 GB of disk or 64 MiB — and "WAL grows until
+you run out of disk" fails that test cleanly on either end of the
+hardware curve.
+
+**Pending — re-run F1.** Agents on the 7 fleet hosts still hold the
+credentials from the dead CP (their `agent.db` has agent_id + token
+that the new fresh CP DB doesn't know). Re-running F1 needs:
+1. On every agent: stop iac-agent → drop `agent.db` + `identity.json` → start iac-agent → re-bootstrap via the existing harness.
+2. Restart `fleet-f1-soak.sh` for the full 24 h.
+Estimated 5 min for the re-bootstrap + 24 h for the actual soak.
+
+**Aside — F1 status script bug.** `trial/scenarios/fleet-f1-status.sh`
+greps for the literal `'\"longevity progress\"'` (a quoted string) in
+the trial log, but the actual log line is unquoted (`longevity
+progress submitted=N`), so the script always reported `progress lines:
+0` even when iac-trial was making good progress. Cosmetic; fix in the
+re-run pass.

@@ -77,6 +77,21 @@ pub struct Config {
     /// waiting for them to poll. Empty list (default) preserves
     /// pre-7ck pull-only behavior.
     pub ssh_targets: Vec<SshTargetConfig>,
+    /// Phase 9-F1: how often the background WAL-truncate task runs,
+    /// in seconds. Default 60. The task issues
+    /// `PRAGMA wal_checkpoint(TRUNCATE)` against the SQLite store —
+    /// SQLite's own `wal_autocheckpoint` (every 1000 frames) only
+    /// pages back to the main DB, it doesn't shrink the WAL file,
+    /// so under sustained mixed read/write load the WAL grows
+    /// unboundedly. This task forces a TRUNCATE periodically so the
+    /// disk usage stays bounded.
+    ///
+    /// `0` disables the task. No effect on Postgres deployments —
+    /// the method is a no-op there. Recommended values: 30–120 s
+    /// for fleet-class deployments; lower for tiny-disk targets,
+    /// higher when latency budget cares more than disk usage. Going
+    /// below 5 s is wasteful — checkpoint overhead dominates.
+    pub wal_checkpoint_interval_secs: u64,
 }
 
 /// Phase 7ck: declarative SSH push target. Validated at server
@@ -366,6 +381,12 @@ struct RawConfig {
     agent_token_ttl_secs: Option<u64>,
     #[serde(default)]
     ssh_targets: Vec<SshTargetConfig>,
+    #[serde(default = "default_wal_checkpoint_interval")]
+    wal_checkpoint_interval_secs: u64,
+}
+
+fn default_wal_checkpoint_interval() -> u64 {
+    60
 }
 
 #[derive(Debug, Default)]
@@ -506,6 +527,7 @@ impl Config {
             modules,
             agent_token_ttl_secs: raw.agent_token_ttl_secs,
             ssh_targets,
+            wal_checkpoint_interval_secs: raw.wal_checkpoint_interval_secs,
         })
     }
 

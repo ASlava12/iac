@@ -197,6 +197,26 @@ impl Store {
                     sqlx::query(&sql("PRAGMA foreign_keys = ON"))
                         .execute(&mut *conn)
                         .await?;
+                    // Phase 9-F1 (real-fleet finding): cap the WAL
+                    // file size at 256 MiB. Without this, sustained
+                    // mixed read/write traffic (heartbeats fan-out
+                    // checkpoints behind readers; submit/result
+                    // writes keep adding WAL frames) makes the WAL
+                    // grow unboundedly even though `wal_autocheckpoint
+                    // = 1000` (default) fires constantly — the
+                    // PASSIVE checkpoint pages-back successfully but
+                    // the WAL file isn't truncated until a TRUNCATE
+                    // checkpoint runs while no readers hold a frame.
+                    // The F1 24h soak hit disk-full at ~3 h on an
+                    // 8.5 GB VPS because the WAL ballooned to 4 GB
+                    // alongside a 3.7 GB DB. `journal_size_limit`
+                    // makes SQLite shrink the WAL file back to this
+                    // size after every successful checkpoint, so
+                    // even if the checkpoint frequency drifts the
+                    // disk usage stays bounded.
+                    sqlx::query(&sql("PRAGMA journal_size_limit = 268435456"))
+                        .execute(&mut *conn)
+                        .await?;
                     Ok(())
                 })
             });
@@ -217,6 +237,32 @@ impl Store {
 
     pub fn dialect(&self) -> Dialect {
         self.dialect
+    }
+
+    /// Phase 9-F1: aggressive WAL truncate. PASSIVE auto-checkpoint
+    /// (which SQLite runs every 1000 frames by default) page-backs
+    /// to the main DB but never *shrinks* the WAL file — only a
+    /// TRUNCATE checkpoint does. Under sustained mixed read/write
+    /// load, that means the WAL grows without bound until something
+    /// quiesces enough for the autocheckpoint to find a no-readers
+    /// window.
+    ///
+    /// This method runs `PRAGMA wal_checkpoint(TRUNCATE)`. SQLite
+    /// returns a single row (`busy, log_frames, checkpointed_frames`);
+    /// for the background task we only need to know whether the
+    /// query succeeded — a busy outcome simply means we'll try again
+    /// next tick.
+    ///
+    /// No-op on Postgres — Postgres has its own vacuum / WAL story.
+    pub async fn wal_checkpoint_truncate(&self) -> ApiResult<()> {
+        if self.dialect != Dialect::Sqlite {
+            return Ok(());
+        }
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ApiError::Internal(format!("wal_checkpoint: {e}")))?;
+        Ok(())
     }
 
     // ---- agents ---------------------------------------------------------

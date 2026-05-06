@@ -59,6 +59,7 @@ impl TestServer {
             modules: vec![],
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
+            wal_checkpoint_interval_secs: 0,
         };
         let store = Store::connect(&cfg.database_url).await.unwrap();
         let signer = Arc::new(

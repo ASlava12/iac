@@ -29,7 +29,7 @@ network/timing on a single host.
 
 | #  | Scenario                                    | Pass criterion                                  | Why a real fleet |
 |----|---------------------------------------------|-------------------------------------------------|------------------|
-| F1 | 24 h soak: 50 agents × 1 RPS                | RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean | Single-host loops can't catch slow-leak per-FD-table memory accounting |
+| F1 | 24 h soak: 7 agents × 1 RPS                 | RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean | Single-host loops can't catch slow-leak per-FD-table memory accounting. **First attempt failed at 3 h 14 m on 2026-05-05** with disk-full from unbounded SQLite WAL growth. Root-cause fix landed (see archive 9-F1-fix); next attempt blocked on re-bootstrap of the 7 agents (their `agent.db` still holds credentials from the dead CP). |
 | F2 | Network partition (rolling 20 % per cycle)  | recovery time < 5 min after restore; no split-brain; replay-protection still rejects re-played envelopes | Real WAN delay + DNS reconvergence look nothing like docker bridge `disconnect` |
 | ~~F3~~ | ~~Cold reboot of an agent under apply~~ | ~~partial-state reconciles to desired on next observe~~ | **Done locally — see archive 7dh.13.** Real-fleet IPMI/SIGKILL semantics still want validation, but the agent-level reconvergence contract is now pinned by 3 integration tests (`tests/cold_reboot.rs`). |
 | ~~F4~~ | ~~Disk-full / inode-full on an agent~~  | ~~graceful degradation; agent reboots clean; no identity-file corruption~~ | **Done locally — see archive 7dh.13.** Atomic-write contract on `identity.json` pinned by 4 unit tests in `remote::tests`. Real disk-full / overlayfs behaviour still wants a VM trial. |
@@ -38,7 +38,7 @@ network/timing on a single host.
 | ~~F7~~ | ~~Backup/restore of controlplane DB~~   | ~~RPO/RTO measured; audit-chain integrity preserved across restore~~ | **Done — see archive 9-F7.** Hot `VACUUM INTO` snapshot of the live CP DB (no service restart, F1 untouched), restore on a separate VPS, full integrity check + post-restore write. RPO 45.6 s (snapshot time on a 947 MB live DB), RTO 1.6 s (cold-start of restored CP to first 200 on `/v1/health`). audit-tip match + `/v1/audit/verify` ok=true. |
 | ~~F8~~ | ~~DDoS on `/v1/agents/register`~~       | ~~rate-limit holds; legitimate agents not starved~~ | **Done — see archive 9-F8.** Empirical storm proved the gap (250 req / 10 s from one IP, 0 × 429); per-IP register cap (default 20/min) + axum `ConnectInfo` plumbing land in this fix. Re-storm at 30 s × 50 against the fixed binary returned 20 × 200 / 880 × 429 as expected. Multi-source-IP / `X-Forwarded-For` allowlist still wants a real-fleet pass once F1 finishes and the prod CP can be restarted. |
 
-**Remaining for VPS allocation:** F1 (running), F2, F6 (3 of 8). F3/F4/F5/F7/F8
+**Remaining for VPS allocation:** F1 (re-run after fix), F2, F6 (3 of 8). F3/F4/F5/F7/F8
 have either local test coverage that pins the agent-side contract or a
 fleet-validated harness; the hardware-side aspects (real IPMI cold
 reboot, real ext4 ENOSPC, real-time `date -s`) still want a VM trial
