@@ -18,6 +18,14 @@ operations_per_minute = 100000
 
 [retention]
 audit_days = 7
+# Phase 9-F1-fix-2: explicit pin of the per-resource cap and short
+# prune cadence. These match the new code defaults but documenting
+# them here makes intent obvious and survives a future default
+# change. Without these (i.e. the pre-fix `cap=0`, `interval=3600`),
+# F1's 7-agent × 2 000-resource fleet filled an 8.5 GB CP disk in
+# ~4 h — observations grew to 10.6 M rows.
+observation_max_per_resource = 50
+interval_secs = 300
 
 [tls]
 mode = "none"

@@ -2649,3 +2649,64 @@ the trial log, but the actual log line is unquoted (`longevity
 progress submitted=N`), so the script always reported `progress lines:
 0` even when iac-trial was making good progress. Cosmetic; fix in the
 re-run pass.
+
+## Phase 9-F1-fix-2 — observations table grows unbounded (2026-05-06)
+
+F1 attempt #2 (started after the WAL fix in `227f65e`) hit a **second
+disk-full at 4 h 0 m**, this time root-caused to a different
+mechanism: the `observations` table grew **unbounded**. Snapshot at
+abort: `observations = 10 626 630 rows`, `server.db = 7.1 GB`,
+`server.db-wal = 344 MB` — the WAL fix held its ground (cap was
+256 MB, the 344 MB seen was checkpointed during the abort sequence)
+but the main-DB growth was the new bottleneck.
+
+**The mechanism.** Each iac-agent polls every resource it manages
+(re-reading state from disk / OS) once per agent poll cycle, and
+pushes one observation per resource per cycle to the controlplane.
+With 7 agents × ~2 000 resources × ~one cycle per minute, that's
+**≈ 720 K observations / hour**. Each row is ~700 bytes (resource_id +
+agent_id + serialised state hash + timestamp + metadata), so storage
+grows at ~500 MB/h on F1's load. Default retention left this
+unconstrained:
+- `observation_days = 30` — none of the fresh observations qualified
+  for age-based pruning.
+- `observation_max_per_resource = 0` — disabled. Per-resource cap was
+  exposed in Phase 7an for exactly this case but defaulted to off.
+- `interval_secs = 3600` — even when retention did fire, it only ran
+  hourly; observations accumulated faster than that for sustained
+  loads.
+
+**Fix landed (commit upcoming):**
+- [`crates/iac-controlplane/src/retention.rs`](crates/iac-controlplane/src/retention.rs) — `default_observation_max_per_resource` now `50` (was `0`/disabled). 50 newest per (agent, resource) gives ample current-state-plus-debugging headroom; on F1's load the steady state is 7 × 2 000 × 50 = 700 K rows ≈ 500 MB, regardless of soak duration.
+- [`crates/iac-controlplane/src/retention.rs`](crates/iac-controlplane/src/retention.rs) — `default_interval_secs` lowered from `3600` (1 h) to `300` (5 min). Hourly is fine for `audit_events` / `assignments`, but `observations` accumulate ½ GB/h on a busy fleet — 5 min keeps the working set small enough that the per-resource cap converges before disk pressure mounts.
+- [`trial/fleet/server.toml.tmpl`](trial/fleet/server.toml.tmpl) — explicit pin of both values in the fleet trial config. Documents intent; survives a future default change.
+- 481 / 481 controlplane tests green; deployed to prod CP.
+
+**Why these defaults are right for the IaC philosophy.** A
+router-class target with 64 MiB of flash storing observations on its
+local agent would run out of disk in *minutes* under the previous
+defaults. With cap=50, even a fleet of 1 000 resources on a 64 MiB
+target lands at ≈ 35 MiB observations DB max — survivable. At the
+other end, a 64-GB-disk SSD CP with 100 000 fleet-wide resources has
+50 obs/resource × 100 000 = 5 M rows ≈ 3.5 GB — comfortable headroom
+on commodity hardware. The cap scales with resource count, not soak
+duration; F1 soaks for 24 h and lab tests for 30 days converge to the
+same DB size. That's the property an IaC-tool default needs.
+
+**Forensic numbers from F1 attempt #2 (preserved for future
+benchmarking):**
+- Submitted ops at abort: 14 565 over 4 h ≈ 0.99 RPS, sustained.
+- Failures: 4 / 14 565 = 0.027 % (under the 1 % threshold). Failure
+  budget passed; F1 was hit by infra not by app.
+- Audit chain rows: 29 153 (verified ok=true throughout).
+- DB-growth attribution: observations ≥ 95 %, audit_events ≈ 5 MB,
+  operations ≈ 14 MB, the rest negligible.
+- `database is locked` 503 frequency: 113 / 5 min = ~23/min — the
+  expected rate from SQLITE_BUSY-mapped retries under sustained
+  fan-out. No correctness impact.
+
+**F1 attempt #3 launched** at `2026-05-06T13:23:53Z` with both fixes
+deployed (WAL bound + observation cap + 5 min retention). Deadline
+`2026-05-07T13:23:53Z`. All three security/operational fixes from this
+session — F8 register cap (`9da4475`), F1 WAL fix (`227f65e`),
+F1 observation cap (this commit) — active in the running CP.

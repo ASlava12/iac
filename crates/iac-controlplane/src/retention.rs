@@ -22,13 +22,19 @@ pub struct RetentionConfig {
     #[serde(default = "default_observation_days")]
     pub observation_days: u32,
     /// Phase 7an: cap observations per (agent, resource) to this many of
-    /// the newest rows. `0` (default) disables the cap. Useful when a
-    /// chatty agent reports a resource frequently — the age-based prune
-    /// alone leaves a thousand rows per resource even if they're a day
-    /// old. The cap runs *after* the age-based prune so combining the two
-    /// just trims further; you don't lose history older than
-    /// `observation_days` because of it.
-    #[serde(default)]
+    /// the newest rows. The cap runs *after* the age-based prune so
+    /// combining the two just trims further; you don't lose history
+    /// older than `observation_days` because of it.
+    ///
+    /// Phase 9-F1-fix-2 (real-fleet finding): default raised from `0`
+    /// (disabled) to `50`. With the previous default, F1's 7-agent
+    /// 24h soak grew the `observations` table to 10.6 M rows in 4 h
+    /// and filled the 8.5 GB CP disk. 50 newest per (agent, resource)
+    /// gives ample debugging headroom (the most-recent state delta
+    /// for every resource on every agent) while keeping disk bounded:
+    /// 7 agents × 2 000 resources × 50 = 700 K rows ≈ 500 MB
+    /// steady-state, regardless of soak duration.
+    #[serde(default = "default_observation_max_per_resource")]
     pub observation_max_per_resource: u32,
     /// Drop resolved drift events older than this many days. Open events
     /// (resolved_at IS NULL) are never pruned.
@@ -39,7 +45,16 @@ pub struct RetentionConfig {
     /// fetched are kept.
     #[serde(default = "default_assignment_days")]
     pub assignment_terminal_days: u32,
-    /// How often to run the prune loop, in seconds. Default 1h.
+    /// How often to run the prune loop, in seconds.
+    ///
+    /// Phase 9-F1-fix-2: default lowered from 3600 (1 h) to 300 (5 min).
+    /// Hourly pruning is fine for `audit_events` / `assignments`, but
+    /// `observations` accumulate too fast on a busy fleet — at 7
+    /// agents × 2 000 resources × 1 obs / poll-cycle (~70 s) that's
+    /// 720 K obs/h, and waiting an hour means a half-gigabyte of
+    /// short-lived data sits in the DB before the cap fires. 5 min
+    /// keeps the working set small enough that the per-resource cap
+    /// quickly converges to its 50-row target.
     #[serde(default = "default_interval_secs")]
     pub interval_secs: u64,
 }
@@ -57,7 +72,10 @@ fn default_assignment_days() -> u32 {
     30
 }
 fn default_interval_secs() -> u64 {
-    3600
+    300
+}
+fn default_observation_max_per_resource() -> u32 {
+    50
 }
 
 impl Default for RetentionConfig {
@@ -68,7 +86,7 @@ impl Default for RetentionConfig {
             drift_resolved_days: default_drift_days(),
             assignment_terminal_days: default_assignment_days(),
             interval_secs: default_interval_secs(),
-            observation_max_per_resource: 0,
+            observation_max_per_resource: default_observation_max_per_resource(),
         }
     }
 }
