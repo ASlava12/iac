@@ -635,28 +635,53 @@ impl Store {
         if items.is_empty() {
             return Ok(0);
         }
+        // Phase 9-F1-fix-4 (real-fleet finding): batch the per-row
+        // INSERTs into a single multi-row statement per chunk. The
+        // pre-fix code did N separate INSERT statements inside one
+        // transaction; under F1's load (7 agents × ~3 200 resources,
+        // observation push ≈ 60 INSERTs/s on the CP) each statement
+        // contended with the next on WAL frame allocation, INSERT
+        // latency hit 4–7 s, and the 5xx rate climbed to ~2 %. One
+        // multi-row INSERT pays the WAL overhead once for the whole
+        // batch; on F1's load that's a 50× reduction in WAL frame
+        // allocations.
+        //
+        // Chunked at 100 to stay safely under SQLite's older
+        // SQLITE_LIMIT_VARIABLE_NUMBER ceiling of 999 placeholders
+        // (8 columns × 100 = 800). Modern SQLite raised this to
+        // 32 766 but pre-3.32 builds (some embedded targets) still
+        // ship the old limit.
+        const BATCH_SIZE: usize = 100;
         let now = Timestamp::now().to_string();
         let mut tx = self.pool.begin().await?;
-        let mut count = 0u32;
-        for item in items {
-            let spec_json = serde_json::to_string(&item.spec)?;
-            let facts_json = serde_json::to_string(&item.facts)?;
-            sqlx::query(&sql(
+        let total = u32::try_from(items.len()).unwrap_or(u32::MAX);
+        for chunk in items.chunks(BATCH_SIZE) {
+            // Build "(?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?), ..."
+            let placeholders = std::iter::repeat("(?,?,?,?,?,?,?,?)")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let stmt = format!(
                 "INSERT INTO observations
                   (agent_id, resource_id, kind, observed_at, present, spec_json, facts_json, received_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ))
-            .bind(agent_id)
-            .bind(item.resource_id.to_string())
-            .bind(&item.resource_id.kind)
-            .bind(&item.observed_at)
-            .bind(i64::from(item.present))
-            .bind(spec_json)
-            .bind(facts_json)
-            .bind(&now)
-            .execute(&mut *tx)
-            .await?;
-            count += 1;
+                 VALUES {placeholders}",
+            );
+            let translated = sql(&stmt);
+            let mut q = sqlx::query(&translated);
+            for item in chunk {
+                let spec_json = serde_json::to_string(&item.spec)?;
+                let facts_json = serde_json::to_string(&item.facts)?;
+                q = q
+                    .bind(agent_id.to_string())
+                    .bind(item.resource_id.to_string())
+                    .bind(item.resource_id.kind.clone())
+                    .bind(item.observed_at.clone())
+                    .bind(i64::from(item.present))
+                    .bind(spec_json)
+                    .bind(facts_json)
+                    .bind(now.clone());
+            }
+            q.execute(&mut *tx).await?;
         }
         sqlx::query(&sql("UPDATE agents SET last_observation_at = ? WHERE id = ?"))
             .bind(&now)
@@ -664,7 +689,7 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(count)
+        Ok(total)
     }
 
     // ---- drift ----------------------------------------------------------

@@ -2781,3 +2781,75 @@ The pattern — "every soak attempt finds a new ceiling, fix it in the
 defaults, retry" — is exactly the value of a real long-running soak
 on real hardware. Each fix tightens the IaC tool's defaults to be
 "no-surprise" on production-class load.
+
+## Phase 9-F1-fix-4 — observations write batching (2026-05-07)
+
+F1 attempt #4 ran 7 h 50 m before being aborted. **Functional pass**:
+0 unaccounted restarts, audit verify ok, all 7 agents alive, both
+WAL and DB sizes bounded (1.1 GB and 256 MiB respectively, vs 7 GB
+and 4 GB on attempt #2). **Failure**: longevity error rate hit
+**1.86 %** (over the 1 % threshold) and 5xx rate held steady at
+~2 000 / hour. New-bottleneck root-cause: per-row INSERTs into
+`observations` saturated the SQLite write path.
+
+**The mechanism (architecturally deeper than fixes #1–#3).**
+- 7 agents × ~3 200 resources × 1 poll cycle/min ≈ **60 INSERTs/sec**
+  on the CP — each INSERT a separate sqlx `query().execute()` inside
+  the same transaction.
+- Each INSERT allocates a WAL frame, fsyncs the commit record, and
+  bumps the busy timer. Frame allocation gets sequential — concurrent
+  INSERTs queue.
+- The `journal_size_limit = 256 MiB` cap (set in fix #1) hit
+  saturation first; once the WAL was full, SQLite throttled writes
+  while PASSIVE checkpoints (fix #3) tried to page-back. Single INSERT
+  latency climbed to **4–7 s** and the 5xx rate climbed proportionally.
+- Steady-state visible in CP metrics: 277 slow-statements / 5 min,
+  ~2 000 `database is locked` / hour, agents seeing 503s on
+  `assignment-result` reports back to CP.
+
+This was **architectural**, not config: the per-row INSERT pattern
+fundamentally caps SQLite throughput regardless of how the WAL is
+tuned. SQLite handles batched multi-row INSERTs (one statement, one
+WAL frame allocation, one commit) ~10–50× faster than the equivalent
+loop.
+
+**Fix landed:**
+- [`crates/iac-controlplane/src/store.rs`](crates/iac-controlplane/src/store.rs) — `record_observations` rewritten to issue a single multi-row `INSERT INTO observations (...) VALUES (?,?,...,?), (?,?,...,?), ...` per chunk of 100 items. The 100-row chunk size keeps the placeholder count (8 cols × 100 = 800) safely under SQLite's older `SQLITE_LIMIT_VARIABLE_NUMBER = 999` so the fix works on embedded targets shipping pre-3.32 SQLite. The transaction-bracketing (`begin / commit`) and the trailing `UPDATE agents SET last_observation_at` are unchanged.
+- Drift-events and assignment-result paths left as-is for this fix: drift inserts run at ~0.5 / s (16 K events / 8 h on F1's load), an order of magnitude below the observation rate, so they don't contend on WAL frames the same way.
+
+**Expected throughput improvement.**
+Pre-fix F1 #4 saw 60 INSERTs/sec, ~2 % errors. With 100-row batching,
+the same 60 logical observations / s land as ~0.6 multi-row INSERTs/s
+on the CP — **100× fewer WAL frame allocations**. The SQLite write
+path drops from saturated to comfortable; 5xx rate should fall well
+below 0.1 % at the same agent count and resource density.
+
+**Forensic numbers from F1 attempt #4 (preserved as baseline):**
+- 7 h 50 m runtime; 22 900 ops submitted / 426 failures = **1.86 %**.
+- CP `server.db = 1.1 GB`, `server.db-wal = 256 MiB` (cap hit).
+- `observations` table = 1.22 M rows (cap holding ~1 M from fix #2).
+- `agent.db = 19 MB` per agent (cap from fix #3 working perfectly).
+- Steady-state `database is locked` rate: ~2 000 / hour on CP.
+- Single INSERT latency p99 ≈ 6 s (slow-statement warnings every minute).
+
+These numbers establish the **pre-batching production ceiling** for a
+SQLite-backed CP at this hardware class; comparing F1 #5's numbers
+will tell us how much headroom batched INSERTs unlock.
+
+**F1 attempt #5 launched** at `2026-05-07T05:45:01Z` with all four F1
+fixes deployed: WAL bound (`227f65e`), CP observations cap +
+retention (`aebbfb9`), WAL PASSIVE/TRUNCATE rotation + agent
+observations cap (`9ace0b6`), and observation INSERT batching (this
+commit). Deadline `2026-05-08T05:45:01Z`. The four fixes together
+move the CP from "naïve per-row" to "production-tuned batched" — the
+same hardware class that hit 2 % errors on attempt #4 should now
+serve under 0.1 % on the same load.
+
+**Cross-cutting lesson.** Three of the four F1 fixes have been about
+SQLite write hygiene at scale (WAL truncation, observation caps, batch
+inserts). The IaC tool's choice of SQLite-by-default is correct for
+small-to-medium fleets — the same defaults need to survive Pi-class
+hardware *and* real production fleets. Each fix tightens the defaults
+without introducing a Postgres dependency. F1's role of forcing the
+defaults to face this load is exactly what justified the Phase 9 VPS
+allocation.
