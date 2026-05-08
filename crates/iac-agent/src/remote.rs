@@ -24,6 +24,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
+/// Phase 9-F1-fix-5: how many `ObservationItem`s per HTTP push.
+/// `500` lands well under the controlplane's default 4 MiB body
+/// limit for typical workloads (~1 KB per observation), and is
+/// halved adaptively if a chunk still 413s. Lower than this is
+/// possible (more requests for very small observations) but
+/// pessimises round-trip overhead; higher invites the 413 retry
+/// loop the fix exists to prevent.
+const OBSERVATION_PUSH_CHUNK: usize = 500;
+
 /// Phase 7cf: one entry in the agent's pinned set of accepted server
 /// signing pubkeys. The agent verifies each `AssignmentEnvelope` by
 /// looking up its `key_id` in this set — multi-key allows the server
@@ -349,16 +358,72 @@ impl Client {
             "{}/v1/agents/{}/observations",
             self.base_url, self.identity.agent_id
         );
-        let resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.identity.token)
-            .json(&ObservationBatch { items })
-            .send()
-            .await
-            .context("pushing observations")?;
-        check_ok(resp).await?;
-        Ok(0)
+        // Phase 9-F1-fix-5 (real-fleet finding): adaptive chunked
+        // push. The pre-fix code POSTed the entire `items` list in
+        // a single request; for an agent with thousands of managed
+        // resources this could exceed the controlplane's
+        // `max_body_bytes` (default 4 MiB) and return 413. The
+        // caller treated 413 as a generic Err, retried the same
+        // oversized batch on the next observe cycle, and got stuck
+        // in an infinite retry loop — agent-05 / agent-07 in F1's
+        // post-soak state spent CPU 25 % chasing 413s for hours.
+        //
+        // Strategy: start with a conservative chunk size that fits
+        // typical workloads, and halve on 413. The work-stack
+        // pattern lets us split a too-large chunk in half and keep
+        // pushing without recursion (which is awkward in async). A
+        // single-item chunk that still 413s is dropped with a warn —
+        // it's better to lose one observation than to hang the
+        // entire push loop.
+        let mut total = 0u32;
+        let mut stack: Vec<Vec<ObservationItem>> = items
+            .chunks(OBSERVATION_PUSH_CHUNK)
+            .map(<[ObservationItem]>::to_vec)
+            .collect();
+        // Pop in original order — reverse so .pop() yields the
+        // first chunk first. Order matters for tracing readability,
+        // not correctness (CP de-dupes by (agent_id, resource_id) +
+        // observed_at).
+        stack.reverse();
+        while let Some(chunk) = stack.pop() {
+            let chunk_len = chunk.len();
+            let resp = self
+                .http
+                .post(&url)
+                .bearer_auth(&self.identity.token)
+                .json(&ObservationBatch { items: chunk.clone() })
+                .send()
+                .await
+                .context("pushing observations")?;
+            let status = resp.status();
+            if status.is_success() {
+                total = total.saturating_add(u32::try_from(chunk_len).unwrap_or(u32::MAX));
+                continue;
+            }
+            if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+                if chunk_len <= 1 {
+                    tracing::warn!(
+                        "control-plane 413 on single observation; dropping to break retry loop"
+                    );
+                    continue;
+                }
+                tracing::warn!(
+                    chunk_len,
+                    "control-plane 413; halving observation chunk and retrying"
+                );
+                let mid = chunk_len / 2;
+                let (left, right) = chunk.split_at(mid);
+                stack.push(right.to_vec());
+                stack.push(left.to_vec());
+                continue;
+            }
+            // Any other non-success: bail with body for the caller
+            // log. This still preserves the existing "retry whole
+            // observe cycle" behaviour for transient 5xx etc.
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("control-plane returned {status}: {body}");
+        }
+        Ok(total)
     }
 
     pub async fn push_drift(&self, items: Vec<DriftItem>) -> Result<u32> {

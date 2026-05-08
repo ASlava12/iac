@@ -2853,3 +2853,77 @@ hardware *and* real production fleets. Each fix tightens the defaults
 without introducing a Postgres dependency. F1's role of forcing the
 defaults to face this load is exactly what justified the Phase 9 VPS
 allocation.
+
+## Phase 9-F1-fix-5 — agent observation push: chunking + 413 fallback (2026-05-08)
+
+F1 #5 finished cleanly by application criteria (errors 0.062 %,
+audit verify ok, 0 unaccounted restarts). 10 hours after iac-trial
+exited, however, the cluster was still consuming CPU: agent-05 and
+agent-07 were stuck in an **infinite 413 retry loop**. Each
+attempted to push its full observation set in a single POST; with
+~11 980 managed resources at ~1 KB / observation, the body weighed
+~12 MB — three times the controlplane's `max_body_bytes = 4 MiB`.
+The CP returned 413, the agent's `push_observations` propagated the
+error up the call chain, the next observe cycle gathered the same
+12 K observations, and tried again. Forever.
+
+Symptoms before the fix:
+- agent-05 RSS 168 MB, CPU 25 %; agent-07 RSS 152 MB, CPU 32 %.
+- Identical log line every ≈ 10 s for hours: `remote push failed
+  error=control-plane returned 413 Payload Too Large`.
+- CP under indirect strain — unrelated `INSERT INTO agents` slow
+  statements at 4-8 s, audit-endpoint timeouts at 3 s, all caused by
+  the retry storm contending for the CP's connection pool.
+
+**Root cause.** The `Agent::push_observations` path sent the entire
+batch as one body. There was no size estimate before send, no chunk-
+size cap, no 413-aware fallback. The CP's protective body-limit
+existed (and worked correctly), but the agent treated 413 as a
+generic "remote error" and retried the same oversized payload.
+
+**Fix landed:**
+- [`crates/iac-agent/src/remote.rs`](crates/iac-agent/src/remote.rs) — new `OBSERVATION_PUSH_CHUNK = 500` constant. `push_observations` now splits `items` into chunks of 500 and POSTs each separately. ~500 observations × 1 KB ≈ 0.5 MiB, well inside the 4 MiB CP default.
+- **Adaptive halving on 413.** If a chunk still 413s (e.g. operator dropped `max_body_bytes` lower, or observations are unusually large), the chunk is split in half and both halves are pushed back onto the work-stack. Iterative-with-stack pattern — no async recursion. Continues halving until chunks are size 1; at that point a single observation that still 413s is **dropped with a warn**, breaking the retry loop. "Lose one observation" is strictly better than "stall the entire push pipeline."
+- Other non-2xx statuses (5xx, 401, etc) still bubble up as `Err` so the existing observe-loop retry semantics for transient failures are preserved. The 413-special-case is the only behaviour change.
+
+**Why this is the right shape of fix.**
+The observation push path exists because the CP needs the agent's
+view of resource state for drift detection, audit history, and
+operator visibility. Losing one observation is recoverable: the
+next observe cycle re-records it. Losing the entire push pipeline
+because one observation is too large is **un**recoverable — the
+agent gets stuck and the operator sees state freeze. Agent-side
+chunking + drop-on-413 turns an availability bug into at most a
+visibility bug for that one large observation.
+
+**Verification.** Built new agent binary, deployed to all 7 fleet
+hosts, restarted iac-agent on each. Within 60 s post-restart:
+- `0 × 413` errors across all agents (vs ~1 every 10 s before).
+- agent-05 / agent-07 still chewing through the accumulated 12 K
+  observation backlog at chunk=500 / push (no halving needed —
+  default is conservative enough).
+- CP slow-statement count dropped from ~hundreds/min to 0 in 2 min.
+- `audit verify` returns ok=true; chain tip stable at 107 892.
+
+**Forensic note for future incidents.** Look for `remote push failed`
+in agent logs to detect this class. The pre-fix pattern was
+"identical 413 error every observe cycle" — easy to grep for and a
+dead giveaway. With the fix, the agent will instead emit a
+`tracing::warn!("control-plane 413; halving observation chunk and
+retrying")` on the way to convergence, so operators see the
+adaptation rather than the loop.
+
+**Five fixes in this F1 series — pattern summary.**
+| Fix | Symptom | Mechanism | Fix shape |
+|-----|---------|-----------|-----------|
+| #1 (`227f65e`) | Disk-full @ 3h | Unbounded SQLite WAL | `journal_size_limit` + periodic TRUNCATE |
+| #2 (`aebbfb9`) | Disk-full @ 4h | CP `observations` table unbounded | `observation_max_per_resource = 50` + 5-min retention |
+| #3 (`9ace0b6`) | 30 s freezes + agent.db 1.4 GB | TRUNCATE blocking + agent obs unbounded | PASSIVE/TRUNCATE rotation + agent-side cap |
+| #4 (`eb2b14d`) | 1.86 % errors | Per-row INSERT saturated SQLite | Multi-row batched INSERT (chunk=100) |
+| #5 (this) | Infinite 413 retry loop | Push body > CP body limit | Adaptive chunked push (chunk=500, halve, drop on single) |
+
+Each fix tightened a default that "worked on a Pi 4 trial" but broke
+on real fleet load. The body of work moves the IaC tool's defaults
+from "single-host or small-cluster" to "real production fleet on
+real hardware" — exactly the gap Phase 9 VPS allocation was bought
+to find and close.
