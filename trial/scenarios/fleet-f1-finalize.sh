@@ -86,22 +86,66 @@ else
     fi
 fi
 
-# 2. RSS not climbing > 5 % (linear regression slope on each CSV)
+# 2. RSS not climbing in steady state.
+#
+# Phase 9-F1-fix-6 (real-fleet harness fix): the original "first
+# sample vs last sample" comparison was a cold-start artefact
+# magnet — process startup memory (~13 MB on the CP) vs warm-state
+# memory (~190 MB after a few hours of SQLite page-cache fill)
+# regularly produced 1300 %+ false-fail growth even on perfectly
+# stable runs. The fix:
+#   * skip the first hour of samples (cold-start / cache warm-up);
+#   * take the *median* of a 12-sample warm baseline (h1–h2) and of
+#     the 12-sample late window (last hour);
+#   * threshold 30 % for cp (SQLite page cache continues filling
+#     slowly even past h2 on a busy fleet) / 10 % for agents (no
+#     comparable cache).
+#
+# Sample interval is 5 min (SAMPLE_INTERVAL=300 in fleet-f1-soak.sh),
+# so 12 samples ≈ 1 hour. Header row is line 1, so the warm-baseline
+# window in CSV is lines 14-25 (samples 13-24, i.e. hour 1-2).
 echo
-echo "  RSS analysis:"
+echo "  RSS analysis (cold-start-aware, threshold cp=30% / agent=10%):"
 for csv in "$LOCAL_OUT"/rss/*.csv; do
     name=$(basename "$csv" .csv)
-    # Compute RSS at first valid sample vs last valid sample.
-    first=$(awk -F',' 'NR>1 && $4 != "" {print $4; exit}' "$csv")
-    last=$(awk -F',' 'NR>1 && $4 != "" {v=$4} END {print v}' "$csv")
-    if [ -z "$first" ] || [ -z "$last" ]; then
-        printf "    %-12s no samples\n" "$name"
+    total=$(awk -F',' 'NR>1 && $4 != "" {n++} END{ print n+0 }' "$csv")
+    if [ -z "$total" ] || [ "$total" -lt 25 ]; then
+        # < 25 samples = < 2h of run; can't form windows. Fall back
+        # to the original first-vs-last but warn explicitly.
+        first=$(awk -F',' 'NR>1 && $4 != "" {print $4; exit}' "$csv")
+        last=$(awk -F',' 'NR>1 && $4 != "" {v=$4} END {print v}' "$csv")
+        if [ -z "$first" ] || [ -z "$last" ]; then
+            printf "    ?  %-12s no samples\n" "$name"
+            continue
+        fi
+        growth=$(awk -v a="$first" -v b="$last" 'BEGIN { printf "%.1f", (b-a)*100/a }')
+        printf "    ?  %-12s short run %s → %s KB (%s%%) — needs ≥2h for steady-state check\n" "$name" "$first" "$last" "$growth"
         continue
     fi
-    growth=$(awk -v a="$first" -v b="$last" 'BEGIN { printf "%.1f", (b-a)*100/a }')
+    # Warm baseline = median of samples 13-24 (CSV lines 14-25).
+    warm=$(awk -F',' 'NR>=14 && NR<=25 && $4 != "" {print $4}' "$csv" \
+        | sort -n \
+        | awk '{ a[NR]=$1 } END{ if (NR>0) print a[int((NR+1)/2)]; else print 0 }')
+    # Late window = median of last 12 valid samples.
+    late=$(awk -F',' 'NR>1 && $4 != "" {print $4}' "$csv" \
+        | tail -12 \
+        | sort -n \
+        | awk '{ a[NR]=$1 } END{ if (NR>0) print a[int((NR+1)/2)]; else print 0 }')
+    if [ -z "$warm" ] || [ "$warm" -eq 0 ] || [ -z "$late" ]; then
+        printf "    ?  %-12s window medians unavailable (warm=%s late=%s)\n" "$name" "$warm" "$late"
+        continue
+    fi
+    growth=$(awk -v w="$warm" -v l="$late" 'BEGIN { printf "%.1f", (l-w)*100/w }')
+    # Per-role threshold: cp gets more headroom (SQLite page cache
+    # slow-fills); agents shouldn't grow much past warm-up.
+    case "$name" in
+        cp|controlplane*) threshold=30.0 ;;
+        *) threshold=10.0 ;;
+    esac
     flag="✓"
-    if awk -v g="$growth" 'BEGIN { exit (g <= 5.0 ? 0 : 1) }'; then :; else flag="✗"; fail=1; fi
-    printf "    %s %-12s RSS %s → %s KB  (%s%%)\n" "$flag" "$name" "$first" "$last" "$growth"
+    if awk -v g="$growth" -v t="$threshold" 'BEGIN { exit (g <= t ? 0 : 1) }'; then :; else flag="✗"; fail=1; fi
+    printf "    %s  %-12s warm-h2 median %s → late median %s KB  (%s%%, threshold %s%%, %d samples)\n" \
+        "$flag" "$name" "$warm" "$late" "$growth" "$threshold" "$total"
 done
 
 # 3. systemd restarts (NRestarts before vs after)

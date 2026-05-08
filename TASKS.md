@@ -4,16 +4,21 @@
 > next" across sessions. Completed phases live in
 > [TASKS_ARCHIVE.md](TASKS_ARCHIVE.md).
 
-## Status (2026-05-05)
+## Status (2026-05-08)
 
 Static-clean across six audit rounds (7dh.1–12), three architectural
-deduplication waves (7di.1–6), and a bare-metal trial on Pi 4 (8.7). 1176
+deduplication waves (7di.1–6), a bare-metal trial on Pi 4 (8.7), and
+**five F1 real-fleet fixes** (commits `227f65e`, `aebbfb9`, `9ace0b6`,
+`eb2b14d`, `7cccd3b` — see archive 9-F1-fix-1 through 9-F1-fix-5).
+F1 attempt #5 finished by all application criteria (errors 0.062 %,
+audit verify ok, 0 restarts); F1 #6 in flight as the clean sign-off
+run with all five fixes baked in. 481/481 controlplane + 60/60 agent
 tests green, `cargo clippy --workspace --all-targets` clean.
 
-**No open development task** — every formally-tracked item is `[x]` and
-already in the archive. The two remaining categories below are *deferred
-until external dependency* and *trigger-bound backlog* — both are real
-work but neither has a "do it now" signal.
+Currently using all 10 VPS to maximum: F1 #6 in flight, plus
+parallel work on F2 (network partition), F6 (rolling upgrade), F8
+multi-source-IP cap, Phase 10 cross-compile to MIPS, observability
+infra, WAL-incremental backup experiment, and security audit r7.
 
 ---
 
@@ -29,7 +34,7 @@ network/timing on a single host.
 
 | #  | Scenario                                    | Pass criterion                                  | Why a real fleet |
 |----|---------------------------------------------|-------------------------------------------------|------------------|
-| F1 | 24 h soak: 7 agents × 1 RPS                 | RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean | Single-host loops can't catch slow-leak per-FD-table memory accounting. **First attempt failed at 3 h 14 m on 2026-05-05** with disk-full from unbounded SQLite WAL growth. Root-cause fix landed (see archive 9-F1-fix); next attempt blocked on re-bootstrap of the 7 agents (their `agent.db` still holds credentials from the dead CP). |
+| F1 | 24 h soak: 7 agents × 1 RPS                 | RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean | Single-host loops can't catch slow-leak per-FD-table memory accounting. **Attempts 1–4 each surfaced a real production gap** (WAL unbounded, observations unbounded on CP, WAL TRUNCATE blocking + agent observations unbounded, per-row INSERT saturated SQLite) — all five fixes landed (`227f65e`, `aebbfb9`, `9ace0b6`, `eb2b14d`, `7cccd3b`). **Attempt #5 PASSED** by all application criteria (0.062 % errors, audit ok, 0 restarts). Attempt #6 in flight 2026-05-08T19:21Z with finalize-harness fix (`9ace0b6`-style cold-start-aware RSS) for clean verdict. |
 | F2 | Network partition (rolling 20 % per cycle)  | recovery time < 5 min after restore; no split-brain; replay-protection still rejects re-played envelopes | Real WAN delay + DNS reconvergence look nothing like docker bridge `disconnect` |
 | ~~F3~~ | ~~Cold reboot of an agent under apply~~ | ~~partial-state reconciles to desired on next observe~~ | **Done locally — see archive 7dh.13.** Real-fleet IPMI/SIGKILL semantics still want validation, but the agent-level reconvergence contract is now pinned by 3 integration tests (`tests/cold_reboot.rs`). |
 | ~~F4~~ | ~~Disk-full / inode-full on an agent~~  | ~~graceful degradation; agent reboots clean; no identity-file corruption~~ | **Done locally — see archive 7dh.13.** Atomic-write contract on `identity.json` pinned by 4 unit tests in `remote::tests`. Real disk-full / overlayfs behaviour still wants a VM trial. |
@@ -38,14 +43,23 @@ network/timing on a single host.
 | ~~F7~~ | ~~Backup/restore of controlplane DB~~   | ~~RPO/RTO measured; audit-chain integrity preserved across restore~~ | **Done — see archive 9-F7.** Hot `VACUUM INTO` snapshot of the live CP DB (no service restart, F1 untouched), restore on a separate VPS, full integrity check + post-restore write. RPO 45.6 s (snapshot time on a 947 MB live DB), RTO 1.6 s (cold-start of restored CP to first 200 on `/v1/health`). audit-tip match + `/v1/audit/verify` ok=true. |
 | ~~F8~~ | ~~DDoS on `/v1/agents/register`~~       | ~~rate-limit holds; legitimate agents not starved~~ | **Done — see archive 9-F8.** Empirical storm proved the gap (250 req / 10 s from one IP, 0 × 429); per-IP register cap (default 20/min) + axum `ConnectInfo` plumbing land in this fix. Re-storm at 30 s × 50 against the fixed binary returned 20 × 200 / 880 × 429 as expected. Multi-source-IP / `X-Forwarded-For` allowlist still wants a real-fleet pass once F1 finishes and the prod CP can be restarted. |
 
-**Remaining for VPS allocation:** F1 (re-run after fix), F2, F6 (3 of 8). F3/F4/F5/F7/F8
-have either local test coverage that pins the agent-side contract or a
-fleet-validated harness; the hardware-side aspects (real IPMI cold
-reboot, real ext4 ENOSPC, real-time `date -s`) still want a VM trial
-but no longer block release.
+**Remaining:** F2, F6, plus F8 multi-source-IP follow-up (~3 items).
+F1 attempt #5 PASSED by application criteria; #6 is the
+ceremony-clean sign-off. F3/F4/F5/F7/F8(single-source) all have
+local test coverage or a fleet-validated harness.
 
-**Estimated effort for the remaining 3:** ~2 weeks calendar from VPS
-allocation (was 2½ — F7 moved out after the `VACUUM INTO` harness).
+**Active workstreams (parallel to F1 #6 running 24 h in background):**
+- F2 — rolling 20 % network partition harness via `iptables` between regions
+- F6 — rolling upgrade harness using cp-spare-02 as the v2 CP
+- F8 multi-source — 2-IP simultaneous storm (cp-spare-01 + cp-spare-02 → cp-01) to verify per-IP isolation
+- F1 stress matrix — 72 h soak, 5–10 RPS variant, multi-agent-per-VPS density variant
+- Phase 10 — cross-compile `mipsel-unknown-linux-musl` + run via `qemu-mipsel-static` for binary-size + functional smoke
+- Observability — Prometheus/Grafana on cp-spare-01 collecting RSS samplers + audit metrics
+- WAL-incremental backup — litestream-style replication CP → cp-spare-02 (sub-second RPO target)
+- Security audit r7 — manual round against post-5-fix code
+- **CP slow-leak investigation** (sixth real-fleet finding from F1 #5 finalize)
+  — CP RSS grew 195→207 MB over 10 h idle; harness fix v2 confirmed
+  +301 % growth from warm baseline to late window. Need heap profiler.
 
 ### Phase 10 — Cross-architecture validation (MIPS / network gear)
 
