@@ -1,0 +1,15 @@
+# Phase 10: cross-compile to MIPS targets.
+#
+# These are Tier-3 Rust targets (no prebuilt rustc artifacts), so
+# we build std from source via `-Z build-std`. cross's docker image
+# provides the C toolchain (mipsel-linux-muslsf-gcc) + linker; we
+# add the Rust-side build-std + panic-abort to keep binary small
+# enough for OpenWrt/MikroTik flash budgets (~16 MiB partition).
+#
+# Aim: < 10 MiB stripped iac-agent binary.
+
+[target.mipsel-unknown-linux-musl]
+build-std = true
+
+[target.mips64el-unknown-linux-musl]
+build-std = true

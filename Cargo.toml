@@ -196,3 +196,31 @@ iac-controlplane = { path = "crates/iac-controlplane" }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Phase 10: size-optimised profile for cross-compiles to weak-hardware
+# targets (router/network-gear class with 8–16 MiB flash partitions).
+# Trades runtime speed and panic-recovery for binary size:
+#
+#   * `opt-level = "z"` → optimise for size, not speed (~30 % smaller)
+#   * `lto = "fat"`     → cross-crate inlining + dead-code elimination
+#                         (~10–20 % more)
+#   * `panic = "abort"` → no unwind tables (~5–10 %); on a server
+#                         panic = process death anyway, so unwind
+#                         buys nothing
+#   * `strip = true`    → drops all symbols including dynamic
+#                         (default `strip = "symbols"` keeps some)
+#   * `debug = false`   → no debug info even in dep graph
+#
+# Build with: `cargo build --profile release-mini --target <triple>`
+# Aim: iac-agent < 10 MiB stripped on aarch64-musl / mipsel-musl.
+#
+# Caveat: stack traces become uninformative on panic (just "abort
+# called"). Use the regular `release` profile for first-pass
+# debugging; `release-mini` for shipping to constrained devices.
+[profile.release-mini]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+panic = "abort"
+strip = true
+debug = false
