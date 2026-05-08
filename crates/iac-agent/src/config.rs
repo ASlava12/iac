@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use iac_providers::process::ExternalProviderSpec;
 use iac_providers::shellout::ShellOutSpec;
+#[cfg(feature = "wasm")]
 use iac_providers::wasm::WasmProviderSpec;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -51,7 +52,10 @@ pub struct Config {
     pub external_providers: Vec<ExternalProviderSpec>,
     /// Phase 7dc: sandboxed WebAssembly plugin providers. Each entry
     /// is a `.wasm` module run inside wasmtime with hard memory and
-    /// fuel limits and no I/O imports. Empty by default.
+    /// fuel limits and no I/O imports. Empty by default. Phase 10:
+    /// gated behind the `wasm` feature so MIPS / OpenWrt builds
+    /// (which can't link cranelift) skip this field.
+    #[cfg(feature = "wasm")]
     pub wasm_providers: Vec<WasmProviderSpec>,
 }
 
@@ -101,6 +105,7 @@ struct RawConfig {
     shellout_providers: Vec<ShellOutSpec>,
     #[serde(default)]
     external_providers: Vec<ExternalProviderSpec>,
+    #[cfg(feature = "wasm")]
     #[serde(default)]
     wasm_providers: Vec<WasmProviderSpec>,
 }
@@ -181,6 +186,7 @@ impl Config {
             p.validate()
                 .map_err(|e| anyhow::anyhow!("external_providers[{}]: {e}", p.kind))?;
         }
+        #[cfg(feature = "wasm")]
         for p in &raw.wasm_providers {
             p.validate()
                 .map_err(|e| anyhow::anyhow!("wasm_providers[{}]: {e}", p.kind))?;
@@ -188,13 +194,14 @@ impl Config {
         // Reject duplicate kinds across all dynamic-provider sources —
         // late-binding shadows are a debugging trap.
         let mut seen = std::collections::HashSet::new();
-        for k in raw
+        let kinds_iter = raw
             .shellout_providers
             .iter()
             .map(|p| &p.kind)
-            .chain(raw.external_providers.iter().map(|p| &p.kind))
-            .chain(raw.wasm_providers.iter().map(|p| &p.kind))
-        {
+            .chain(raw.external_providers.iter().map(|p| &p.kind));
+        #[cfg(feature = "wasm")]
+        let kinds_iter = kinds_iter.chain(raw.wasm_providers.iter().map(|p| &p.kind));
+        for k in kinds_iter {
             if !seen.insert(k.clone()) {
                 anyhow::bail!(
                     "duplicate provider kind {k:?} declared more than once across \
@@ -218,6 +225,7 @@ impl Config {
             tls: raw.tls,
             shellout_providers: raw.shellout_providers,
             external_providers: raw.external_providers,
+            #[cfg(feature = "wasm")]
             wasm_providers: raw.wasm_providers,
         })
     }
@@ -290,6 +298,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wasm")]
     fn loads_dynamic_provider_specs() {
         let dir = TempDir::new().unwrap();
         let toml_path = dir.path().join("agent.toml");
@@ -344,6 +353,7 @@ binary = "/usr/local/bin/p"
     }
 
     #[test]
+    #[cfg(feature = "wasm")]
     fn rejects_duplicate_kind_across_wasm_and_shellout() {
         let dir = TempDir::new().unwrap();
         let toml_path = dir.path().join("agent.toml");

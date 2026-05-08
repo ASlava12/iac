@@ -8,6 +8,11 @@
 #
 # Aim: < 10 MiB stripped iac-agent binary.
 
+[build.env]
+passthrough = [
+    "CARGO_UNSTABLE_BUILD_STD",
+]
+
 [target.mipsel-unknown-linux-musl]
 build-std = true
 

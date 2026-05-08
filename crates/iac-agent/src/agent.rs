@@ -25,6 +25,7 @@ use iac_core::{ProviderRegistry, Resource};
 use iac_providers::process::ExternalRuntime;
 use iac_providers::register_builtins;
 use iac_providers::shellout::ShellOutRuntime;
+#[cfg(feature = "wasm")]
 use iac_providers::wasm::{WasmComponentProvider, WasmRuntimeAdapter, WasmRuntimeKind};
 use jiff::Timestamp;
 use std::path::PathBuf;
@@ -94,6 +95,7 @@ impl Agent {
             registry.register(Box::new(runtime.into_provider()));
             info!(kind = %kind, binary = %p.binary.display(), "registered external provider");
         }
+        #[cfg(feature = "wasm")]
         for p in &config.wasm_providers {
             let kind = p.kind.clone();
             if registry.get(&kind).is_some() {

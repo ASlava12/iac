@@ -8,6 +8,7 @@
 )]
 
 #[macro_use]
+mod sha256_pin;
 mod step_action;
 mod subprocess;
 
@@ -33,6 +34,10 @@ pub mod process;
 pub mod shellout;
 pub mod sysctl;
 pub mod systemd;
+// Phase 10: WASM provider gated behind the `wasm` feature so cross-
+// compiles to architectures wasmtime/cranelift doesn't support
+// (notably MIPS) build cleanly. All other providers remain active.
+#[cfg(feature = "wasm")]
 pub mod wasm;
 
 use iac_core::ProviderRegistry;

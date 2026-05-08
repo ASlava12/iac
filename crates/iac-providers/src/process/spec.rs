@@ -103,7 +103,7 @@ impl ExternalProviderSpec {
             ));
         }
         if let Some(h) = &self.binary_sha256 {
-            crate::wasm::spec::validate_sha256_hex(h, "binary_sha256")?;
+            crate::sha256_pin::validate_sha256_hex(h, "binary_sha256")?;
         }
         Ok(())
     }

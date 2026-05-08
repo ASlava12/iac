@@ -159,39 +159,10 @@ fn default_fuel() -> u64 {
 /// plugin spec that pins a binary hash. Lowercase, exactly 64
 /// hex chars. Reject mixed-case / leading "sha256:" prefixes /
 /// whitespace upfront.
-pub(crate) fn validate_sha256_hex(s: &str, field: &'static str) -> Result<(), String> {
-    if s.len() != 64 {
-        return Err(format!(
-            "{field} must be 64 lowercase hex chars (got {})",
-            s.len()
-        ));
-    }
-    if !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
-        return Err(format!(
-            "{field} must be lowercase hex (a-f / 0-9); got {s:?}"
-        ));
-    }
-    Ok(())
-}
-
-/// Phase 7dh.4: compute the SHA-256 of `bytes` and compare to
-/// `expected` (which must already be format-validated). Returns
-/// the actual hex hash on mismatch so the operator can update
-/// their config if the expected change is legitimate.
-pub(crate) fn verify_sha256(
-    bytes: &[u8],
-    expected: &str,
-    label: &str,
-) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
-    let actual = hex::encode(Sha256::digest(bytes));
-    if actual != expected {
-        return Err(format!(
-            "{label} hash mismatch: expected {expected}, got {actual}"
-        ));
-    }
-    Ok(())
-}
+// Phase 10: helpers moved to crate-level `sha256_pin` so the
+// `process` provider (and any future ones) can share without
+// pulling in wasmtime.
+pub(crate) use crate::sha256_pin::{validate_sha256_hex, verify_sha256};
 
 /// Phase 7dh.3: host paths the validator refuses to map into a
 /// guest unless the operator opts in via `unsafe_host = true` on

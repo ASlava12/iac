@@ -223,7 +223,7 @@ impl PluginHandle {
                     format!("read binary {}: {e}", self.spec.binary.display()),
                 )
             })?;
-            crate::wasm::spec::verify_sha256(&bytes, expected, "binary").map_err(|e| {
+            crate::sha256_pin::verify_sha256(&bytes, expected, "binary").map_err(|e| {
                 Error::provider(&self.spec.kind, e)
             })?;
         }

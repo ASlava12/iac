@@ -32,14 +32,26 @@ base64 = { workspace = true }
 parking_lot = { workspace = true }
 # Phase 7dc: WebAssembly plugin runtime. Sandboxed third extension
 # point — hard memory cap + fuel-based CPU limit, no default I/O.
-wasmtime = { workspace = true }
+# Phase 10: gated behind `wasm` feature so MIPS / OpenWrt cross-
+# compile (which can't link cranelift) builds without it. Default
+# enabled — most x86_64 / aarch64 deployments want WASM modules
+# available.
+wasmtime = { workspace = true, optional = true }
 # Phase 7de: capability-driven WASI preview2 imports — component
 # plugins can opt into preopened directories / env vars / stdio.
-wasmtime-wasi = { workspace = true }
+wasmtime-wasi = { workspace = true, optional = true }
 # wasmtime's `ResourceLimiter` trait surfaces errors as `anyhow::Error`
 # and `iac.log` host-import wires plugin diagnostics to `tracing`.
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+[features]
+default = ["wasm"]
+# Phase 10: WASM-module provider. Requires wasmtime/cranelift, which
+# does NOT support MIPS architectures. Disable for MIPS / OpenWrt
+# cross-compiles — the file/firewall/systemd/package providers all
+# stay available without it.
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

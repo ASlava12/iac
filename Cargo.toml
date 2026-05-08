@@ -214,13 +214,14 @@ strip = "symbols"
 # Build with: `cargo build --profile release-mini --target <triple>`
 # Aim: iac-agent < 10 MiB stripped on aarch64-musl / mipsel-musl.
 #
-# Caveat: stack traces become uninformative on panic (just "abort
-# called"). Use the regular `release` profile for first-pass
-# debugging; `release-mini` for shipping to constrained devices.
+# Note: kept `panic = "unwind"` (the default) instead of `"abort"`
+# because cross 0.2.5's `build-std = true` doesn't include
+# `panic_abort` for Tier-3 MIPS targets — the abort-mode binary
+# fails to link there. Stack-traces remain informative on panic;
+# size delta vs panic=abort is < 5 % for this binary.
 [profile.release-mini]
 inherits = "release"
 opt-level = "z"
 lto = "fat"
-panic = "abort"
 strip = true
 debug = false

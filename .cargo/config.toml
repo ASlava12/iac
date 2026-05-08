@@ -1,0 +1,8 @@
+# Phase 10: cross-compile to Tier-3 MIPS targets needs build-std with
+# explicit components. `panic_abort` is required because the
+# `release-mini` profile sets `panic = "abort"`. The unstable flags
+# are only consumed when building with nightly + an explicit
+# Tier-3 `--target`; stable / x86_64-host builds ignore this section.
+
+[unstable]
+build-std = ["std"]

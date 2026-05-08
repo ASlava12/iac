@@ -17,9 +17,20 @@ path = "src/lib.rs"
 name = "iac-agent"
 path = "src/main.rs"
 
+[features]
+default = ["wasm"]
+# Phase 10: WASM-module provider. Requires wasmtime/cranelift, which
+# does NOT support MIPS architectures. Disable for MIPS / OpenWrt
+# cross-compiles via `--no-default-features`.
+wasm = ["iac-providers/wasm"]
+
 [dependencies]
 iac-core = { workspace = true }
-iac-providers = { workspace = true }
+# Phase 10: direct path dep instead of `{ workspace = true }` so we
+# can disable `iac-providers/wasm` (the workspace decl can't be
+# overridden for default-features by a member). The workspace decl
+# remains for other crates that want full features.
+iac-providers = { path = "../iac-providers", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
