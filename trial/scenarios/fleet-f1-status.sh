@@ -34,6 +34,22 @@ submitted=$(ssh_to "$CP_IP" "grep -c 'longevity progress' $F1_DIR/trial.log 2>/d
 last_prog=$(ssh_to "$CP_IP" "grep 'longevity progress' $F1_DIR/trial.log 2>/dev/null | tail -1 || true")
 echo "  progress lines: $submitted"
 [ -n "$last_prog" ] && echo "  last:           $last_prog"
+# Phase 9-F1-fix-6 (operational): auto-compute failure rate. iac-trial
+# logs `submitted=N failures=M`; we extract the latest N+M and show
+# the %. Threshold 1 % matches iac-trial's own pass criterion.
+if [ -n "$last_prog" ]; then
+    # iac-trial logs in ANSI-coloured format — strip escape codes
+    # before extracting numeric fields.
+    last_clean=$(printf '%s' "$last_prog" | sed 's/\x1b\[[0-9;]*m//g')
+    nsub=$(printf '%s' "$last_clean" | grep -oE 'submitted=[0-9]+' | cut -d= -f2)
+    nfail=$(printf '%s' "$last_clean" | grep -oE 'failures=[0-9]+' | cut -d= -f2)
+    if [ -n "$nsub" ] && [ -n "$nfail" ] && [ "$nsub" -gt 0 ]; then
+        pct=$(awk -v s="$nsub" -v f="$nfail" 'BEGIN { printf "%.2f", f*100/s }')
+        flag="✓"
+        awk -v p="$pct" 'BEGIN { exit (p < 1.0 ? 0 : 1) }' || flag="✗"
+        printf "  %s failure rate:  %d / %d = %s%% (threshold < 1.00%%)\n" "$flag" "$nfail" "$nsub" "$pct"
+    fi
+fi
 
 echo
 echo "=== fleet health ==="
