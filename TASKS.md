@@ -4,21 +4,32 @@
 > next" across sessions. Completed phases live in
 > [TASKS_ARCHIVE.md](TASKS_ARCHIVE.md).
 
-## Status (2026-05-08)
+## Status (2026-05-09)
 
 Static-clean across six audit rounds (7dh.1–12), three architectural
-deduplication waves (7di.1–6), a bare-metal trial on Pi 4 (8.7), and
-**five F1 real-fleet fixes** (commits `227f65e`, `aebbfb9`, `9ace0b6`,
-`eb2b14d`, `7cccd3b` — see archive 9-F1-fix-1 through 9-F1-fix-5).
-F1 attempt #5 finished by all application criteria (errors 0.062 %,
-audit verify ok, 0 restarts); F1 #6 in flight as the clean sign-off
-run with all five fixes baked in. 481/481 controlplane + 60/60 agent
-tests green, `cargo clippy --workspace --all-targets` clean.
+deduplication waves (7di.1–6), a bare-metal trial on Pi 4 (8.7),
+**five F1 real-fleet fixes** (commits `227f65e`, `aebbfb9`,
+`9ace0b6`, `eb2b14d`, `7cccd3b`; see archive 9-F1-fix-1 through
+9-F1-fix-5), **Phase 10 cross-compile end-to-end** (commit
+`f3f0a21`; mipsel-musl iac-agent at 7.0 MiB stripped — fits OpenWrt
+flash budget), **Phase 9 observability stack** (Prometheus + Grafana
+on cp-spare-01 scraping all 10 VPS), **Phase 11 prep**
+(Litestream WAL replication PoC), **F8 multi-source-IP follow-up
+PASS** (commit `93f5936`). 1117/1117 workspace tests green,
+`cargo clippy --workspace --all-targets` clean.
 
-Currently using all 10 VPS to maximum: F1 #6 in flight, plus
-parallel work on F2 (network partition), F6 (rolling upgrade), F8
-multi-source-IP cap, Phase 10 cross-compile to MIPS, observability
-infra, WAL-incremental backup experiment, and security audit r7.
+F1 attempt #5 PASSed by application criteria; #6 in flight (gap-#6
+emerging as expected — `journal_size_limit` ceiling under
+sustained scaling). Once #6 finalizes (~13 h to go), the planned
+fix #6 is config-only: `journal_size_limit` 256 → 1024 MiB +
+`retention.interval_secs` 300 → 60. Then F1 #7 for clean sign-off.
+
+**All 8 Phase 9 scenarios** now have harnesses or local coverage —
+F1/F2/F6 ready to run, F3/F4/F5 covered by local tests, F7 PASS
+(commit `a4c3c9d`), F8 PASS + multi-IP follow-up PASS. F2 and F6
+gated on F1 #7 PASS to avoid mixing soak fail with structural
+test. F1 stress matrix (72h, burst, density) pre-staged in
+`fleet-f1-stress-matrix.sh` for post-F1-#7 deeper validation.
 
 ---
 
