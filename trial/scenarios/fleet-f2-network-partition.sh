@@ -40,7 +40,9 @@
 set -eu
 
 . "$(dirname "${BASH_SOURCE[0]}")/../fleet/lib.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../fleet/lib-capacity.sh"
 
+cap_fail=0
 OUTAGE_SECS="${OUTAGE_SECS:-180}"            # 3-min partition per cycle
 RECOVERY_TIMEOUT="${RECOVERY_TIMEOUT:-300}"  # 5-min recovery threshold
 RESULTS_DIR=/tmp/iac-f2-results
@@ -247,6 +249,17 @@ delta=$((chain_end - chain_start))
 verify=$(ssh_to "$CP_IP" "curl -fsS -H 'Authorization: Bearer $ADMIN_TOKEN' http://127.0.0.1:$CP_PORT/v1/audit/verify | jq -r '.ok // false'")
 echo "  chain delta: $delta rows added across F2"
 echo "  /v1/audit/verify ok=$verify"
+
+# ---- capacity-health (Phase 9 ceilings) ----------------------------
+#
+# F2 stresses the network path, but the CP's SQLite store is also
+# under load throughout (audit_events for every partition / restore
+# cycle). If F2 surfaces a NEW capacity gap on top of partition
+# resilience — e.g. WAL saturation under partition-recovery write
+# bursts — flag it here.
+echo
+capacity_health_report
+[ "$cap_fail" = "1" ] && fails=$((fails + 1))
 
 # ---- verdict ------------------------------------------------------
 

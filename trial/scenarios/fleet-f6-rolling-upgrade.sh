@@ -38,7 +38,9 @@
 set -eu
 
 . "$(dirname "${BASH_SOURCE[0]}")/../fleet/lib.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../fleet/lib-capacity.sh"
 
+cap_fail=0
 V2_BIN_DIR="${V2_BIN_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/target/release}"
 RESULTS_DIR=/tmp/iac-f6-results
 F6_DIR=/var/lib/iac-trial/f6
@@ -239,15 +241,28 @@ ssh_to "$CP_IP" "
 chain_end=$(ssh_to "$CP_IP" "jq -r '.last_id' $F6_DIR/chain-tip-end.json")
 verify_end=$(ssh_to "$CP_IP" "curl -fsS -H 'Authorization: Bearer $ADMIN_TOKEN' http://127.0.0.1:$CP_PORT/v1/audit/verify | jq -r '.ok // false'")
 
+# ---- capacity-health (Phase 9 ceilings) ----------------------------
+#
+# Rolling upgrade exercises the CP write-path heavily during burst-A
+# (50 ops mid-flight while binary swaps) and again during Phase B
+# (each agent re-establishes session, re-pulls assignments).
+# Capacity ceilings have to hold across the two restarts; assert it.
+echo
+capacity_health_report
+
 # ---- verdict ------------------------------------------------------
+
+cap_flag=PASS; [ "$cap_fail" = "1" ] && cap_flag=FAIL
 
 echo
 echo "=== F6 verdict ==="
 echo "  Phase A (CP mid-burst swap): $phase_a_ok (CP downtime ${swap_secs}s)"
 echo "  Phase B (rolling agent swap): $phase_b_ok"
+echo "  capacity-health post-upgrade: $cap_flag"
 echo "  audit chain: start=$chain_start end=$chain_end (delta $((chain_end-chain_start)))"
 echo "  /v1/audit/verify ok=$verify_end"
-if [ "$phase_a_ok" = "PASS" ] && [ "$phase_b_ok" = "PASS" ] && [ "$verify_end" = "true" ]; then
+if [ "$phase_a_ok" = "PASS" ] && [ "$phase_b_ok" = "PASS" ] \
+   && [ "$cap_flag" = "PASS" ] && [ "$verify_end" = "true" ]; then
     echo "  overall: PASS"
 else
     echo "  overall: FAIL"

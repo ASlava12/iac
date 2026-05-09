@@ -10,8 +10,11 @@
 set -eu
 
 . "$(dirname "${BASH_SOURCE[0]}")/../fleet/lib.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../fleet/lib-capacity.sh"
 
 F1_DIR=/var/lib/iac-trial/f1
+cap_fail=0
+trend_fail=0
 LOCAL_OUT="${LOCAL_OUT:-/tmp/iac-f1-results}"
 mkdir -p "$LOCAL_OUT"
 
@@ -196,62 +199,22 @@ restarts_check "controlplane" "iac-controlplane"
 agent_after=$(ssh_to "$(inventory_hosts agent | head -1 | cut -f2)" "cat $F1_DIR/systemd-iac-agent-end.txt 2>/dev/null" | grep NRestarts || echo "missing")
 echo "    (agent NRestarts sample): $agent_after"
 
-# 4. capacity-health pre-flight (Phase 9-F1-fix-1..5 ceilings)
-#
-# F1 attempts 1-4 each surfaced a real-fleet capacity gap; fixes
-# 1-5 land defaults that bound them. The finalize verdict has to
-# ASSERT those bounds actually held over the run, not just trust
-# the iac-trial PASS marker (which only checks longevity submit
-# success rate, not the underlying CP load).
-#
-# Five flags: server.db absolute, WAL absolute, disk pct, sustained
-# 'database is locked' rate, sustained slow-statement rate. Marks
-# ✗ + fail if any breaks the ceiling — a passing run that quietly
-# saturates WAL or fills the disk by 90 % is not actually a passing
-# run; F1 #6 emergence of gap-#6 shows up here as a fail.
+# 4. capacity-health pre-flight (Phase 9-F1-fix-1..5 ceilings).
+#    Asserts WAL/disk/DB/busy/slow ceilings held over the run, not
+#    just iac-trial's submit success rate. Fail-but-trended runs
+#    (gap #6 emergence) flag here even when iac-trial PASSes.
 echo
-echo "  capacity-health (Phase 9-F1-fix ceilings):"
-cap=$(ssh_to "$CP_IP" "
-    db=\$(stat -c%s /var/lib/iac-controlplane/server.db 2>/dev/null || echo 0)
-    wal=\$(stat -c%s /var/lib/iac-controlplane/server.db-wal 2>/dev/null || echo 0)
-    df_avail=\$(df -k / | awk 'NR==2 {print \$4}')
-    df_total=\$(df -k / | awk 'NR==2 {print \$2}')
-    busy=\$(journalctl -u iac-controlplane --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'database is locked' || echo 0)
-    slow=\$(journalctl -u iac-controlplane --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'slow statement' || echo 0)
-    echo \"\$db \$wal \$df_avail \$df_total \$busy \$slow\"
-" 2>/dev/null || echo "0 0 0 0 0 0")
-read -r db_b wal_b avail_kb total_kb busy slow <<< "$cap"
-db_mb=$((db_b / 1024 / 1024))
-wal_mb=$((wal_b / 1024 / 1024))
-disk_pct=0
-[ "$total_kb" -gt 0 ] && disk_pct=$((100 - (avail_kb * 100 / total_kb)))
+capacity_health_report
+[ "$cap_fail" = "1" ] && fail=1
 
-# DB absolute cap: ≤ 5 GB. Beyond this most VPS-class hosts are at
-# disk pressure even when retention works; signals fleet outgrew SQLite.
-flag_db="✓"; [ "$db_mb" -gt 5120 ] && { flag_db="✗"; fail=1; }
-# WAL: ≤ journal_size_limit (256 MiB). > cap = saturating writers.
-flag_wal="✓"; [ "$wal_mb" -gt 256 ] && { flag_wal="✗"; fail=1; }
-# Disk: ≤ 80 %. Higher = approaching disk-full risk.
-flag_disk="✓"; [ "$disk_pct" -gt 80 ] && { flag_disk="✗"; fail=1; }
-# Sustained busy events: ≤ 50 / 5min = ~10/min. Above = saturation.
-flag_busy="✓"; [ "$busy" -gt 50 ] && { flag_busy="✗"; fail=1; }
-# Sustained slow statements: ≤ 100 / 5min. Above = SQLite write-path
-# blocked.
-flag_slow="✓"; [ "$slow" -gt 100 ] && { flag_slow="✗"; fail=1; }
+# 5. failure-rate slope. Detects gap-#N emergence early when the
+#    rate climbs through the 1 % threshold over time even if the
+#    cumulative count is still under threshold at the wire.
+echo
+failure_trend_report "$LOCAL_OUT/trial.log" local
+[ "$trend_fail" = "1" ] && fail=1
 
-printf "    %s server.db:    %d MiB  (cap 5120 MiB)\n"           "$flag_db"   "$db_mb"
-printf "    %s WAL:          %d MiB  (cap 256 MiB)\n"            "$flag_wal"  "$wal_mb"
-printf "    %s Disk used:    %d %%   (cap 80%%)\n"                "$flag_disk" "$disk_pct"
-printf "    %s busy/5min:    %d      (cap 50)\n"                  "$flag_busy" "$busy"
-printf "    %s slow/5min:    %d      (cap 100)\n"                 "$flag_slow" "$slow"
-
-if [ "$flag_wal" = "✗" ] || [ "$flag_busy" = "✗" ]; then
-    echo "    NOTE: WAL or busy-rate ceiling exceeded — likely a NEW gap"
-    echo "          (or load pattern outgrew the corresponding default)."
-    echo "          See docs/en/runbook.md \"Capacity exhaustion\" for tuning."
-fi
-
-# 5. audit chain integrity
+# 6. audit chain integrity
 echo
 echo "  audit chain:"
 start_id=$(jq -r '.last_id' "$LOCAL_OUT/chain-tip-start.json")
