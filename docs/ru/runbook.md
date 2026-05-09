@@ -186,6 +186,35 @@ drift авто-резолвится по мере конвергенции ми�
 Restore оффлайновый: остановить control-plane, swap state-dir,
 restart.
 
+Для SQLite-бэкендов валидированы два recovery-пути:
+
+1. **Hot snapshot через `VACUUM INTO`** (Phase 9-F7,
+   `trial/scenarios/fleet-f7-backup-restore.sh`). RPO ≈ wall-time
+   снапшота (~45 с на 947 MB БД), RTO ≈ 1.6 с. Рестарт source CP
+   не требуется. **Используй `VACUUM INTO`, не `.backup`** —
+   `.backup` зависает в page-level SQLITE_BUSY retry-loop под
+   активным writer'ом; `VACUUM INTO` — single-statement
+   transactional snapshot за disk-write time.
+
+2. **Continuous WAL replication через Litestream** (Phase 11 prep,
+   `trial/scenarios/setup-litestream-replication.sh`). RPO < 1 с
+   (default sync-interval 1 с), RTO ≈ 30 с. Zero impact на source
+   — Litestream tail'ит WAL через shadow-WAL без блокировки
+   writers. Реплицирует SFTP'ом на
+   `cp-spare-02:/var/lib/iac-replica/`.
+
+**Forensics caveat (урок F1 attempt #1).** Если CP умер от
+disk-full, **НЕ** удалять WAL до checkpoint'а. В main DB могут
+быть un-checkpointed frames в WAL; удалить WAL → main DB
+malformed, `.dump` тоже упадёт. Правильная последовательность:
+
+```sh
+systemctl stop iac-controlplane
+# В WAL ещё могут быть незафиксированные frames — checkpoint СНАЧАЛА.
+sqlite3 /var/lib/iac-controlplane/server.db 'PRAGMA wal_checkpoint(TRUNCATE);'
+# Только ТЕПЕРЬ безопасно перемещать файлы.
+```
+
 ---
 
 ## Типичные failure modes
@@ -347,6 +376,55 @@ iac apply --server "$URL" --environment <env> manifests/
    write-доступ: admin tokens, DB passwords, control-plane signing
    key (`POST /v1/admin/signing-keys/rotate`).
 5. Документируйте IRC для post-incident review.
+
+### Capacity exhaustion под устойчивой нагрузкой
+
+**Симптом:** держится 1+ час 5xx rate с `database is locked` /
+`disk is full` / latency INSERT'а 4–6 с. SQLite write-path
+saturates.
+
+**Background — F1 trial findings.** Phase 9 fleet validation на
+7-агентной фарме при 1 RPS submit-burst всплыли шесть отдельных
+capacity ceiling'ов. Все шесть закрыты defaults; раздел существует
+для операторов на бóльших флотах, где те же patterns могут
+re-emerge.
+
+| Симптом | Механизм | Default который ограничивает |
+|---|---|---|
+| `disk is full` через несколько часов | SQLite WAL растёт unbounded (autocheckpoint pages back, но не truncate'ит) | `journal_size_limit = 256 MiB` per-connection PRAGMA + periodic `wal_checkpoint(TRUNCATE)` task |
+| INSERT latency 4–7 с под нагрузкой | Per-row INSERT-ы queue WAL frame allocation | Multi-row batched INSERT (chunk = 100) в `record_observations` |
+| `observations` table 1 M+ строк | Нет per-resource cap; observations live до age-prune | `observation_max_per_resource = 50` + 5-min retention interval |
+| Фризы 30 с каждую минуту | `wal_checkpoint(TRUNCATE)` blocking при contention | PASSIVE на большинстве tick'ов, TRUNCATE каждый 10-й (default cadence 60 с → TRUNCATE раз в 10 мин) |
+| Agent local DB unbounded | `record_observation` INSERT'ит без cap | `AGENT_OBSERVATION_HISTORY_CAP = 10` per `resource_id`, inline DELETE после INSERT |
+| Agent застрял в 413 retry-loop | Push body > CP `max_body_bytes`, agent retry'ит ту же oversized batch | Adaptive chunked push (chunk = 500 obs, halve on 413, drop singleton) |
+
+**Tuning beyond defaults.** Если флот перерастёт defaults
+(симптом: WAL hits cap + 5xx rate растёт по часам без изменений
+config), tunables в
+[`crates/iac-controlplane/src/config.rs`](../../crates/iac-controlplane/src/config.rs):
+
+- `[retention] observation_max_per_resource` — снизить чтобы
+  shrink steady-state DB. 10–20 ОК для большинства observability-needs.
+- `[retention] interval_secs` — снизить чтобы держать working set
+  маленьким. 60 с агрессивно, но норм на SSD-class storage.
+- `wal_checkpoint_interval_secs` — снизить чтобы reclaim WAL
+  быстрее.
+- TODO post-Phase 11: `journal_size_limit` пока hard-coded; вынести
+  в config когда первый оператор упрётся в 256 MiB на бóльшем флоте.
+
+**Live triage.** При развёрнутом
+[Phase 9 observability stack'е](../../trial/observability/README.md)
+(Prometheus + Grafana на cp-spare-01) смотри **RSS by host** для
+CP — устойчивый линейный рост за 200 MB на маленьком флоте — это
+ранний сигнал. Disk-free panel ловит WAL-unbounded class до того
+как он становится service-impacting.
+
+Без Grafana — поллите напрямую:
+```sh
+ssh root@<cp> "ls -lh /var/lib/iac-controlplane/server.db*; df -h /"
+journalctl -u iac-controlplane --since '5 minutes ago' \
+    | grep -c 'database is locked'  # > 50/min ≈ saturation imminent
+```
 
 ---
 

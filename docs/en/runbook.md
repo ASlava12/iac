@@ -187,6 +187,37 @@ includes the SQLite DB or Postgres dump plus the signing-key
 material. Restore is offline: stop the control-plane, swap the
 state-dir, restart.
 
+For SQLite deployments, two complementary recovery paths are
+validated:
+
+1. **Hot snapshot via `VACUUM INTO`** (Phase 9-F7,
+   `trial/scenarios/fleet-f7-backup-restore.sh`). RPO ≈ snapshot
+   wall-time (~45 s on a 947 MB DB), RTO ≈ 1.6 s. No service
+   restart on the source. **Always use `VACUUM INTO`, not `.backup`**
+   — `.backup` retries on every page-level SQLITE_BUSY and stalls
+   forever against a busy writer; `VACUUM INTO` is a single
+   transactional snapshot that completes in disk-write time.
+
+2. **Continuous WAL replication via Litestream** (Phase 11 prep,
+   `trial/scenarios/setup-litestream-replication.sh`). Sub-second
+   RPO (default 1 s), RTO ≈ 30 s for a typical fleet DB. Zero
+   impact on source — Litestream tails the WAL via its shadow-WAL
+   mechanism without locking against writers. Replicates SFTP to
+   `cp-spare-02:/var/lib/iac-replica/`.
+
+**Forensics caveat (lesson from F1 attempt #1).** If the CP died
+from disk-full, do **NOT** remove the WAL file before checkpointing.
+The main DB has un-checkpointed frames sitting in the WAL; deleting
+the WAL leaves the main DB malformed and `.dump` will fail. Correct
+recovery sequence:
+
+```sh
+systemctl stop iac-controlplane
+# WAL still has uncommitted frames — checkpoint FIRST.
+sqlite3 /var/lib/iac-controlplane/server.db 'PRAGMA wal_checkpoint(TRUNCATE);'
+# only NOW is it safe to move things around.
+```
+
 ---
 
 ## Common failure modes
@@ -350,6 +381,55 @@ applying the prior spec from git.
    access: admin tokens, DB passwords, control-plane signing key
    (`POST /v1/admin/signing-keys/rotate`).
 5. Document the IRC for post-incident review.
+
+### Capacity exhaustion under sustained load
+
+**Symptom:** sustained 1+ hour 5xx rate with `database is locked` /
+`disk is full` / 4-6 s INSERT latency. The SQLite write path is
+saturating.
+
+**Background — F1 trial findings.** Phase 9 fleet validation
+surfaced six distinct capacity ceilings on a 7-agent fleet running
+1 RPS submit-burst. All six are addressed in defaults; this section
+exists for operators on bigger fleets where the same patterns
+re-emerge at higher scale.
+
+| Symptom | Mechanism | Default that bounds it |
+|---|---|---|
+| `disk is full` after several hours | SQLite WAL grows unbounded (autocheckpoint pages back but doesn't truncate) | `journal_size_limit = 256 MiB` per-connection PRAGMA + periodic `wal_checkpoint(TRUNCATE)` task |
+| 4-7 s INSERT latency under load | Per-row INSERTs queue WAL frame allocation | Multi-row batched INSERTs (chunk = 100) in `record_observations` |
+| `observations` table 1 M+ rows | No per-resource cap; all observations kept until age-pruned | `observation_max_per_resource = 50` + 5-min retention interval |
+| 30 s freezes every minute | `wal_checkpoint(TRUNCATE)` blocking on contention | PASSIVE most ticks, TRUNCATE every 10th tick (so on default 60 s cadence, TRUNCATE every 10 min) |
+| Agent local DB unbounded | `record_observation` INSERTs without cap | `AGENT_OBSERVATION_HISTORY_CAP = 10` per `resource_id`, inline DELETE after each INSERT |
+| Agent stuck in 413 retry-loop | Push body > CP `max_body_bytes`, agent retries the same oversized batch | Adaptive chunked push (chunk = 500 obs, halve on 413, drop singleton) |
+
+**Tuning beyond defaults.** If the fleet outgrows defaults
+(symptom: WAL hits cap + 5xx rate climbs over hours despite no
+config changes), the tunables are in
+[`crates/iac-controlplane/src/config.rs`](../../crates/iac-controlplane/src/config.rs):
+
+- `[retention] observation_max_per_resource` — lower to shrink
+  steady-state DB. 10–20 acceptable for most observability needs.
+- `[retention] interval_secs` — lower to keep working set small.
+  60 s aggressive but fine on SSD-class storage.
+- `wal_checkpoint_interval_secs` — lower to reclaim WAL faster.
+- TODO post-Phase 11: `journal_size_limit` is hard-coded; promote
+  to config when first operator hits the 256 MiB ceiling on a
+  larger fleet.
+
+**Live triage.** If you have the
+[Phase 9 observability stack](../../trial/observability/README.md)
+deployed (Prometheus + Grafana on cp-spare-01), watch the **RSS by
+host** panel for the CP — sustained linear growth past 200 MB on
+a small fleet is the early signal. The disk-free panel catches
+the WAL-unbounded class before it becomes service-impacting.
+
+Without Grafana, poll directly:
+```sh
+ssh root@<cp> "ls -lh /var/lib/iac-controlplane/server.db*; df -h /"
+journalctl -u iac-controlplane --since '5 minutes ago' \
+    | grep -c 'database is locked'  # > 50/min ≈ saturation imminent
+```
 
 ---
 
