@@ -1111,6 +1111,40 @@ IAC_STRESS=1 IAC_ASSIGNMENT_LEASE_SECS=5 \
 SQLite ceiling — ~100 агентов или ~5 ops/sec sustained. Для бóльших
 фитов — `database_url` на Postgres (wire identical).
 
+### Real-fleet capacity envelope (Phase 9, 7-агентный VPS-trial)
+
+24-часовой soak на 7-агентном flotе (1 RPS submit-burst, ~3 200
+ресурсов на агента) показал шесть отдельных capacity ceiling'ов —
+все закрыты defaults сегодня, всё стоит знать для fleet sizing:
+
+| Механизм | Всплывает на | Bound default'ом |
+|----------|--------------|------------------|
+| SQLite WAL растёт unbounded | ~3 ч устойчивых writes | `journal_size_limit = 256 MiB` + periodic `wal_checkpoint(TRUNCATE)` |
+| `observations` table unbounded | ~4 ч | `observation_max_per_resource = 50` + 5-min retention interval |
+| `wal_checkpoint(TRUNCATE)` блокирует 30 с при contention | continuous | PASSIVE на большинстве tick'ов, TRUNCATE каждый 10-й |
+| Local agent DB unbounded | ~6 ч | `AGENT_OBSERVATION_HISTORY_CAP = 10` per resource_id |
+| Per-row INSERT-ы saturates WAL frame allocation | ~8 ч на 60 INSERT/с | Multi-row batched INSERT (chunk = 100) |
+| Agent push body > CP `max_body_bytes` | после агентского backlog | Adaptive chunked push (chunk = 500 obs, halve on 413, drop singleton) |
+
+**Tunables для outsized флитов** (10× размера trial и больше):
+
+- `[retention] observation_max_per_resource` — снизить до 10–20 для
+  observability-only deployments. 50 консервативно; trim'ит working
+  set линейно с cap.
+- `[retention] interval_secs` — снизить до 60 для флитов с
+  > 1 K observations/s. SSD-class storage minute-cadence prune
+  держит spокойно.
+- `wal_checkpoint_interval_secs` — снизить до 30 если WAL size
+  осциллирует возле `journal_size_limit`.
+
+Когда defaults перестают хватать — switch на Postgres, и per-CP
+ceiling двигается с "single-host SQLite write-throughput" на
+"network round-trip" — обычно 5–10× headroom прыжок.
+
+**Источники:** см. [TASKS_ARCHIVE.md](../../TASKS_ARCHIVE.md) разделы
+`Phase 9-F1-fix-1` через `Phase 9-F1-fix-5` для полного forensic
+write-up каждой находки.
+
 ## Postgres deployment
 
 ```toml

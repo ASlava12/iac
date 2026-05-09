@@ -1162,6 +1162,40 @@ Observed envelope (developer laptop, single-process SQLite):
 SQLite ceiling: ~100 agents or ~5 ops/sec sustained. For larger
 fleets, switch `database_url` to Postgres — wire format identical.
 
+### Real-fleet capacity envelope (Phase 9, 7-agent VPS trial)
+
+A 24 h soak on a 7-agent fleet (1 RPS submit-burst, ~3 200 resources
+per agent) surfaced six distinct capacity ceilings — all closed by
+defaults today, all worth knowing about for fleet sizing:
+
+| Mechanism | Surfaces at | Bound by default |
+|-----------|-------------|------------------|
+| SQLite WAL grows unbounded | ~3 h sustained writes | `journal_size_limit = 256 MiB` + periodic `wal_checkpoint(TRUNCATE)` |
+| `observations` table grows unbounded | ~4 h | `observation_max_per_resource = 50` + 5-min retention interval |
+| `wal_checkpoint(TRUNCATE)` blocks 30 s under contention | continuous | PASSIVE most ticks, TRUNCATE every 10th |
+| Agent local DB grows unbounded | ~6 h | `AGENT_OBSERVATION_HISTORY_CAP = 10` per resource_id |
+| Per-row INSERTs saturate WAL frame allocation | ~8 h at 60 inserts/s | Multi-row batched INSERT (chunk = 100) |
+| Agent push body > CP `max_body_bytes` | After agent backlog | Adaptive chunked push (chunk = 500 obs, halve on 413, drop singleton) |
+
+**Tunables for outsized fleets** (10× the trial size and beyond):
+
+- `[retention] observation_max_per_resource` — lower to 10–20 for
+  observability-only deployments. 50 is conservative; trims working
+  set linearly with the cap.
+- `[retention] interval_secs` — lower to 60 for fleets writing
+  > 1 K observations/s. SSD-class storage handles minute-cadence
+  prune comfortably.
+- `wal_checkpoint_interval_secs` — lower to 30 if you observe WAL
+  size oscillating near `journal_size_limit`.
+
+When defaults stop being enough, switch to Postgres and the per-CP
+ceiling moves from "single-host SQLite write-throughput" to
+"network round-trip" — typically a 5–10× headroom jump.
+
+**Sources:** see [TASKS_ARCHIVE.md](../TASKS_ARCHIVE.md) sections
+`Phase 9-F1-fix-1` through `Phase 9-F1-fix-5` for the full forensic
+write-up of each finding.
+
 ## Postgres deployment
 
 ```toml
