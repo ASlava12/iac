@@ -278,7 +278,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 tokio::select! {
                     _ = tick.tick() => {
                         cycle = cycle.wrapping_add(1);
-                        let force = cycle % TRUNCATE_EVERY_N == 0;
+                        let force = cycle.is_multiple_of(TRUNCATE_EVERY_N);
                         match wal_state.store.wal_checkpoint(force).await {
                             Ok(()) => tracing::debug!(force_truncate = force, "wal_checkpoint ok"),
                             Err(e) => tracing::warn!(error = %e, "wal_checkpoint failed; will retry next tick"),

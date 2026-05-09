@@ -657,8 +657,7 @@ impl Store {
         let total = u32::try_from(items.len()).unwrap_or(u32::MAX);
         for chunk in items.chunks(BATCH_SIZE) {
             // Build "(?,?,?,?,?,?,?,?), (?,?,?,?,?,?,?,?), ..."
-            let placeholders = std::iter::repeat("(?,?,?,?,?,?,?,?)")
-                .take(chunk.len())
+            let placeholders = std::iter::repeat_n("(?,?,?,?,?,?,?,?)", chunk.len())
                 .collect::<Vec<_>>()
                 .join(",");
             let stmt = format!(
