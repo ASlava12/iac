@@ -1,0 +1,37 @@
+# Phase 10: trim docker build context. Without this, every
+# `docker build -f trial/docker/Dockerfile.* .` ships the full repo
+# (target/ is several GiB; .git/ is hundreds of MiB) into the build
+# daemon before evaluating COPY layers — slow on 64 GiB / 12-thread
+# hosts, painful on smaller ones.
+
+# Build artefacts — recreated inside the container anyway.
+target/
+*.o
+*.rmeta
+*.rlib
+
+# Git metadata — not consulted by cargo.
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# IDE / editor noise.
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local-only state from the trial harness — must NOT leak into images.
+trial/fleet/inventory.toml
+trial/observability/*.local
+**/*.pem
+**/*.key
+.cargo/credentials.toml
+.env
+.env.local
+
+# Logs / scratch.
+*.log
+/tmp/
