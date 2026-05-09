@@ -1,19 +1,49 @@
 # Phase 8: trial agent image.
 #
 # Build context is the repo root: `docker build -f trial/docker/Dockerfile.agent .`
+#
+# Phase 10: build-args expose two knobs for size-constrained edge
+# deployments (router-class targets, OpenWrt containers):
+#
+#   --build-arg AGENT_FEATURES=""           # disable WASM provider
+#                                           #   (drops wasmtime + cranelift,
+#                                           #    -8.7 MiB default release)
+#   --build-arg AGENT_PROFILE=release-mini  # opt-level=z + lto=fat,
+#                                           #   another -4 MiB
+#
+# Combined: 5.6 MiB iac-agent vs 18.7 MiB at defaults.
 
 FROM rust:1.95-slim-bookworm AS build
 WORKDIR /src
+
+# Empty FEATURES arg → `--no-default-features`. Default keeps the
+# wasm provider enabled (most x86_64 / aarch64 deployments want it).
+ARG AGENT_FEATURES=wasm
+ARG AGENT_PROFILE=release
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock Cross.toml ./
+COPY .cargo ./.cargo
 COPY crates ./crates
 
-RUN cargo build --release --bin iac-agent
+# Resolve features to cargo flags. Empty AGENT_FEATURES → strip default-features.
+RUN if [ -z "$AGENT_FEATURES" ]; then \
+        cargo build --profile "$AGENT_PROFILE" --bin iac-agent --no-default-features; \
+    else \
+        cargo build --profile "$AGENT_PROFILE" --bin iac-agent --features "$AGENT_FEATURES"; \
+    fi
+# Normalise output path: profile=release lives in target/release; named
+# profiles (e.g. release-mini) live in target/<profile-name>/. Move
+# whichever was built to a known location for the runtime stage COPY.
+RUN if [ "$AGENT_PROFILE" = "release" ]; then \
+        cp /src/target/release/iac-agent /tmp/iac-agent; \
+    else \
+        cp "/src/target/$AGENT_PROFILE/iac-agent" /tmp/iac-agent; \
+    fi
 
 # Runtime stage. Trial agents need:
 #   * iproute2 → tc/netem for chaos scripts that operate from inside
@@ -34,7 +64,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd --system --gid 1501 iac && \
     useradd --system --uid 1501 --gid 1501 --no-create-home iac
 
-COPY --from=build /src/target/release/iac-agent /usr/local/bin/iac-agent
+COPY --from=build /tmp/iac-agent /usr/local/bin/iac-agent
 COPY trial/docker/entrypoint-agent.sh /usr/local/bin/entrypoint-agent.sh
 RUN chmod +x /usr/local/bin/entrypoint-agent.sh
 
