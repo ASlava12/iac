@@ -72,7 +72,16 @@ fn default_assignment_days() -> u32 {
     30
 }
 fn default_interval_secs() -> u64 {
-    300
+    // Phase 9-F1-fix-6 (gap-#6 from F1 #6, 2026-05-09): lowered
+    // from 300 (5 min) to 60 (1 min). On F1's 7-agent fleet with
+    // ~5 000 resources per agent, 5-min cadence let observations
+    // accumulate ~600 K rows between prunes — that working set
+    // burst-loaded the WAL above the 256 MiB cap each cycle and
+    // throttled writes. 1-min cadence shrinks each burst by 5×.
+    // Paired with the journal_size_limit bump to 1 GiB in
+    // store.rs, this gives 20× more sustained-write headroom
+    // than fix-5 defaults.
+    60
 }
 fn default_observation_max_per_resource() -> u32 {
     50

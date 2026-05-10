@@ -198,8 +198,8 @@ impl Store {
                         .execute(&mut *conn)
                         .await?;
                     // Phase 9-F1 (real-fleet finding): cap the WAL
-                    // file size at 256 MiB. Without this, sustained
-                    // mixed read/write traffic (heartbeats fan-out
+                    // file size. Without this, sustained mixed
+                    // read/write traffic (heartbeats fan-out
                     // checkpoints behind readers; submit/result
                     // writes keep adding WAL frames) makes the WAL
                     // grow unboundedly even though `wal_autocheckpoint
@@ -214,7 +214,22 @@ impl Store {
                     // size after every successful checkpoint, so
                     // even if the checkpoint frequency drifts the
                     // disk usage stays bounded.
-                    sqlx::query(&sql("PRAGMA journal_size_limit = 268435456"))
+                    //
+                    // Phase 9-F1-fix-6 (gap-#6 from F1 #6, 2026-05-09):
+                    // bumped from 256 MiB to 1 GiB. The previous cap
+                    // bottomed out on F1's 7-agent, ~5 000-resource-
+                    // per-agent steady state — the WAL touched cap
+                    // continuously, SQLite throttled writes, INSERT
+                    // latency climbed to 4-6 s, longevity failure rate
+                    // climbed linearly to ~11 %. 1 GiB gives 4× more
+                    // headroom under sustained scaling; combined with
+                    // the more aggressive retention interval (60 s
+                    // instead of 300 s), the working set stays bounded
+                    // well within the new ceiling. On router-class
+                    // hardware (8-32 MiB flash), operators override
+                    // this in their wal_checkpoint configuration —
+                    // tracked as a future config-knob TODO.
+                    sqlx::query(&sql("PRAGMA journal_size_limit = 1073741824"))
                         .execute(&mut *conn)
                         .await?;
                     Ok(())
