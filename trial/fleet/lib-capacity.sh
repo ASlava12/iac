@@ -31,13 +31,16 @@ capacity_health_report() {
     echo "  $title:"
 
     local cap
+    # `grep -c` already prints "0" on no-match (with exit 1); using
+    # `|| echo 0` doubles the output and breaks the single-line
+    # `read -r` below. Use `|| true` to suppress the exit code only.
     cap=$(ssh_to "$CP_IP" "
         db=\$(stat -c%s /var/lib/iac-controlplane/server.db 2>/dev/null || echo 0)
         wal=\$(stat -c%s /var/lib/iac-controlplane/server.db-wal 2>/dev/null || echo 0)
         df_avail=\$(df -k / | awk 'NR==2 {print \$4}')
         df_total=\$(df -k / | awk 'NR==2 {print \$2}')
-        busy=\$(journalctl -u iac-controlplane --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'database is locked' || echo 0)
-        slow=\$(journalctl -u iac-controlplane --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'slow statement' || echo 0)
+        busy=\$(journalctl -u iac-controlplane --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'database is locked' || true)
+        slow=\$(journalctl -u iac-controlplane --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'slow statement' || true)
         echo \"\$db \$wal \$df_avail \$df_total \$busy \$slow\"
     " 2>/dev/null || echo "0 0 0 0 0 0")
     local db_b wal_b avail_kb total_kb busy slow
