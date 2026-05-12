@@ -72,16 +72,32 @@ fn default_assignment_days() -> u32 {
     30
 }
 fn default_interval_secs() -> u64 {
-    // Phase 9-F1-fix-6 (gap-#6 from F1 #6, 2026-05-09): lowered
-    // from 300 (5 min) to 60 (1 min). On F1's 7-agent fleet with
-    // ~5 000 resources per agent, 5-min cadence let observations
-    // accumulate ~600 K rows between prunes — that working set
-    // burst-loaded the WAL above the 256 MiB cap each cycle and
-    // throttled writes. 1-min cadence shrinks each burst by 5×.
-    // Paired with the journal_size_limit bump to 1 GiB in
-    // store.rs, this gives 20× more sustained-write headroom
-    // than fix-5 defaults.
-    60
+    // Phase 9-F1-fix-7 (gap-#7 from F1 #7, 2026-05-11): kept at
+    // 300 (was bumped to 60 in fix-6, then reverted).
+    //
+    // The fix-6 hypothesis was: 5-min cadence lets observations
+    // accumulate too much between prunes; shrink the cadence to
+    // 1 min for smaller bursts. Reality on F1 #7: 1-min cadence
+    // makes the retention DELETE itself a continuous competitor
+    // for the SQLite write path. Slow-statement breakdown around
+    // the F1 #7 peak (h11-h13 UTC, when failure rate hit 50 %):
+    //
+    //     4220 × INSERT INTO observations slow
+    //      478 × DELETE FROM observations slow
+    //      876 × INSERT INTO operations slow
+    //
+    // The DELETE-from-observations slow-count is the smoking gun:
+    // every minute, a fresh retention pass tries to DELETE rows
+    // by per-(agent, resource) cap; with 5 000 resources/agent
+    // × 7 agents that's a hot DELETE against the busiest table,
+    // blocking concurrent INSERTs. Reverting to 5 min lets one
+    // batch finish before the next starts; the WAL bump to
+    // 1 GiB (fix-6) gives the per-burst working set headroom.
+    //
+    // Pair this with DELETE chunking (fix-7, in the per-resource
+    // cap path) so a single retention pass doesn't lock the
+    // table for the whole pruning window either.
+    300
 }
 fn default_observation_max_per_resource() -> u32 {
     50
@@ -221,6 +237,24 @@ async fn prune_observations_per_resource(
     store: &Store,
     max_per_resource: i64,
 ) -> ApiResult<u64> {
+    // Phase 9-F1-fix-7 (gap-#7 from F1 #7, 2026-05-11): chunked DELETE.
+    //
+    // The single all-at-once `DELETE FROM observations WHERE id IN
+    // (huge subquery)` held a write lock on the table for the entire
+    // pruning window, blocking concurrent INSERTs / UPDATEs from the
+    // agent fan-out. On F1 #7's load (~600 K candidate rows per pass)
+    // each pass blocked the write path for seconds, throttling
+    // legitimate observation pushes and pushing the failure rate
+    // up to 50 % at peak.
+    //
+    // Chunked approach: cap each DELETE at CHUNK_SIZE rows; loop
+    // until no more candidates. Each chunk is a short transaction
+    // that other writers can interleave with. The 50 ms sleep
+    // between chunks gives the WAL writer time to commit + checkpoint
+    // queued frames between locks — without it, retention still
+    // dominates the write path even with small chunks.
+    const CHUNK_SIZE: i64 = 5_000;
+    const INTER_CHUNK_PAUSE_MS: u64 = 50;
     let q = "DELETE FROM observations
              WHERE id IN (
                  SELECT id FROM (
@@ -232,12 +266,23 @@ async fn prune_observations_per_resource(
                      FROM observations
                  ) AS ranked
                  WHERE rn > ?
+                 LIMIT ?
              )";
-    let res = sqlx::query(&sql(q))
-        .bind(max_per_resource)
-        .execute(store.pool())
-        .await?;
-    Ok(res.rows_affected())
+    let mut total = 0u64;
+    loop {
+        let res = sqlx::query(&sql(q))
+            .bind(max_per_resource)
+            .bind(CHUNK_SIZE)
+            .execute(store.pool())
+            .await?;
+        let n = res.rows_affected();
+        total += n;
+        if n < CHUNK_SIZE as u64 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(INTER_CHUNK_PAUSE_MS)).await;
+    }
+    Ok(total)
 }
 
 fn cutoff_string(days: i64) -> String {

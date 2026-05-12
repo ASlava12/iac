@@ -18,13 +18,15 @@ operations_per_minute = 100000
 
 [retention]
 audit_days = 7
-# Phase 9-F1-fix-2 + fix-6: per-resource cap + prune cadence.
-# Phase 9-F1-fix-6 (2026-05-09) lowered interval_secs from 300 to 60
-# after F1 #6 showed sustained 7-11 % failure rate at 5-min cadence
-# with 5 000 resources/agent. The defaults now match these values;
-# pinning here is defensive in case a future default change.
+# Phase 9-F1-fix-2 + fix-7: per-resource cap + prune cadence.
+# fix-6 attempted interval_secs=60 to shrink per-burst working set,
+# but the 1-min cadence made retention DELETE itself a continuous
+# competitor for the write path — F1 #7 failure rate hit 50 % at
+# peak. fix-7 reverts to 300 (5 min) and pairs it with chunked
+# DELETE inside prune_observations_per_resource so a single pass
+# can't lock observations for the full pruning window.
 observation_max_per_resource = 50
-interval_secs = 60
+interval_secs = 300
 
 [tls]
 mode = "none"
