@@ -144,8 +144,15 @@ failure_trend_report() {
     done <<< "$trend"
 
     # Slope detection. Two complementary triggers:
-    #  1. last-hour rate > 2× the first non-zero hour (catches "we
-    #     started clean and the pattern emerged" — F1 #6's shape).
+    #  1. last-hour rate > 2× the first non-zero hour AND last-hour
+    #     ≥ 0.5 % absolute (catches "we started clean and the pattern
+    #     emerged" — F1 #6's shape). The 0.5 % floor stops the
+    #     detector from firing on noise: F1 #9 saw 0.03 % → 0.24 %
+    #     in early hours which is an 8× ratio but utterly under SLA;
+    #     without the floor the harness reports false-positive
+    #     "deteriorating" on healthy runs. F1 #6-#8's actual
+    #     deterioration crossed 0.5 % within an hour of starting, so
+    #     the floor doesn't mask real bad runs.
     #  2. last-hour rate sustained ≥ 1 % over multiple hours (catches
     #     "we entered the danger zone and stayed there" even if the
     #     rate is steady, not growing).
@@ -155,7 +162,7 @@ failure_trend_report() {
     first_nonzero=$(printf '%s\n' "$trend" \
         | awk '$4+0 > 0 { print $4; exit }')
     if [ -n "$first_nonzero" ] \
-       && awk -v f="$first_nonzero" -v l="$last_pct" 'BEGIN { exit (f > 0 && l > 2*f ? 0 : 1) }'; then
+       && awk -v f="$first_nonzero" -v l="$last_pct" 'BEGIN { exit (f > 0 && l > 2*f && l >= 0.5 ? 0 : 1) }'; then
         echo "    ✗ slope: last-hour rate ${last_pct}% > 2× first-non-zero ${first_nonzero}% — deteriorating"
         trend_fail=1
     fi
