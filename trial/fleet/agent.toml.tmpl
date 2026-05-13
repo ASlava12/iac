@@ -2,7 +2,14 @@
 # bootstrap.sh — `__AGENT_NAME__`, `__SERVER_URL__` substituted).
 state_dir         = "/var/lib/iac-agent"
 manifests_dir     = "/var/lib/iac-agent/manifests.d"
-observe_interval_secs = 10
+# Phase 9-F1-fix-8 (gap-#8 from F1 #8, 2026-05-13): raised from
+# 10 s to 60 s, matching the agent's code default. F1 #8 showed
+# 10-s cadence produces ~8 observation INSERTs/sec on the CP from
+# 7 × ~5800 managed resources — saturates SQLite single-writer
+# throughput once total resource count crosses ~2500/agent. 60-s
+# cadence (production reality for most fleets) keeps push rate
+# at ~1.4 INSERTs/sec — well within SQLite's comfort zone.
+observe_interval_secs = 60
 environment       = "fleet"
 actor             = "fleet-agent"
 server_url        = "__SERVER_URL__"

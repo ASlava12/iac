@@ -100,7 +100,20 @@ fn default_interval_secs() -> u64 {
     300
 }
 fn default_observation_max_per_resource() -> u32 {
-    50
+    // Phase 9-F1-fix-8 (gap-#8 from F1 #8, 2026-05-13): lowered
+    // from 50 to 10. The 50-row-per-resource cap was set in fix-2
+    // for "ample debugging headroom"; F1 #8 showed the per-cap
+    // working set scales with fleet × resources × cap, and at
+    // fleet=7 × resources=5800 × cap=50 = 2 M rows steady-state,
+    // SQLite single-writer throughput knees out: agents pushing
+    // observations every poll cycle vs retention DELETE-ing
+    // 600 K stale rows per pass = lock contention even with the
+    // fix-7 chunking. Cap=10 shrinks steady-state 5× (to ~400 K),
+    // keeping the working set well inside SQLite's
+    // comfort zone. Debugging-history loss is acceptable: the most
+    // recent observation per resource is always preserved, which
+    // is what drift detection actually consumes.
+    10
 }
 
 impl Default for RetentionConfig {

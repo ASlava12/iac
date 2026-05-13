@@ -21,7 +21,7 @@
 # Caps — tuned from Phase 9-F1-fix-1..5 defaults. Keep in sync with
 # crates/iac-controlplane/src/{config.rs,store.rs,retention.rs}.
 : "${CAPHEALTH_DB_MIB_CAP:=5120}"      # 5 GiB — fleet outgrew SQLite
-: "${CAPHEALTH_WAL_MIB_CAP:=256}"      # journal_size_limit (fix #1)
+: "${CAPHEALTH_WAL_MIB_CAP:=1024}"     # journal_size_limit (fix #6: 256→1024)
 : "${CAPHEALTH_DISK_PCT_CAP:=80}"      # disk-full pre-warning
 : "${CAPHEALTH_BUSY_5M_CAP:=50}"       # ~10/min — saturation
 : "${CAPHEALTH_SLOW_5M_CAP:=100}"      # SQLite write-path blocked
