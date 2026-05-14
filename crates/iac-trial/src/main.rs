@@ -137,13 +137,46 @@ fn build_client(_token: &str) -> Result<reqwest::Client> {
 /// required when the controlplane has more than one agent in the
 /// target environment (the routing rule rejects ambiguous resources;
 /// see `route_resource` in `iac-controlplane::store`).
+/// Phase 9-F1-fix-9: bound resource path namespace so long-running
+/// soaks don't accumulate unbounded unique resources on the CP
+/// (which makes the per-resource cap subquery slow even though the
+/// cap itself works correctly per-resource). F1 #6-#9 all saw
+/// `observations` table grow to 1.7-2 M rows because each submission
+/// produced a fresh ULID-derived path → resource_id, so cap=10
+/// still allowed thousands of distinct (agent, resource) pairs to
+/// accumulate over a 24h trial.
+///
+/// Fix: counter modulo POOL. Path = `/tmp/trial-{host}-{idx%POOL}.txt`,
+/// so each (host, slot) pair is re-used across submissions. POOL
+/// defaults to 200; for fleet-7-agent trial that bounds fleet-wide
+/// resource count to 7 × 200 = 1400, well within SQLite's comfort
+/// zone at all observation cap levels.
+///
+/// Tunable via `TRIAL_RESOURCE_POOL_SIZE` env var so stress variants
+/// (F1-density, F1-burst) can exercise larger working sets without
+/// recompiling.
+const DEFAULT_TRIAL_RESOURCE_POOL: u64 = 200;
+static TRIAL_RESOURCE_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 fn make_file_manifest(env: &str, host_selector: Option<&str>) -> serde_json::Value {
-    let id = ulid::Ulid::new();
-    let path = format!("/tmp/trial-{id}.txt");
+    let pool = std::env::var("TRIAL_RESOURCE_POOL_SIZE")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_TRIAL_RESOURCE_POOL);
+    let iter = TRIAL_RESOURCE_COUNTER
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let slot = iter % pool;
+    let host_tag = host_selector.unwrap_or("any");
+    let path = format!("/tmp/trial-{host_tag}-{slot:04}.txt");
     let mut spec = serde_json::json!({
         "path": path,
         "mode": "0644",
-        "content": format!("trial run {id}\n"),
+        // Include `iter` so successive submissions to the same slot
+        // produce different content (an actual write happens each
+        // time, not a no-op no-change apply).
+        "content": format!("trial iter={iter} slot={slot}\n"),
     });
     if let Some(host) = host_selector
         && let Some(map) = spec.as_object_mut()
@@ -157,7 +190,7 @@ fn make_file_manifest(env: &str, host_selector: Option<&str>) -> serde_json::Val
         "apiVersion": "iac.example/v1",
         "kind": "file",
         "metadata": {
-            "name": format!("trial-{id}"),
+            "name": format!("trial-{host_tag}-{slot:04}"),
             "environment": env,
         },
         "spec": spec,
