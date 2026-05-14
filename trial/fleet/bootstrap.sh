@@ -63,11 +63,16 @@ ssh_to "$CP_IP" '
     chmod 0755 /var/lib/iac-controlplane
 '
 scp_to "$TARGET_DIR/iac-controlplane" "$CP_IP" /usr/local/bin/iac-controlplane
+# iac-trial runs from the CP (operator launches via fleet-f1-soak.sh, etc.).
+# Without this scp the CP keeps whatever binary was placed there manually
+# during initial provisioning, so iac-trial fixes never reach the workload
+# generator. F1 #10 fix-9 silently no-op'd because of this. Always re-deploy.
+scp_to "$TARGET_DIR/iac-trial"        "$CP_IP" /usr/local/bin/iac-trial
 scp_to "$SERVER_TOML"                  "$CP_IP" /etc/iac/server.toml
 scp_to "$FLEET_DIR/iac-controlplane.service" "$CP_IP" /etc/systemd/system/iac-controlplane.service
 ssh_to "$CP_IP" '
     set -eu
-    chmod 0755 /usr/local/bin/iac-controlplane
+    chmod 0755 /usr/local/bin/iac-controlplane /usr/local/bin/iac-trial
     chmod 0600 /etc/iac/server.toml
     systemctl daemon-reload
     systemctl enable iac-controlplane >/dev/null 2>&1
