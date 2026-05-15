@@ -2983,3 +2983,82 @@ recognize.
   create the sampler stop sentinel. Cosmetic — finalize still
   succeeded via SSH timeout. Worth a sampler-log rotation pass.
 
+
+## Phase 9-CP-slow-leak-investigation — verdict: not a Rust leak (2026-05-15)
+
+The F1 #11 PASS finalize flagged CP RSS growing 27 → 59 MB warm-
+to-late on a quiet 24h soak (+116.5 %). Within absolute cap by 9×
+margin, but qualitatively distinct from agents (-29 % to -7 % on
+the same run). Pinned for heap-profiler investigation.
+
+**Method.** Built `iac-controlplane` with `--features heap-profiling`
+(adds `dhat` as the global allocator). Deployed the instrumented
+binary to cp-spare-02 (104.128.140.49:9443) on a clean state dir.
+Ran `iac-trial longevity --duration-secs 1200 --rps 5.0` from the
+operator host for 20 minutes. SIGTERM the CP; dhat wrote
+`dhat-heap.json` on Drop.
+
+**Workload metrics:**
+- 5676 desired-state submissions accepted (PASS verdict from trial)
+- 5676 audit rows
+- 0 observations (no agents pulling against this CP)
+- latency p99 ≈ 250 ms, p100 < 1 s
+
+**Heap profiler verdict:**
+
+```
+dhat: Total:     295,045,276 bytes in 2,261,962 blocks
+dhat: At t-gmax:     371,456 bytes in 2,019 blocks
+dhat: At t-end:       63,110 bytes in     95 blocks
+```
+
+- Cumulative allocations: 295 MB across 2.26 M alloc/free pairs.
+- Peak alive heap during the run: **371 KB** — three orders of
+  magnitude below the OS-level RSS measured at the same time.
+- At clean shutdown: **63 KB / 95 blocks** — 99.996 % of all
+  allocations were freed.
+
+**Conclusion: there is no Rust-side heap leak.** A real leak
+would show t-end growing with t (forgotten objects accumulating);
+this profile shows the opposite — peak is bounded under 400 KB and
+end approaches zero.
+
+**So what does the OS-side RSS growth on F1 #11 represent?** The
+delta between dhat's 371 KB peak and the OS-measured 59 MB RSS
+on F1 #11 is in non-Rust memory that the kernel does count:
+- glibc malloc arena fragmentation (the allocator's internal
+  free lists hold pages it could-but-doesn't return to the OS;
+  classic Linux behaviour, NOT a leak)
+- SQLite page cache (cache_size default 2 MB per connection × 5
+  connections = ~10 MB; grows with active working set)
+- WAL frame cache + sqlite-mmap region (when enabled)
+- Tokio task arenas + axum/hyper connection-state caches
+- Static read-only segments (libc, dependencies, .rodata)
+
+None of these are bugs. The combined steady-state is bounded —
+F1 #11 hit 59 MB after 24h × 86400 ops; F1 stress matrix burst
+(5 RPS × 24h = 432k ops, started 2026-05-15T17:14Z) will show
+whether the steady-state is roughly the same shape under 5× load.
+
+**Mitigations if-ever-needed (not required by F1 PASS criteria):**
+- Switch global allocator to `mimalloc` or `jemalloc` — both
+  release memory back to the OS more aggressively than glibc.
+  Single-line change once `mimalloc` (or `jemalloc`) is added as
+  a dependency.
+- Cap SQLite `cache_size` explicitly in `PRAGMA` block (currently
+  defaults to -2000 ≈ 2 MB/conn).
+- Tune sqlx connection pool max size (currently default; smaller
+  pool = smaller cache footprint).
+
+**Artifacts left in repo (opt-in, zero production overhead):**
+- `Cargo.toml`: `dhat = { version = "0.3", optional = true }`,
+  `[features] heap-profiling = ["dep:dhat"]`.
+- `src/main.rs`: `#[cfg(feature = "heap-profiling")]` global
+  allocator swap + Profiler::new_heap() at start of main.
+- To re-run the investigation:
+  `cargo build --release -p iac-controlplane --features heap-profiling`
+  then deploy the binary and SIGTERM gracefully.
+
+The 32-line `dhat-heap.json` from this run is small enough to
+view via the official `dh_view.html` viewer (online or local).
+

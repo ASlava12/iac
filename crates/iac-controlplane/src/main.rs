@@ -21,6 +21,17 @@ use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Notify;
 
+// Phase 9 follow-up: optional heap profiling for the CP slow-leak
+// investigation. The dhat crate hooks into the global allocator only
+// when the `heap-profiling` cargo feature is enabled; the production
+// binary has zero overhead from it. The profiler writes a
+// `dhat-heap.json` file in the working directory when its `Profiler`
+// is dropped (on clean shutdown). Inspect the file with the dhat
+// viewer.
+#[cfg(feature = "heap-profiling")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 #[derive(Parser, Debug)]
 #[command(name = "iac-controlplane", version, about = "IaC control-plane API server (Phase 2a)")]
 struct Cli {
@@ -45,6 +56,15 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
+    // Phase 9 follow-up: when built with `--features heap-profiling`,
+    // arm the dhat profiler for the lifetime of the process. The
+    // `Profiler` must outlive every allocation we want to track, so
+    // bind it here at the start of main() and let it drop after the
+    // tokio runtime returns (which writes dhat-heap.json next to
+    // the working directory).
+    #[cfg(feature = "heap-profiling")]
+    let _dhat_profiler = dhat::Profiler::new_heap();
+
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 

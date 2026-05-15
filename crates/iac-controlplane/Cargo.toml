@@ -54,6 +54,16 @@ rcgen = { workspace = true }
 # Phase 7da.1: ssh_push worker keeps a TempDir for ControlMaster sockets.
 tempfile = { workspace = true }
 
+# Phase 9 follow-up: heap profiling (CP RSS grew 27→59 MB over a quiet
+# 24h F1 #11 soak; agents stable). Enabled via `--features heap-profiling`
+# for ad-hoc investigation; default off so the production binary stays
+# unaffected. The dhat profiler swaps in as the global allocator only
+# when the feature is on, writes dhat-heap.json on Drop.
+dhat = { version = "0.3", optional = true }
+
+[features]
+heap-profiling = ["dep:dhat"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 iac-agent = { workspace = true }
