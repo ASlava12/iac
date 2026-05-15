@@ -84,28 +84,34 @@ say "$CP_IP" "audit chain start tip: $chain_start"
 echo
 echo "=== Phase A — CP swap ==="
 
-# 1. Submit a long-tail op via iac-trial single-shot. iac-trial's
-#    `submit-burst` creates resources; we want one that takes >60 s
-#    to converge. Easiest: submit ~50 file operations targeting one
-#    agent — the agent's executor processes them sequentially, so
-#    50 ops × ~1.5 s each ≈ 75 s mid-flight window.
-say "$CP_IP" "submitting 50-op burst targeting agent-01 (will run for ~75 s)"
+# 1. Submit a 50-op burst PRE-swap and wait for it to finish. The
+#    "in-flight ops survive" contract is: ops that v1 CP accepted
+#    must still complete after v2 CP takes over. We don't try to
+#    keep ops submitting DURING the swap window — that would test
+#    "CP available during binary swap", which is a different (and
+#    impossible-for-non-HA-single-host-CP) property. The relevant
+#    test is "v1-accepted ops eventually reach the agent and the
+#    agent's result eventually lands in the v2 audit chain."
+say "$CP_IP" "submitting 50-op pre-swap burst targeting agent-01"
 ssh_to "$CP_IP" "
-    nohup /usr/local/bin/iac-trial \
+    /usr/local/bin/iac-trial \
         --server-url http://127.0.0.1:$CP_PORT \
         --admin-token '$ADMIN_TOKEN' \
         --environment fleet \
         --targets agent-01 \
-        submit-burst --count 50 --rps 1.0 > $F6_DIR/burst-A.log 2>&1 &
-    echo \$! > $F6_DIR/burst-A.pid
+        submit-burst --count 50 --rps 5.0 > $F6_DIR/burst-A.log 2>&1
 "
+burst_exit=$(ssh_to "$CP_IP" "tail -1 $F6_DIR/burst-A.log | grep -oE 'PASS|FAIL' || echo unknown")
+say "$CP_IP" "burst-A pre-swap verdict: $burst_exit"
+[ "$burst_exit" = "PASS" ] || { echo "FAIL: pre-swap burst didn't exit PASS — CP-v1 broken before swap" >&2; exit 1; }
 
-# Wait long enough for some to land but not all.
-sleep 15
+# 2. Snapshot the audit chain tip on v1 BEFORE the swap.
+chain_pre_swap=$(ssh_to "$CP_IP" "curl -fsS -H 'Authorization: Bearer $ADMIN_TOKEN' http://127.0.0.1:$CP_PORT/v1/audit/chain-tip | jq -r '.last_id'")
+say "$CP_IP" "audit chain pre-swap: $chain_pre_swap"
 
-# 2. Mid-flight: swap CP binary.
+# 3. Swap CP binary.
 swap_started=$(date +%s)
-say "$CP_IP" "stopping iac-controlplane (mid-burst)"
+say "$CP_IP" "stopping iac-controlplane"
 ssh_to "$CP_IP" "systemctl stop iac-controlplane"
 
 scp_to "$V2_BIN_DIR/iac-controlplane" "$CP_IP" /usr/local/bin/iac-controlplane.v2-staging
@@ -128,37 +134,35 @@ swap_secs=$((swap_done - swap_started))
 say "$CP_IP" "CP-v2 healthy after ${swap_secs}s downtime"
 [ $i -ge 30 ] && { echo "FAIL: CP-v2 didn't come up" >&2; exit 1; }
 
-# 3. Wait for the burst to finish (it should resume against the new
-#    CP without re-registration — agent has its bearer token already).
-say "$CP_IP" "waiting for burst to finish post-swap"
-burst_pid=$(ssh_to "$CP_IP" "cat $F6_DIR/burst-A.pid")
+# 4. Wait for agent-01 to eventually report the 50 ops as completed
+#    on the v2 CP. CP exposes `assignments?status=succeeded` count
+#    per agent; the audit chain should also advance by ~50 + per-op
+#    overhead events. We poll for the chain to grow past the
+#    pre-swap tip by at least 50 — heuristic but enough to confirm
+#    that v1-accepted ops did flow through v2's audit pipeline.
+say "$CP_IP" "polling for agent-01 to drain 50 in-flight ops (audit chain advances ≥50 past pre-swap tip)"
+chain_target=$((chain_pre_swap + 50))
 i=0
+chain_now=0
 while [ $i -lt 120 ]; do
-    if ! ssh_to "$CP_IP" "kill -0 $burst_pid 2>/dev/null"; then
-        break
-    fi
+    chain_now=$(ssh_to "$CP_IP" "curl -fsS -H 'Authorization: Bearer $ADMIN_TOKEN' http://127.0.0.1:$CP_PORT/v1/audit/chain-tip | jq -r '.last_id'" 2>/dev/null || echo 0)
+    [ "$chain_now" -ge "$chain_target" ] && break
     i=$((i+1))
-    sleep 1
+    sleep 2
 done
-
-if [ $i -ge 120 ]; then
-    echo "FAIL: burst-A didn't finish 2 min after CP-v2 came up" >&2
-    ssh_to "$CP_IP" "tail -20 $F6_DIR/burst-A.log"
-    exit 1
+if [ "$chain_now" -lt "$chain_target" ]; then
+    say "$CP_IP" "✗ audit chain only reached $chain_now (target $chain_target) — in-flight ops did NOT drain after swap"
 fi
-say "$CP_IP" "burst-A finished post-swap"
-
-# 4. Verify burst's exit code by checking trial log for terminator.
-burst_exit=$(ssh_to "$CP_IP" "tail -1 $F6_DIR/burst-A.log | grep -oE 'PASS|FAIL' || echo unknown")
-say "$CP_IP" "burst-A verdict: $burst_exit"
+say "$CP_IP" "audit chain post-drain: $chain_now (target $chain_target)"
 
 # Audit chain still verifies?
 verify_a=$(ssh_to "$CP_IP" "curl -fsS -H 'Authorization: Bearer $ADMIN_TOKEN' http://127.0.0.1:$CP_PORT/v1/audit/verify | jq -r '.ok // false'")
 say "$CP_IP" "audit verify post-Phase-A: $verify_a"
 
 phase_a_ok=PASS
-[ "$burst_exit" = "PASS" ] || phase_a_ok=FAIL
-[ "$verify_a" = "true" ]   || phase_a_ok=FAIL
+[ "$burst_exit" = "PASS" ]           || phase_a_ok=FAIL
+[ "$verify_a" = "true" ]             || phase_a_ok=FAIL
+[ "$chain_now" -ge "$chain_target" ] || phase_a_ok=FAIL
 
 # ---- Phase B: agents one at a time --------------------------------
 
@@ -191,14 +195,17 @@ for entry in "${agent_entries[@]}"; do
         systemctl start iac-agent
     "
 
-    # Wait for it to heartbeat (CP marks it healthy with last_seen
-    # newer than swap_a_started).
+    # Wait for it to heartbeat (CP marks it healthy with
+    # last_heartbeat_at newer than swap_a_started). The API exposes
+    # this as an ISO 8601 string; convert via `date -d` for
+    # numeric comparison (same fixup as F2 fix-10 commit).
     i=0
     healthy_secs=999
     while [ $i -lt 120 ]; do
-        last=$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" \
+        last_iso=$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" \
             "http://$CP_IP:$CP_PORT/v1/agents" \
-            | jq -r --arg n "$name" '.[] | select(.name==$n) | .last_seen_unix // 0')
+            | jq -r --arg n "$name" '.[] | select(.name==$n) | .last_heartbeat_at // "1970-01-01T00:00:00Z"')
+        last=$(date -d "$last_iso" +%s 2>/dev/null || echo 0)
         if [ "$last" -gt "$swap_a_started" ]; then
             healthy_secs=$(($(date +%s) - swap_a_started))
             break
