@@ -108,8 +108,12 @@ bootstrap_agent() {
     say "$ip" "($name, region=$region) installing"
     ssh_to "$ip" 'systemctl stop iac-agent 2>/dev/null || true' || true
     if [ "${RESET_AGENT_STATE:-0}" = "1" ]; then
-        say "$ip" "($name) RESET_AGENT_STATE=1 — wiping agent.db + identity.json"
-        ssh_to "$ip" 'rm -f /var/lib/iac-agent/agent.db /var/lib/iac-agent/agent.db-wal /var/lib/iac-agent/agent.db-shm /var/lib/iac-agent/identity.json'
+        say "$ip" "($name) RESET_AGENT_STATE=1 — wiping agent.db + identity.json + executor/"
+        # Phase 9-F1-fix-10: also wipe executor/ — operations/<ulid>/
+        # accumulates per-apply, and a fresh bootstrap that leaves
+        # stale executor cruft from an earlier run is misleading
+        # (looks like a clean slate but has GBs of pre-fix-10 garbage).
+        ssh_to "$ip" 'rm -rf /var/lib/iac-agent/agent.db /var/lib/iac-agent/agent.db-wal /var/lib/iac-agent/agent.db-shm /var/lib/iac-agent/identity.json /var/lib/iac-agent/executor /var/lib/iac-agent/manifests.d /var/lib/iac-agent/status.json /var/lib/iac-agent/.status.json.tmp'
     fi
     ssh_to "$ip" '
         set -eu
