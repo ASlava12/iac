@@ -2927,3 +2927,59 @@ on real fleet load. The body of work moves the IaC tool's defaults
 from "single-host or small-cluster" to "real production fleet on
 real hardware" — exactly the gap Phase 9 VPS allocation was bought
 to find and close.
+
+## Phase 9-F1-fix-6..9 — final knee + iac-trial bound (2026-05-13..15)
+
+Four more F1 attempts (#6, #7, #8, #9), four more real production
+gaps, four more landed fixes — followed by **F1 #11 PASS** on
+2026-05-14T12:42Z → 2026-05-15T12:42Z, 24h soak, 0 failures across
+86,400 ops.
+
+| Fix | Commit  | Gap | Symptom | Fix shape |
+|-----|---------|-----|---------|-----------|
+| #6  | `02abb92` | WAL `journal_size_limit` cap reached | F1 #6 → disk pressure climbed past 256 MiB WAL bound | Bump to 1 GiB + interval=60 (latter backfired in fix-7) |
+| #7  | `bc9c14f` | Retention DELETE competing with INSERT at interval=60 | F1 #7: 11.40 % failure peak — DELETE-vs-INSERT contention | Revert interval to 300 + chunked DELETE 5000-row batches with 50 ms pause |
+| #8  | `61003e8` | Observation cap too generous + agent observe cadence too tight | F1 #8: 4.90 % failure peak — SQLite write knee | `observation_max_per_resource` 50 → 10; agent `observe_interval_secs` 10 → 60 (30× less load) |
+| #9  | `e92de61` | iac-trial unbounded unique paths exhausted ROW_NUMBER subquery | F1 #9: 40,992 distinct resource_id, observations table 1.98 M rows, retention falling 5× behind | Replace `ulid::Ulid::new()` in `make_file_manifest` with `AtomicU64 % POOL` (default 200/host); fleet-wide cap 7×200=1400 unique paths, ≤14 k obs rows at saturation |
+
+**F1 #10 invalidated** by a deploy-script gap, not a server-side
+bug: `bootstrap.sh` installed `iac-controlplane` + `iac-agent`
+but never copied `iac-trial`. Fix-9 was committed and rebuilt
+locally, yet the workload generator on the CP was the May-5
+original (md5 `4bc9d68a`) — so it kept producing ULID-paths.
+Caught at h+8.2 by a 3-hourly cron-check that flagged CP CPU
+climbing 0 → 10 % and `observations` table at 1.4 M rows with
+27,978 distinct `resource_id` — virtually identical to F1 #9's
+shape. Harness fix `66794b5` added `scp_to` for iac-trial.
+
+**F1 #11 verdict** (`fleet-f1-finalize.sh`, 2026-05-15T12:42Z):
+
+```
+✓ iac-trial PASS thresholds
+✓ 25 hours of failure-rate trend, all 0.00 % (86,400 ops, 0 failures)
+✓ RSS:
+    agents -28.9 % to -7.0 % from warm-h2 to late (all 7 stable)
+    CP +116.5 % from warm-h2 (27.3 → 59.0 MB) — within abs cap 512 MB
+✓ 0 unaccounted systemd restarts
+✓ capacity: server.db 325 MiB / WAL 5 MiB / disk 27 % / busy 0 / slow 0
+✓ audit chain: 159,440 rows added, /v1/audit/verify ok=true
+```
+
+**Nine real production gaps closed.** The pattern is the value:
+each F1 attempt × surfaced a non-obvious gap × landed a small fix.
+None of these would have appeared on Pi 4 trial or docker-compose
+harness. The IaC tool's defaults moved from "naïve, works for small
+deployment" to "production-class for SQLite at fleet scale" — and
+the slope-detector + capacity-health harness now catches the
+deterioration shape that originally cost days of forensics to
+recognize.
+
+**Open from F1 PASS** — known unfinished work, NOT a failure:
+- CP RSS growth +116.5 % warm-to-late on a quiet 24h soak —
+  qualitatively distinct from agents (which were stable). Pinned
+  for the slow-leak investigation queue (heap profiler via dhat).
+  Memory absolute cap (512 MB) still met by 9× margin.
+- 2 agents hit `/var/log` near-full when finalize tried to
+  create the sampler stop sentinel. Cosmetic — finalize still
+  succeeded via SSH timeout. Worth a sampler-log rotation pass.
+

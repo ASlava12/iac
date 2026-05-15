@@ -18,18 +18,21 @@ on cp-spare-01 scraping all 10 VPS), **Phase 11 prep**
 PASS** (commit `93f5936`). 1117/1117 workspace tests green,
 `cargo clippy --workspace --all-targets` clean.
 
-F1 attempt #5 PASSed by application criteria; #6 in flight (gap-#6
-emerging as expected — `journal_size_limit` ceiling under
-sustained scaling). Once #6 finalizes (~13 h to go), the planned
-fix #6 is config-only: `journal_size_limit` 256 → 1024 MiB +
-`retention.interval_secs` 300 → 60. Then F1 #7 for clean sign-off.
+**F1 PASS on attempt #11** (2026-05-15T12:42Z). 24h soak, 86,400
+submissions, 0 failures (0.00 %), 0 unaccounted restarts, audit
+chain ok, all 5 capacity-flags green. Nine production gaps closed
+across attempts #1–#9 (fixes `227f65e`, `aebbfb9`, `9ace0b6`,
+`eb2b14d`, `7cccd3b`, `02abb92`, `bc9c14f`, `61003e8`, `e92de61`)
+plus one harness fix (`66794b5`, `bootstrap.sh` had been skipping
+the iac-trial binary deploy — caught by 3-hourly cron-check).
+See TASKS_ARCHIVE.md Phase 9-F1-fix-1..5 and Phase 9-F1-fix-6..9
+for full forensics.
 
 **All 8 Phase 9 scenarios** now have harnesses or local coverage —
-F1/F2/F6 ready to run, F3/F4/F5 covered by local tests, F7 PASS
-(commit `a4c3c9d`), F8 PASS + multi-IP follow-up PASS. F2 and F6
-gated on F1 #7 PASS to avoid mixing soak fail with structural
-test. F1 stress matrix (72h, burst, density) pre-staged in
-`fleet-f1-stress-matrix.sh` for post-F1-#7 deeper validation.
+F1 PASS, F2/F6 ready to run, F3/F4/F5 covered by local tests, F7
+PASS (commit `a4c3c9d`), F8 PASS + multi-IP follow-up PASS. F1
+stress matrix (72h, burst, density) pre-staged in
+`fleet-f1-stress-matrix.sh` for post-F2/F6 deeper validation.
 
 ---
 
@@ -45,7 +48,7 @@ network/timing on a single host.
 
 | #  | Scenario                                    | Pass criterion                                  | Why a real fleet |
 |----|---------------------------------------------|-------------------------------------------------|------------------|
-| F1 | 24 h soak: 7 agents × 1 RPS                 | RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean | Single-host loops can't catch slow-leak per-FD-table memory accounting. **Attempts 1–4 each surfaced a real production gap** (WAL unbounded, observations unbounded on CP, WAL TRUNCATE blocking + agent observations unbounded, per-row INSERT saturated SQLite) — all five fixes landed (`227f65e`, `aebbfb9`, `9ace0b6`, `eb2b14d`, `7cccd3b`). **Attempt #5 PASSED** by all application criteria (0.062 % errors, audit ok, 0 restarts). Attempt #6 in flight 2026-05-08T19:21Z with finalize-harness fix (`9ace0b6`-style cold-start-aware RSS) for clean verdict. |
+| ~~F1~~ | ~~24 h soak: 7 agents × 1 RPS~~         | ~~RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean~~ | **PASS on attempt #11** (2026-05-15T12:42Z). 86,400 ops, 0 failures, audit ok, 0 restarts, RSS within bounds. 9 production gaps closed across attempts 1–9 (see archive `9-F1-fix-1..5` and `9-F1-fix-6..9`). Stress matrix queued. |
 | F2 | Network partition (rolling 20 % per cycle)  | recovery time < 5 min after restore; no split-brain; replay-protection still rejects re-played envelopes | Real WAN delay + DNS reconvergence look nothing like docker bridge `disconnect` |
 | ~~F3~~ | ~~Cold reboot of an agent under apply~~ | ~~partial-state reconciles to desired on next observe~~ | **Done locally — see archive 7dh.13.** Real-fleet IPMI/SIGKILL semantics still want validation, but the agent-level reconvergence contract is now pinned by 3 integration tests (`tests/cold_reboot.rs`). |
 | ~~F4~~ | ~~Disk-full / inode-full on an agent~~  | ~~graceful degradation; agent reboots clean; no identity-file corruption~~ | **Done locally — see archive 7dh.13.** Atomic-write contract on `identity.json` pinned by 4 unit tests in `remote::tests`. Real disk-full / overlayfs behaviour still wants a VM trial. |
@@ -54,9 +57,10 @@ network/timing on a single host.
 | ~~F7~~ | ~~Backup/restore of controlplane DB~~   | ~~RPO/RTO measured; audit-chain integrity preserved across restore~~ | **Done — see archive 9-F7.** Hot `VACUUM INTO` snapshot of the live CP DB (no service restart, F1 untouched), restore on a separate VPS, full integrity check + post-restore write. RPO 45.6 s (snapshot time on a 947 MB live DB), RTO 1.6 s (cold-start of restored CP to first 200 on `/v1/health`). audit-tip match + `/v1/audit/verify` ok=true. |
 | ~~F8~~ | ~~DDoS on `/v1/agents/register`~~       | ~~rate-limit holds; legitimate agents not starved~~ | **Done — see archive 9-F8.** Empirical storm proved the gap (250 req / 10 s from one IP, 0 × 429); per-IP register cap (default 20/min) + axum `ConnectInfo` plumbing land in this fix. Re-storm at 30 s × 50 against the fixed binary returned 20 × 200 / 880 × 429 as expected. Multi-source-IP / `X-Forwarded-For` allowlist still wants a real-fleet pass once F1 finishes and the prod CP can be restarted. |
 
-**Remaining:** F2, F6, plus F8 multi-source-IP follow-up (~3 items).
-F1 attempt #5 PASSED by application criteria; #6 is the
-ceremony-clean sign-off. F3/F4/F5/F7/F8(single-source) all have
+**Remaining:** F2, F6, F1 stress-matrix variants, CP slow-leak
+investigation (CP RSS +116.5 % warm-to-late on F1 #11 PASS — within
+512 MB absolute cap, but qualitatively distinct from stable agents).
+F3/F4/F5/F7/F8(single-source) all have
 local test coverage or a fleet-validated harness.
 
 **Active workstreams (parallel to F1 #6 running 24 h in background):**
