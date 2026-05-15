@@ -239,3 +239,63 @@ fn rollback_restores_previous_state() {
     let observed = prov.observe(&resources2[0]).unwrap();
     assert!(!observed.present);
 }
+
+#[test]
+fn operations_dir_is_bounded_by_gc() {
+    // Phase 9-F1-fix-10. The agent's executor must NOT accumulate
+    // operations/<ulid>/ dirs forever — F1 #11 finalize uncovered
+    // 56,914 dirs on a 24h trial, 1.6 GB on a 4 GB rootfs.
+    //
+    // We use a smaller bound (`gc_operation_dirs(3)`) to make the
+    // test fast: apply 5 times, then GC to 3, then verify exactly
+    // the newest 3 ULIDs survive.
+    let reg = make_registry();
+    let dir = TempDir::new().unwrap();
+    let exec = Executor::new(&reg, dir.path().into(), "test");
+
+    // 5 distinct applies → 5 operation dirs. Use distinct names so
+    // each apply does real work (re-applying the same name would
+    // hit NoChange and is still fine, but distinct exercises the
+    // dir-naming more clearly).
+    let mut op_ids: Vec<ulid::Ulid> = Vec::new();
+    for i in 0..5 {
+        let r = vec![mk_resource(&format!("r{i}"), &format!("v{i}"))];
+        let result = exec.apply(&r).unwrap();
+        op_ids.push(result.operation.id);
+        // Ensure ULID ordering is monotonic across calls (sleep 2ms
+        // — ULID's 48-bit ms timestamp is the leading prefix).
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+
+    let ops_root = dir.path().join("operations");
+    let count_dirs = || {
+        std::fs::read_dir(&ops_root)
+            .unwrap()
+            .filter(|e| e.as_ref().is_ok_and(|e| e.file_type().is_ok_and(|t| t.is_dir())))
+            .count()
+    };
+
+    assert_eq!(count_dirs(), 5, "all 5 dirs present before GC");
+
+    exec.gc_operation_dirs(3).unwrap();
+    assert_eq!(count_dirs(), 3, "GC should leave the newest 3");
+
+    // Verify the surviving dirs are the LAST 3 (highest ULIDs).
+    for op_id in &op_ids[2..] {
+        let path = ops_root.join(op_id.to_string());
+        assert!(path.exists(), "newest dir {op_id} should survive GC");
+    }
+    for op_id in &op_ids[..2] {
+        let path = ops_root.join(op_id.to_string());
+        assert!(!path.exists(), "oldest dir {op_id} should be GC'd");
+    }
+
+    // GC is idempotent on a small dir set (≤keep).
+    exec.gc_operation_dirs(3).unwrap();
+    assert_eq!(count_dirs(), 3);
+
+    // GC on missing operations/ is a no-op (first-ever apply state).
+    let fresh = TempDir::new().unwrap();
+    let exec2 = Executor::new(&reg, fresh.path().into(), "test");
+    exec2.gc_operation_dirs(3).unwrap();
+}

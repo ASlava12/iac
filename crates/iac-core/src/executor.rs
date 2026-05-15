@@ -89,6 +89,24 @@ impl From<&VerifyOutcome> for VerifySummary {
     }
 }
 
+/// How many `operations/<ulid>/` directories to keep on disk after
+/// each apply. Phase 9-F1-fix-10: the F1 PASS finalize uncovered
+/// agent disk-pressure on 2 of 7 VPS (agent-05 / agent-07) — root
+/// cause was `executor/operations/` growing unbounded to ~57k
+/// directories (1.6 GB) over a 24h soak. Pre-fix behaviour: write
+/// per-op dir, never delete. Post-fix: prune to the newest N by
+/// ULID lexicographic order after each apply.
+///
+/// 200 chosen because: per-dir overhead is ~28 KB, so the steady-
+/// state footprint is ~5.6 MB — three orders of magnitude under
+/// the disk-pressure threshold seen on the trial VPS. It also
+/// preserves enough recent history for operator-triggered rollback
+/// (`iac-agent rollback <op-id>`) of any operation from the last
+/// several minutes of typical fleet activity. Rollback of an
+/// operation older than the most-recent-N window is not supported
+/// — the operator must re-apply the desired state instead.
+const EXECUTOR_OPERATIONS_KEEP: usize = 200;
+
 /// Executor orchestrates plan/apply against a `ProviderRegistry`.
 ///
 /// State directory layout:
@@ -102,6 +120,9 @@ impl From<&VerifyOutcome> for VerifySummary {
 ///       checkpoint.json                   # checkpoint payload
 ///       <provider workspace files>        # backups, etc.
 /// ```
+///
+/// `operations/` is bounded to the newest [`EXECUTOR_OPERATIONS_KEEP`]
+/// directories (see const above). Older dirs are deleted post-apply.
 pub struct Executor<'a> {
     registry: &'a ProviderRegistry,
     state_dir: PathBuf,
@@ -184,7 +205,52 @@ impl<'a> Executor<'a> {
         write_json(&op_dir.join("operation.json"), &result.operation)?;
         write_json(&op_dir.join("apply-result.json"), &result)?;
 
+        // GC older operations dirs (Phase 9-F1-fix-10). Errors here
+        // are logged via tracing but never propagated — a stuck GC
+        // pass must NOT fail the apply that just succeeded. The disk
+        // pressure it prevents is real but the apply itself is
+        // already on disk, so the caller's contract is preserved.
+        if let Err(e) = self.gc_operation_dirs(EXECUTOR_OPERATIONS_KEEP) {
+            tracing::warn!(error = %e, "executor operations GC failed; will retry next apply");
+        }
+
         Ok(result)
+    }
+
+    /// Keep the newest `keep` `operations/<ulid>/` directories;
+    /// delete the rest. ULIDs sort lexicographically by creation
+    /// time so `sort()` then `iter().rev()` is the natural ordering.
+    ///
+    /// Quiet on missing operations/ (first-ever apply hasn't created
+    /// it yet) and on individual delete failures (a concurrent reader
+    /// or transient ENOENT after listdir is harmless to skip).
+    fn gc_operation_dirs(&self, keep: usize) -> Result<()> {
+        let ops_root = self.state_dir.join("operations");
+        if !ops_root.exists() {
+            return Ok(());
+        }
+        let mut entries: Vec<PathBuf> = fs::read_dir(&ops_root)
+            .map_err(|e| Error::Io { path: ops_root.clone(), source: e })?
+            .filter_map(|r| r.ok())
+            .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
+            .map(|e| e.path())
+            .collect();
+        if entries.len() <= keep {
+            return Ok(());
+        }
+        // ULID file names are 26 chars and sort lex == chronologically.
+        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        let drop_count = entries.len() - keep;
+        for old in entries.iter().take(drop_count) {
+            if let Err(e) = fs::remove_dir_all(old) {
+                // ENOENT is the only "expected" race; everything else
+                // logs but doesn't propagate (see caller comment).
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(path = %old.display(), error = %e, "executor GC: remove_dir_all failed");
+                }
+            }
+        }
+        Ok(())
     }
 
     fn apply_one(&self, resource: &Resource, op: &Operation) -> Result<ApplyItem> {

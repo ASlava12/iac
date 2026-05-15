@@ -9,9 +9,13 @@
 #   * replay-protection still rejects re-played envelopes captured
 #     during the outage (Phase 7cq.2 / 7dh.12 contract).
 #
-# Strategy: rolling partition. Pick one agent at a time, block its
-# inbound/outbound to the controlplane via `iptables` for N minutes,
-# then unblock. Repeat for each of the 7 agents. Per-cycle:
+# Strategy: rolling partition. Pick one agent at a time, blackhole
+# the controlplane route via `ip route add blackhole` for N minutes,
+# then remove. We use blackhole routes rather than iptables because
+# the trial VPS images ship without iptables/nft (iproute2 only);
+# blackhole has the same observable effect on the agent (CP becomes
+# unreachable, all outbound packets dropped silently) without needing
+# extra packages. Repeat for each of the 7 agents. Per-cycle:
 #   1. snapshot CP-side state for that agent (managed count,
 #      last_seen, audit-tip) — call it A0
 #   2. partition agent X (DROP iptables rule, both directions)
@@ -78,34 +82,38 @@ say "$CP_IP" "audit chain start tip: $chain_start"
 
 # ---- per-cycle helpers ---------------------------------------------
 
-# Block: drop both directions of CP↔agent traffic on the agent side.
-# Add OUTPUT to drop responses too — agent thinks CP is unreachable AND
-# CP can't push assignments (relevant once the SSH-push path is on).
+# Blackhole all traffic to the CP from the agent side. Inbound
+# traffic from the CP also has nowhere to come back to (TCP RST or
+# silent drop depending on stack), so the agent observes the same
+# "CP unreachable" semantics as iptables DROP.
 partition_agent() {
     local ip="$1"
-    ssh_to "$ip" "
-        iptables -A OUTPUT -d $CP_IP -j DROP
-        iptables -A INPUT -s $CP_IP -j DROP
-    " 2>/dev/null
+    ssh_to "$ip" "ip route add blackhole $CP_IP/32 2>/dev/null || ip route replace blackhole $CP_IP/32" 2>/dev/null
 }
 
 unpartition_agent() {
     local ip="$1"
-    # Use -D twice to flush both rules. Idempotent — harmless if
-    # rules don't exist.
-    ssh_to "$ip" "
-        iptables -D OUTPUT -d $CP_IP -j DROP 2>/dev/null || true
-        iptables -D INPUT -s $CP_IP -j DROP 2>/dev/null || true
-    " 2>/dev/null
+    # Idempotent — `del` returns non-zero if the route doesn't exist;
+    # swallow that so the trap can call this safely.
+    ssh_to "$ip" "ip route del blackhole $CP_IP/32 2>/dev/null || true" 2>/dev/null
 }
 
-# Snapshot one agent's CP-side view: managed_count, last_seen_unix,
-# total agents-table count.
+# Snapshot one agent's CP-side view: managed_count,
+# last_heartbeat_at_epoch, status. The CP returns
+# `last_heartbeat_at` as an ISO 8601 string; convert it to epoch
+# seconds via `date -d` so the recovery poll can compare numerically.
+# `last_heartbeat_at: null` (never heartbeated) becomes 0.
 agent_snapshot() {
     local name="$1"
-    curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" \
+    local row
+    row=$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" \
         "http://$CP_IP:$CP_PORT/v1/agents" \
-        | jq -r --arg n "$name" '.[] | select(.name==$n) | "\(.managed) \(.last_seen_unix // 0) \(.status)"'
+        | jq -r --arg n "$name" '.[] | select(.name==$n) | "\(.managed) \(.last_heartbeat_at // "1970-01-01T00:00:00Z") \(.status)"')
+    local managed ts status
+    read -r managed ts status <<< "$row"
+    local epoch
+    epoch=$(date -d "$ts" +%s 2>/dev/null || echo 0)
+    echo "$managed $epoch $status"
 }
 
 # Capture one assignment envelope from an agent's local pending queue.
