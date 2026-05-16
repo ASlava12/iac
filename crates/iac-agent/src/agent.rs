@@ -571,6 +571,28 @@ impl Agent {
         Ok(())
     }
 
+    /// Phase 9-F6 follow-up: send a single lightweight heartbeat at
+    /// agent startup, before the first observe cycle. Best-effort
+    /// — if `connect_remote` hasn't succeeded yet (no `server_url`,
+    /// or CP unreachable at startup) this is a no-op and the next
+    /// `push_to_remote` lazy-reconnects.
+    async fn force_initial_heartbeat(&self) -> Result<()> {
+        // Lazy-reconnect if we haven't attached yet (mirrors the
+        // pattern in push_to_remote).
+        if !self.has_remote().await && self.inner.config.server_url.is_some() {
+            self.connect_remote().await;
+        }
+        let remote = self.inner.remote.read().await;
+        let Some(client) = remote.as_ref() else {
+            return Ok(());
+        };
+        client
+            .heartbeat(AgentHealth::Healthy, 0, 0, None)
+            .await?;
+        debug!("initial heartbeat ping sent");
+        Ok(())
+    }
+
     async fn push_to_remote(&self, summary: &ObserveCycleSummary) -> Result<()> {
         // Lazy reconnect if we haven't attached yet.
         if !self.has_remote().await && self.inner.config.server_url.is_some() {
@@ -718,6 +740,20 @@ impl Agent {
             manifests_dir = %self.inner.config.manifests_dir.display(),
             "agent loop starting"
         );
+
+        // Phase 9-F6 follow-up: force a lightweight heartbeat
+        // immediately, before the first observe_once runs. F6
+        // rolling upgrade saw `last_heartbeat_at` on the CP take
+        // 80–325 s to advance after an agent restart — the agent
+        // was busy doing a full observe cycle on 200 resources
+        // before reaching the heartbeat call inside push_to_remote.
+        // Sending a (Healthy, observed=0, drifts=0) ping right
+        // after connect_remote() succeeds tells the CP "I'm here"
+        // within seconds of startup. The real first observation
+        // still lands at the end of the first cycle as before.
+        if let Err(e) = self.force_initial_heartbeat().await {
+            warn!(error = %e, "initial heartbeat ping failed; relying on first observe cycle");
+        }
 
         // Immediate first cycle.
         if let Err(e) = self.observe_once().await {
