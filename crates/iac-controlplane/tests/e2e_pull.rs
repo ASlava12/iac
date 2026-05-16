@@ -51,6 +51,7 @@ impl TestServer {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
         };
         let store = Store::connect(&cfg.database_url).await.unwrap();
         let signer = std::sync::Arc::new(
@@ -245,6 +246,7 @@ async fn submit_with_no_admin_configured_returns_400() {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(

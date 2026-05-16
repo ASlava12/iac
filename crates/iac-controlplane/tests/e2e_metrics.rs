@@ -50,6 +50,7 @@ async fn spawn(with_dispatcher: bool) -> TestServer {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -306,6 +307,7 @@ async fn maintenance_counters_track_admit_block_bypass() {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -450,6 +452,7 @@ async fn maintenance_recurring_block_increments_per_type_counter() {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -571,6 +574,7 @@ async fn rate_limit_counters_increment_after_submissions() {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(

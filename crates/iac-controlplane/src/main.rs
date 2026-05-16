@@ -32,6 +32,17 @@ use tokio::sync::Notify;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+// Phase 9 follow-up #2: optional mimalloc. Releases freed memory
+// back to the OS more aggressively than glibc malloc, reducing the
+// arena-fragmentation RSS growth observed on F1 #11. Off by default
+// to keep the production binary's allocator behavior unchanged.
+#[cfg(all(feature = "mimalloc", not(feature = "heap-profiling")))]
+#[global_allocator]
+static GLOBAL_MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(all(feature = "mimalloc", feature = "heap-profiling"))]
+compile_error!("features `mimalloc` and `heap-profiling` are mutually exclusive — both register a #[global_allocator]");
+
 #[derive(Parser, Debug)]
 #[command(name = "iac-controlplane", version, about = "IaC control-plane API server (Phase 2a)")]
 struct Cli {
@@ -351,6 +362,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     });
 
     let shutdown_signal = shutdown.clone();
+    let shutdown_timeout = std::time::Duration::from_secs(config.shutdown_timeout_secs);
     if config.tls.is_enabled() {
         // Phase 7ak: TLS / mTLS path. axum-server handles the
         // tokio-rustls glue. Graceful shutdown via the shared Notify.
@@ -362,7 +374,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         let handle_for_shutdown = handle.clone();
         tokio::spawn(async move {
             shutdown_signal.notified().await;
-            handle_for_shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+            handle_for_shutdown.graceful_shutdown(Some(shutdown_timeout));
         });
         // Phase 9-F8: `with_connect_info` plumbs the source SocketAddr
         // through to handlers via `ConnectInfo<SocketAddr>`. Required
@@ -376,13 +388,32 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         let listener = tokio::net::TcpListener::bind(addr).await.context("binding")?;
         let actual = listener.local_addr().context("local_addr")?;
         tracing::info!(addr = %actual, "plain HTTP listener bound");
-        axum::serve(
+        // Phase 9-F6 follow-up: axum::serve's with_graceful_shutdown
+        // has no timeout — it drains in-flight HTTP connections
+        // indefinitely. F6 saw 332 s drain with a 50-op burst still
+        // in-flight; that exceeded systemd's default TimeoutStopSec
+        // and led to SIGKILL mid-drain. Race the serve future
+        // against a timer that starts only after the shutdown signal
+        // fires; whichever wins, we exit cleanly.
+        let timeout_signal = shutdown.clone();
+        let serve = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
-        .with_graceful_shutdown(async move { shutdown_signal.notified().await })
-        .await
-        .context("server error")?;
+        .with_graceful_shutdown(async move { shutdown_signal.notified().await });
+
+        tokio::select! {
+            res = serve => { res.context("server error")?; }
+            _ = async {
+                timeout_signal.notified().await;
+                tokio::time::sleep(shutdown_timeout).await;
+            } => {
+                tracing::warn!(
+                    timeout_secs = config.shutdown_timeout_secs,
+                    "graceful shutdown timeout exceeded; forcing exit (in-flight requests may be aborted)"
+                );
+            }
+        }
     }
 
     // Stop the retention + webhook loops and wait for them to drain.

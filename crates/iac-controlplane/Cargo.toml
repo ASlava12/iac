@@ -61,8 +61,24 @@ tempfile = { workspace = true }
 # when the feature is on, writes dhat-heap.json on Drop.
 dhat = { version = "0.3", optional = true }
 
+# Phase 9 follow-up #2: mimalloc as an opt-in global allocator. The
+# dhat investigation showed the F1 #11 +32 MB RSS was glibc malloc
+# arena fragmentation rather than a Rust leak. mimalloc releases
+# memory back to the OS more aggressively than glibc, so operators
+# who care about RSS footprint on long-running CP servers can opt
+# in with `--features mimalloc`. Default off so the production
+# binary keeps its current allocator behaviour unchanged.
+# Mutually exclusive with `heap-profiling` (dhat is also a global
+# allocator); the build script enforces this at compile-time via
+# a compile_error! in main.rs.
+mimalloc = { version = "0.1", optional = true, default-features = false }
+
 [features]
 heap-profiling = ["dep:dhat"]
+# Use mimalloc as the global allocator. Reduces glibc arena
+# fragmentation on long-running CP processes. Cannot be combined
+# with heap-profiling.
+mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

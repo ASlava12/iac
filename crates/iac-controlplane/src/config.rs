@@ -92,6 +92,20 @@ pub struct Config {
     /// higher when latency budget cares more than disk usage. Going
     /// below 5 s is wasteful — checkpoint overhead dominates.
     pub wal_checkpoint_interval_secs: u64,
+    /// Phase 9-F6 follow-up: how long the HTTP server will keep
+    /// draining in-flight connections after a SIGTERM before being
+    /// forcibly aborted, in seconds. F6 rolling-upgrade saw a 332 s
+    /// graceful-shutdown when the burst of 50 in-flight ops kept
+    /// the server busy; under systemd's TimeoutStopSec=90 (default)
+    /// that means SIGKILL during graceful shutdown — not great. The
+    /// timeout caps drain at a known bound so operators get a clean
+    /// SIGTERM exit even under load.
+    ///
+    /// Default 10 s (matches the TLS path's previously-hardcoded
+    /// `handle.graceful_shutdown(Some(10 s))`). Set higher (30–60 s)
+    /// if your service unit's TimeoutStopSec is also higher and
+    /// you want more time for clean shutdown.
+    pub shutdown_timeout_secs: u64,
 }
 
 /// Phase 7ck: declarative SSH push target. Validated at server
@@ -383,10 +397,16 @@ struct RawConfig {
     ssh_targets: Vec<SshTargetConfig>,
     #[serde(default = "default_wal_checkpoint_interval")]
     wal_checkpoint_interval_secs: u64,
+    #[serde(default = "default_shutdown_timeout")]
+    shutdown_timeout_secs: u64,
 }
 
 fn default_wal_checkpoint_interval() -> u64 {
     60
+}
+
+fn default_shutdown_timeout() -> u64 {
+    10
 }
 
 #[derive(Debug, Default)]
@@ -528,6 +548,7 @@ impl Config {
             agent_token_ttl_secs: raw.agent_token_ttl_secs,
             ssh_targets,
             wal_checkpoint_interval_secs: raw.wal_checkpoint_interval_secs,
+            shutdown_timeout_secs: raw.shutdown_timeout_secs,
         })
     }
 

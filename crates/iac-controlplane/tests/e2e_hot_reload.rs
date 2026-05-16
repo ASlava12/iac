@@ -109,6 +109,7 @@ impl TestServer {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
         };
         write_config(&config_path, &cfg);
 
@@ -218,6 +219,7 @@ async fn reload_picks_up_added_module() {
         agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
     };
     cfg2.bind = server.addr; // keep the same listening address
     write_config(&server.config_path, &cfg2);
@@ -409,6 +411,7 @@ async fn reload_without_config_path_errors_clearly() {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(

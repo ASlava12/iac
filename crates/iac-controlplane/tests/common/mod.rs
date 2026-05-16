@@ -129,6 +129,7 @@ pub struct TestServerBuilder {
     agent_token_ttl_secs: Option<u64>,
     ssh_targets: Vec<SshTargetConfig>,
     wal_checkpoint_interval_secs: u64,
+    shutdown_timeout_secs: u64,
     /// When `Some(path)`, the builder writes the resolved Config out
     /// as TOML at `path` and the resulting `TestServer` carries the
     /// path for hot-reload tests to mutate. When `None`, no file is
@@ -154,6 +155,7 @@ impl Default for TestServerBuilder {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
             config_path: None,
         }
     }
@@ -273,6 +275,7 @@ impl TestServerBuilder {
             agent_token_ttl_secs: self.agent_token_ttl_secs,
             ssh_targets: self.ssh_targets,
             wal_checkpoint_interval_secs: self.wal_checkpoint_interval_secs,
+            shutdown_timeout_secs: self.shutdown_timeout_secs,
         };
 
         let resolved_config_path = if self.config_path.is_some() {

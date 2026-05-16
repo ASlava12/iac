@@ -375,6 +375,7 @@ mod tests {
             agent_token_ttl_secs: None,
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
+            shutdown_timeout_secs: 1,
         };
         Store::connect(&cfg.database_url).await.unwrap()
     }
