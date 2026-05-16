@@ -1,13 +1,14 @@
 -- Phase 7al: Postgres flavor of the Phase 6c audit-log migration.
 -- Differences:
 --   * audit_events.id  INTEGER PRIMARY KEY AUTOINCREMENT  ->  BIGSERIAL
---   * audit_events.drift_id stays as INTEGER. drift_events.id is BIGSERIAL
---     (BIGINT) — narrowing the FK-ish reference to INTEGER risks overflow
---     after ~2^31 drift rows, but matching the existing on-the-wire shape
---     (we serialize as i64) is more important. Promote to BIGINT once a
---     real-fleet trial gets within striking distance of 2^31 drift rows;
---     the audit-bind machinery can absorb the dialect divergence at the
---     wire layer when that happens.
+--   * audit_events.drift_id  is BIGINT to match drift_events.id (BIGSERIAL).
+--     The original Phase 7al note flagged INTEGER as a 2^31 overflow risk
+--     for a "real-fleet trial within striking distance of 2^31 drift rows";
+--     by Phase 9-F1 the wire-side i64 serialization had already locked
+--     BIGINT in as the right shape on both engines, so we just promoted
+--     it ahead of schedule (no schema migration needed — this is the
+--     initial-creation migration; existing deployments still use SQLite
+--     which has unified INTEGER regardless).
 
 CREATE TABLE audit_events (
     id              BIGSERIAL PRIMARY KEY,
