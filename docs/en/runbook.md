@@ -506,6 +506,93 @@ only. Sev 3 and 4 file a ticket; no page.
 
 ---
 
+## Cross-compile for MIPS / OpenWrt
+
+The repo ships ready-to-use cross-compile config for two Tier-3 MIPS
+targets used by OpenWrt and MikroTik network gear:
+
+- `mipsel-unknown-linux-musl` — 32-bit little-endian, the OpenWrt
+  workhorse target (ar71xx, ramips, ath79).
+- `mips64el-unknown-linux-musl` — 64-bit variant for newer MikroTik
+  CCR/CHR.
+
+Both are Tier-3, so `rustc` doesn't ship prebuilt `std` — we build
+it from source via `-Z build-std` (cargo nightly). The repo's
+`.cargo/config.toml` already enables this for any explicit
+`--target mipsel-...` / `--target mips64el-...`.
+
+### Prerequisites
+
+- Docker (or podman) — `cross` runs inside a container that bundles
+  the C toolchain (`mipsel-linux-muslsf-gcc`, etc.).
+- Nightly Rust — needed for `-Z build-std`. Install via
+  `rustup install nightly && rustup default nightly` or pass
+  `+nightly` per command.
+- The `cross` crate — `cargo install cross --version 0.2.5`.
+- `qemu-user-static` if you want to smoke-test the binary on the
+  build host: `apt install qemu-user-static`.
+
+### Build recipe (iac-agent for OpenWrt mipsel)
+
+```bash
+# WASM is x86/aarch64-only (cranelift backend; no MIPS support).
+# The agent's `wasm` cargo feature is default-on, so we opt out
+# with --no-default-features for MIPS builds.
+CARGO_UNSTABLE_BUILD_STD=1 \
+    cross +nightly build \
+        --profile release-mini \
+        --target mipsel-unknown-linux-musl \
+        -p iac-agent \
+        --no-default-features
+```
+
+Output: `target/mipsel-unknown-linux-musl/release-mini/iac-agent`.
+
+### Binary size budget
+
+OpenWrt firmware images typically allocate a 16 MiB rootfs partition,
+of which `/usr/local/bin` has < 8 MiB headroom. Our budget is
+**< 10 MiB stripped**.
+
+```bash
+ls -l target/mipsel-unknown-linux-musl/release-mini/iac-agent
+# Current: ~7.0 MiB stripped (commit f3f0a21).
+```
+
+If the binary creeps above 10 MiB:
+- Verify `--no-default-features` is set (WASM accidentally on
+  dominates +6 MiB).
+- Check `release-mini` profile is in use (`--release` keeps
+  `opt-level=3` + `lto=thin`; `release-mini` swaps to `opt-level=z`
+  + `lto=fat` + `strip=true` + `panic=abort`).
+- Audit added deps since the last green build.
+
+### Smoke test via qemu-user-static
+
+Sanity check that the binary executes at all on the build host:
+
+```bash
+qemu-mipsel-static target/mipsel-unknown-linux-musl/release-mini/iac-agent --help
+```
+
+A real provider exercise (`file` + `firewall.rule`) requires a real
+MIPS device; qemu-user can validate startup + clap parsing only.
+
+### Deploying to OpenWrt / MikroTik
+
+`scp` the binary to `/usr/local/bin/iac-agent` on the device, set
+`+x`, write `/etc/iac/agent.toml`, and either invoke it via procd
+init script (OpenWrt) or `/system scheduler` (RouterOS). Capability
+allowlist lives at `/var/lib/iac-agent/capabilities.yaml` per the
+[reference](reference.md#capabilities).
+
+Phase 10 production validation on real hardware is hardware-gated
+($30–80 single device, half-day cross-build setup, day for the
+bring-up). Until that lands, treat MIPS support as "compiles and
+the smoke test passes" rather than "validated end-to-end."
+
+---
+
 ## Post-incident
 
 Write the after-action report within 24h while details are fresh.
