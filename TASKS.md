@@ -108,12 +108,12 @@ so they don't get lost, but not actively scheduled.
 
 | Trigger                                     | Item |
 |---------------------------------------------|------|
-| Real-fleet trial gets near 2^31 drift rows  | Promote `audit_events.drift_id` from INTEGER to BIGINT in the Postgres migration (existing comment in `migrations-postgres/20260429000004_audit.sql` flags the risk) |
+| ~~Real-fleet trial gets near 2^31 drift rows~~ | ~~Promote audit_events.drift_id from INTEGER to BIGINT~~ **Done** — the column was already BIGINT; comment synced to reality (commit `1650a58`). |
 | Operator complains about restart for capability allowlist edits | Add an inotify watcher on `capabilities_file` to `iac-agent`. Currently documented as "requires restart" by design |
 | Operator wants WASM module hot-swap         | Add SHA-256-based change detection on the module path, recompile when it changes. Currently load-once-at-startup |
 | Rate-limit config changes more than once per quarter | Make `RateLimiter` hot-reloadable across SIGHUP. Currently documented in `server.rs` as not hot-reloadable because `Instant` buckets lose meaning across a swap |
 | Operator running on RHEL with firewalld     | Add nftables-native firewall provider (current `firewall.rule` shells out to `iptables`; `iptables-nft` shim works but isn't first-class) |
-| First operator complaint about list-style CLI gaps | Add admin-CLI wrappers for `iac agents list`, `iac operations list --status failed`, `iac audit tail --follow`. Current runbook routes operators through `curl + jq` against the API by design — explicit "API is the contract, CLI is the ergonomics layer" |
+| ~~First operator complaint about list-style CLI gaps~~ | ~~Add admin-CLI wrappers for `iac agents list`, `iac operations list --status failed`, `iac audit tail --follow`.~~ **Done** — wrappers landed proactively rather than reactively (no specific operator complaint, but the runbook flow against curl+jq was unwieldy enough that pre-emption made sense). Adds `iac agents list`, `iac ops list --status <s> --limit N`, and `iac audit --follow`. Server-side: new `GET /v1/operations` endpoint + audit `since_id` cursor for the polling loop. See "Decisions log" entry on the API-as-contract policy revision. |
 
 ---
 
@@ -143,5 +143,5 @@ think about this?" in future planning sessions.
 - **Composite expansion happens server-side, before routing + capability checks.** Agents stay primitive; per-primitive allowlists keep applying.
 - **Rate limit + maintenance check run after auth.** 401/400 don't get masked by 429/503; legitimate operators see the right error code.
 - **Workspace lints `forbid(unsafe_code)`.** `std::env::set_var` is unsafe on edition 2024, so test helpers take explicit paths instead of mutating `HOME`.
-- **API is the contract, CLI is the ergonomics layer.** Read-side admin tooling (list operations, list agents, tail audit) lives behind `curl + jq` against documented endpoints, not a thicker CLI. Add wrappers only after a concrete operator complaint.
+- **API is the contract, CLI is the ergonomics layer.** Read-side admin tooling (list operations, list agents, tail audit) lives behind `curl + jq` against documented endpoints. ~~Add wrappers only after a concrete operator complaint.~~ Revised 2026-05-16: three list-style wrappers (`iac agents list`, `iac ops list`, `iac audit --follow`) landed proactively because the curl+jq flow was clunky enough during F1–F8 fleet operations that the cost of having them was clearly less than the cost of typing `curl -H "Authorization: Bearer $TOKEN" .../v1/agents | jq ...` every time. The underlying principle still stands — API stays the contract, CLI stays the ergonomic skin — but the "wait for a complaint" gate was too conservative.
 - **LegacyAdmin token is bootstrap-permanent.** Originally slated for removal once user-auth landed (Phase 7e); design moved to "keep, gate behind config (`admin_token = null` after bootstrap)" because a fresh control-plane has no users yet and `iac users create` requires Admin.

@@ -15,8 +15,8 @@ use crate::error::{ApiError, ApiResult};
 use iac_core::protocol::v1::{
     AgentHealth, AgentSummary, AssignmentEnvelope, AssignmentPayload, AssignmentResultRequest,
     AssignmentResultStatus, AssignmentView, AuditEvent, DesiredStateItem, DriftItem, DriftSummary,
-    HeartbeatRequest, ObservationItem, OperationDesiredStateItem, OperationStatus, OperationView,
-    RegisterRequest,
+    HeartbeatRequest, ObservationItem, OperationDesiredStateItem, OperationListItem,
+    OperationStatus, OperationView, RegisterRequest,
 };
 use jiff::Timestamp;
 
@@ -1864,6 +1864,56 @@ impl Store {
         Ok(out)
     }
 
+    /// List operations, newest first, optionally filtered by status.
+    /// Returns slim `OperationListItem` rows (no assignments / no
+    /// matched_policies — fetch those via `get_operation` when needed).
+    /// `limit` is clamped to [1, 1000] so a stray `--limit 1_000_000`
+    /// can't OOM the CP.
+    pub async fn list_operations(
+        &self,
+        status: Option<&str>,
+        limit: i64,
+    ) -> ApiResult<Vec<OperationListItem>> {
+        let limit = limit.clamp(1, 1000);
+        let base = "SELECT id, kind, environment, requested_by, status,
+                           created_at, started_at, finished_at
+                    FROM operations";
+        let mut items = Vec::new();
+        let rows = match status {
+            Some(s) => {
+                sqlx::query(&sql(&format!(
+                    "{base} WHERE status = ? ORDER BY created_at DESC LIMIT ?"
+                )))
+                .bind(s)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(&sql(&format!(
+                    "{base} ORDER BY created_at DESC LIMIT ?"
+                )))
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+        for r in rows {
+            let status_str: String = r.try_get("status")?;
+            items.push(OperationListItem {
+                id: r.try_get("id")?,
+                kind: r.try_get("kind")?,
+                environment: r.try_get("environment")?,
+                requested_by: r.try_get("requested_by")?,
+                status: parse_operation_status(&status_str),
+                created_at: r.try_get("created_at")?,
+                started_at: r.try_get("started_at")?,
+                finished_at: r.try_get("finished_at")?,
+            });
+        }
+        Ok(items)
+    }
+
     pub async fn get_operation(&self, operation_id: &str) -> ApiResult<OperationView> {
         let row = sqlx::query(&sql(
             "SELECT id, kind, environment, requested_by, status, created_at,
@@ -2835,6 +2885,14 @@ impl<'a> AuditRecord<'a> {
 #[derive(Debug, Default, Clone)]
 pub struct AuditFilter {
     pub since: Option<String>,
+    /// Phase 9 follow-up: id-based cursor for `tail -f` polling.
+    /// `since_id = N` returns only rows with `id > N`. Independent
+    /// of `since` (timestamp) — combine them at your own risk;
+    /// callers either use timestamp filtering or id-cursor, not
+    /// both. id-based is more reliable for polling because ids are
+    /// monotonic by insert order even when many rows share a
+    /// timestamp at second-level resolution.
+    pub since_id: Option<i64>,
     pub kind: Option<String>,
     pub actor: Option<String>,
     pub operation_id: Option<String>,
@@ -2923,6 +2981,14 @@ impl Store {
         if let Some(s) = filter.since {
             q.push_str(" AND timestamp >= ?");
             binds.push(s);
+        }
+        // Phase 9 follow-up: id-based cursor for tail -f polling.
+        // Bind as String so the binds Vec stays homogeneous; SQLite
+        // coerces TEXT-bound integers automatically. (Postgres path
+        // is unaffected: numeric bind via prepared statement.)
+        if let Some(id) = filter.since_id {
+            q.push_str(" AND id > ?");
+            binds.push(id.to_string());
         }
         if let Some(k) = filter.kind {
             q.push_str(" AND kind = ?");

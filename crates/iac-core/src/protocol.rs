@@ -393,6 +393,23 @@ pub mod v1 {
         pub rejection_reason: Option<String>,
     }
 
+    /// Slim view of a single operation for list-style endpoints. Drops
+    /// `assignments` (potentially many rows per op) and policy/approval
+    /// fields that callers can fetch via `GET /v1/operations/{id}` when
+    /// they need detail. Stable shape — adding fields is fine, removing
+    /// or renaming will break clients.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct OperationListItem {
+        pub id: String,
+        pub kind: String,
+        pub environment: String,
+        pub requested_by: String,
+        pub status: OperationStatus,
+        pub created_at: String,
+        pub started_at: Option<String>,
+        pub finished_at: Option<String>,
+    }
+
     /// Phase 6d: approve a pending operation and let its assignments dispatch.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct OperationApproveRequest {

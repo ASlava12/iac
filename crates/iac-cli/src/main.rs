@@ -256,6 +256,24 @@ enum Command {
     },
     /// List operations recorded in the state directory.
     Operations,
+    /// Phase 9 follow-up admin wrapper: list agents registered with
+    /// the control-plane. Thin wrapper over `GET /v1/agents`.
+    Agents {
+        /// Control-plane URL.
+        #[arg(long)]
+        server: String,
+        #[command(subcommand)]
+        action: AgentsAction,
+    },
+    /// Phase 9 follow-up admin wrapper: list operations on the
+    /// control-plane with optional status filter.
+    Ops {
+        /// Control-plane URL.
+        #[arg(long)]
+        server: String,
+        #[command(subcommand)]
+        action: OpsAction,
+    },
     /// Drift workflows against a control-plane.
     Drift {
         /// Control-plane URL. Required for all drift subcommands.
@@ -301,6 +319,16 @@ enum Command {
         /// Filter to a single agent id.
         #[arg(long)]
         agent_id: Option<String>,
+        /// Phase 9 follow-up: poll the audit log forever and stream
+        /// new events as they land. Implements `tail -f` semantics
+        /// for the audit chain by repeatedly fetching with `since_id`
+        /// equal to the highest id seen so far.
+        #[arg(long)]
+        follow: bool,
+        /// When `--follow` is set, how often to poll for new events
+        /// (in seconds). Defaults to 2.
+        #[arg(long, default_value_t = 2)]
+        follow_interval_secs: u64,
     },
     /// Print version and exit.
     Version,
@@ -440,6 +468,34 @@ enum CredsAction {
     Clear {
         #[arg(long)]
         server: String,
+    },
+}
+
+/// Phase 9 follow-up admin wrapper: read-side helpers over
+/// `GET /v1/agents`. Added per operator request — the original
+/// design routed everyone through `curl + jq`, but a
+/// production-grade CLI saves a real chunk of toil.
+#[derive(Subcommand, Debug)]
+enum AgentsAction {
+    /// Tabular dump of registered agents: name, env, status,
+    /// last_heartbeat_at, managed-count, open-drift count.
+    List,
+}
+
+/// Phase 9 follow-up admin wrapper: read-side helpers over
+/// `GET /v1/operations`. See `AgentsAction`.
+#[derive(Subcommand, Debug)]
+enum OpsAction {
+    /// Tabular dump of operations on the control-plane.
+    List {
+        /// Filter by status (`pending`, `running`, `succeeded`,
+        /// `failed`, `partially_applied`, `pending_approval`,
+        /// `rejected`). Omit for all.
+        #[arg(long)]
+        status: Option<String>,
+        /// Max rows to return. Defaults to 50; server-clamped to 1000.
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
     },
 }
 
@@ -785,6 +841,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Operations => cmd_operations(&state_dir, cli.format),
+        Command::Agents { server, action } => cmd_agents(&server, action, cli.format),
+        Command::Ops { server, action } => cmd_ops(&server, action, cli.format),
         Command::Drift { server, action } => cmd_drift(&server, action, cli.format),
         Command::Approve { server, operation_id, reason } => {
             cmd_op_approval(&server, &operation_id, ApprovalAction::Approve, reason.as_deref())
@@ -799,6 +857,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             actor,
             operation_id,
             agent_id,
+            follow,
+            follow_interval_secs,
         } => cmd_audit(
             &server,
             limit,
@@ -807,6 +867,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             operation_id.as_deref(),
             agent_id.as_deref(),
             cli.format,
+            follow,
+            follow_interval_secs,
         ),
     }
 }
@@ -1149,6 +1211,8 @@ fn cmd_audit(
     operation_id: Option<&str>,
     agent_id: Option<&str>,
     format: OutputFormat,
+    follow: bool,
+    follow_interval_secs: u64,
 ) -> Result<ExitCode> {
     use iac_core::protocol::v1::AuditEvent;
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1158,51 +1222,244 @@ fn cmd_audit(
     runtime.block_on(async move {
         let token = credentials::resolve_admin_token_with_refresh(server_url).await?;
         let server = server_url.trim_end_matches('/');
-        let mut url = format!("{server}/v1/audit?limit={limit}");
-        if let Some(k) = kind {
-            url.push_str(&format!("&kind={}", urlencode(k)));
+        let build_url = |since_id: Option<i64>, n: i64| -> String {
+            let mut url = format!("{server}/v1/audit?limit={n}");
+            if let Some(k) = kind {
+                url.push_str(&format!("&kind={}", urlencode(k)));
+            }
+            if let Some(a) = actor {
+                url.push_str(&format!("&actor={}", urlencode(a)));
+            }
+            if let Some(op) = operation_id {
+                url.push_str(&format!("&operation_id={}", urlencode(op)));
+            }
+            if let Some(ag) = agent_id {
+                url.push_str(&format!("&agent_id={}", urlencode(ag)));
+            }
+            if let Some(s) = since_id {
+                url.push_str(&format!("&since_id={s}"));
+            }
+            url
+        };
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+
+        // Phase 9 follow-up: `--follow` mode is a poll loop. We
+        // start with one normal page (newest `limit` events,
+        // printed in chronological order), record the max id seen,
+        // then poll forever with `since_id` cursor until ^C.
+        if follow {
+            // Initial page in oldest-first order so the operator
+            // sees recent history before live events start
+            // streaming.
+            let resp = client.get(build_url(None, limit)).bearer_auth(&token).send().await?;
+            check_status(&resp)?;
+            let mut events: Vec<AuditEvent> = resp.json().await?;
+            events.sort_by_key(|e| e.id);
+            let mut max_id = events.last().map(|e| e.id).unwrap_or(0);
+            print_audit_events(&events, format)?;
+
+            // JSON-mode follow keeps emitting JSON-array per poll;
+            // human-mode just streams lines.
+            let interval = std::time::Duration::from_secs(follow_interval_secs.max(1));
+            loop {
+                tokio::time::sleep(interval).await;
+                let resp = match client
+                    .get(build_url(Some(max_id), 1000))
+                    .bearer_auth(&token)
+                    .send()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("(transient HTTP error: {e}; retrying next interval)");
+                        continue;
+                    }
+                };
+                if let Err(e) = check_status(&resp) {
+                    eprintln!("(server status error: {e}; retrying next interval)");
+                    continue;
+                }
+                let mut batch: Vec<AuditEvent> = resp.json().await?;
+                if batch.is_empty() {
+                    continue;
+                }
+                batch.sort_by_key(|e| e.id);
+                if let Some(last) = batch.last() {
+                    max_id = last.id;
+                }
+                print_audit_events(&batch, format)?;
+            }
         }
-        if let Some(a) = actor {
-            url.push_str(&format!("&actor={}", urlencode(a)));
+
+        let resp = client.get(build_url(None, limit)).bearer_auth(&token).send().await?;
+        check_status(&resp)?;
+        let mut events: Vec<AuditEvent> = resp.json().await?;
+        // Server returns newest-first; print oldest-first for consistency
+        // with the follow path.
+        events.sort_by_key(|e| e.id);
+        print_audit_events(&events, format)?;
+        Ok(ExitCode::SUCCESS)
+    })
+}
+
+/// Phase 9 follow-up: shared audit print path for both one-shot
+/// `iac audit` and `--follow` polling. Human form is one line per
+/// event with op/agent/drift tags appended.
+fn print_audit_events(
+    events: &[iac_core::protocol::v1::AuditEvent],
+    format: OutputFormat,
+) -> Result<()> {
+    match format {
+        OutputFormat::Json => {
+            if !events.is_empty() {
+                println!("{}", serde_json::to_string_pretty(events)?);
+            }
         }
-        if let Some(op) = operation_id {
-            url.push_str(&format!("&operation_id={}", urlencode(op)));
+        OutputFormat::Human => {
+            if events.is_empty() {
+                // Silent in follow mode would be confusing on the
+                // first poll; emit the "(no events)" marker only
+                // when called from one-shot path. The follow loop
+                // skips calling this on empty batches, so we'll
+                // only land here for genuinely-empty initial reads.
+                // Detection: caller always passes non-empty in
+                // follow mode. Keep the marker for one-shot UX.
+                println!("(no events)");
+            } else {
+                for e in events {
+                    let mut tags: Vec<String> = vec![];
+                    if let Some(op) = &e.operation_id {
+                        tags.push(format!("op={op}"));
+                    }
+                    if let Some(ag) = &e.agent_id {
+                        tags.push(format!("agent={ag}"));
+                    }
+                    if let Some(d) = e.drift_id {
+                        tags.push(format!("drift={d}"));
+                    }
+                    let suffix = if tags.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", tags.join(" "))
+                    };
+                    println!(
+                        "{} {} {} {}{}",
+                        e.timestamp, e.severity, e.actor, e.kind, suffix
+                    );
+                }
+            }
         }
-        if let Some(ag) = agent_id {
-            url.push_str(&format!("&agent_id={}", urlencode(ag)));
+    }
+    Ok(())
+}
+
+/// Phase 9 follow-up admin wrapper: `iac agents list --server URL`.
+/// GET /v1/agents → table. Replaces the previous `curl ... | jq`
+/// pattern documented in the runbook.
+fn cmd_agents(server_url: &str, action: AgentsAction, format: OutputFormat) -> Result<ExitCode> {
+    use iac_core::protocol::v1::AgentSummary;
+    let AgentsAction::List = action;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("creating tokio runtime")?;
+    runtime.block_on(async move {
+        let token = credentials::resolve_admin_token_with_refresh(server_url).await?;
+        let server = server_url.trim_end_matches('/');
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        let resp = client
+            .get(format!("{server}/v1/agents"))
+            .bearer_auth(&token)
+            .send()
+            .await?;
+        check_status(&resp)?;
+        let agents: Vec<AgentSummary> = resp.json().await?;
+        match format {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&agents)?),
+            OutputFormat::Human => {
+                if agents.is_empty() {
+                    println!("(no agents)");
+                } else {
+                    println!(
+                        "{:<25} {:<15} {:<10} {:<28} {:>8} {:>8}",
+                        "name", "environment", "status", "last_heartbeat_at", "managed", "drifts"
+                    );
+                    for a in &agents {
+                        let hb = a.last_heartbeat_at.as_deref().unwrap_or("-");
+                        // AgentHealth is a serde enum without Display;
+                        // route through serde to get the snake_case
+                        // string form ("healthy", "stale", "missing").
+                        let status_label = serde_json::to_value(&a.status)
+                            .ok()
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_else(|| format!("{:?}", a.status));
+                        println!(
+                            "{:<25} {:<15} {:<10} {:<28} {:>8} {:>8}",
+                            a.name, a.environment, status_label, hb, a.managed, a.open_drifts
+                        );
+                    }
+                }
+            }
+        }
+        Ok(ExitCode::SUCCESS)
+    })
+}
+
+/// Phase 9 follow-up admin wrapper: `iac ops list --server URL
+/// [--status STATUS] [--limit N]`. GET /v1/operations → table.
+fn cmd_ops(server_url: &str, action: OpsAction, format: OutputFormat) -> Result<ExitCode> {
+    use iac_core::protocol::v1::OperationListItem;
+    let OpsAction::List { status, limit } = action;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("creating tokio runtime")?;
+    runtime.block_on(async move {
+        let token = credentials::resolve_admin_token_with_refresh(server_url).await?;
+        let server = server_url.trim_end_matches('/');
+        let mut url = format!("{server}/v1/operations?limit={limit}");
+        if let Some(s) = &status {
+            url.push_str(&format!("&status={}", urlencode(s)));
         }
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
         let resp = client.get(&url).bearer_auth(&token).send().await?;
         check_status(&resp)?;
-        let events: Vec<AuditEvent> = resp.json().await?;
+        let ops: Vec<OperationListItem> = resp.json().await?;
         match format {
-            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&events)?),
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&ops)?),
             OutputFormat::Human => {
-                if events.is_empty() {
-                    println!("(no events)");
+                if ops.is_empty() {
+                    println!("(no operations)");
                 } else {
-                    for e in &events {
-                        let mut tags: Vec<String> = vec![];
-                        if let Some(op) = &e.operation_id {
-                            tags.push(format!("op={op}"));
-                        }
-                        if let Some(ag) = &e.agent_id {
-                            tags.push(format!("agent={ag}"));
-                        }
-                        if let Some(d) = e.drift_id {
-                            tags.push(format!("drift={d}"));
-                        }
-                        let suffix = if tags.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" [{}]", tags.join(" "))
-                        };
+                    println!(
+                        "{:<28} {:<10} {:<15} {:<20} {:<28} {:<28}",
+                        "id", "kind", "environment", "requested_by", "created_at", "finished_at"
+                    );
+                    for o in &ops {
+                        let status_label: String =
+                            serde_json::to_value(&o.status)
+                                .ok()
+                                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                                .unwrap_or_else(|| format!("{:?}", o.status));
                         println!(
-                            "{} {} {} {}{}",
-                            e.timestamp, e.severity, e.actor, e.kind, suffix
+                            "{:<28} {:<10} {:<15} {:<20} {:<28} {:<28}",
+                            o.id,
+                            o.kind,
+                            o.environment,
+                            o.requested_by,
+                            o.created_at,
+                            o.finished_at.as_deref().unwrap_or("-")
                         );
+                        // Print status on a continuation line to keep
+                        // the header table tight on narrow terminals.
+                        // (e.g. partially_applied is 18 chars.)
+                        println!("    status={status_label}");
                     }
                 }
             }

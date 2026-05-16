@@ -18,14 +18,14 @@ use axum::{
 /// `1`, `true`) opts in; missing or empty header → no bypass.
 const MAINT_BYPASS_HEADER: &str = "x-iac-maintenance-bypass";
 use iac_core::protocol::v1::{
-    BlastRadius, OperationApproveRequest, OperationDesiredState, OperationRejectRequest,
-    OperationView, RollbackOperationRequest, RollbackOperationResponse, SubmitOperationRequest,
-    SubmitOperationResponse, UnroutedResource,
+    BlastRadius, OperationApproveRequest, OperationDesiredState, OperationListItem,
+    OperationRejectRequest, OperationView, RollbackOperationRequest, RollbackOperationResponse,
+    SubmitOperationRequest, SubmitOperationResponse, UnroutedResource,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/operations", post(submit))
+        .route("/v1/operations", post(submit).get(list_ops))
         .route("/v1/operations/{operation_id}", get(get_op))
         .route(
             "/v1/operations/{operation_id}/desired-state",
@@ -353,6 +353,30 @@ async fn get_op(
 ) -> ApiResult<Json<OperationView>> {
     require_role(&state, &token, Role::Viewer).await?;
     Ok(Json(state.store.get_operation(&op_id).await?))
+}
+
+/// `GET /v1/operations?status=<s>&limit=<n>` — Viewer-gated list.
+/// Newest-first. `status` is optional (drop the filter to see all);
+/// `limit` defaults to 50, clamped to [1, 1000] in the store layer.
+/// Slim shape: id/kind/environment/requested_by/status/timestamps —
+/// no assignments. Operators wanting full detail call
+/// `GET /v1/operations/{id}`.
+#[derive(serde::Deserialize)]
+struct ListOpsQuery {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+async fn list_ops(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+    axum::extract::Query(q): axum::extract::Query<ListOpsQuery>,
+) -> ApiResult<Json<Vec<OperationListItem>>> {
+    require_role(&state, &token, Role::Viewer).await?;
+    let limit = q.limit.unwrap_or(50);
+    Ok(Json(state.store.list_operations(q.status.as_deref(), limit).await?))
 }
 
 /// Phase 7ci: rollback handler. Builds a new operation whose

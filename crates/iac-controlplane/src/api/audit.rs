@@ -24,6 +24,9 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 struct AuditQuery {
     since: Option<String>,
+    /// Phase 9 follow-up: id-based cursor for tail -f polling. See
+    /// `AuditFilter::since_id`.
+    since_id: Option<i64>,
     kind: Option<String>,
     actor: Option<String>,
     operation_id: Option<String>,
@@ -44,6 +47,7 @@ async fn list_audit(
     require_role(&state, &token, Role::Approver).await?;
     let filter = AuditFilter {
         since: q.since,
+        since_id: q.since_id,
         kind: q.kind,
         actor: q.actor,
         operation_id: q.operation_id,
