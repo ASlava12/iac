@@ -62,8 +62,11 @@ network/timing on a single host.
 | ~~F8~~ | ~~DDoS on `/v1/agents/register`~~       | ~~rate-limit holds; legitimate agents not starved~~ | **Done — see archive 9-F8.** Empirical storm proved the gap (250 req / 10 s from one IP, 0 × 429); per-IP register cap (default 20/min) + axum `ConnectInfo` plumbing land in this fix. Re-storm at 30 s × 50 against the fixed binary returned 20 × 200 / 880 × 429 as expected. Multi-source-IP / `X-Forwarded-For` allowlist still wants a real-fleet pass once F1 finishes and the prod CP can be restarted. |
 
 **Remaining in Phase 9:** F1 stress-matrix variants
-(burst running, 72 h / density pre-staged). F1 / F2 / F6 done;
-slow-leak investigation closed (NOT a leak — commit `3cfffbf`).
+72 h / density (pre-staged). F1 baseline / F2 / F6 done; F1
+stress **burst** finalized 2026-05-17 — surfaced gap-#11
+(SQLite single-writer knee at sustained 5 RPS); accepted as a
+design knob (use Postgres for > 3 RPS sustained). Slow-leak
+investigation closed (NOT a leak — commit `3cfffbf`).
 F3/F4/F5/F7/F8(single-source) all have
 local test coverage or a fleet-validated harness.
 
@@ -113,6 +116,7 @@ so they don't get lost, but not actively scheduled.
 | Operator wants WASM module hot-swap         | Add SHA-256-based change detection on the module path, recompile when it changes. Currently load-once-at-startup |
 | Rate-limit config changes more than once per quarter | Make `RateLimiter` hot-reloadable across SIGHUP. Currently documented in `server.rs` as not hot-reloadable because `Instant` buckets lose meaning across a swap |
 | Operator running on RHEL with firewalld     | Add nftables-native firewall provider (current `firewall.rule` shells out to `iptables`; `iptables-nft` shim works but isn't first-class) |
+| `/v1/audit/verify` times out on large chains (real-fleet F1 burst hit it at 615 k rows) | Paginate or incremental-verify: walk chunks instead of full re-hash, or maintain a periodic checkpoint hash so verify only re-walks since last checkpoint. Currently the endpoint re-hashes every row on each call — fine for tests, breaks under fleet-scale audit volume |
 | ~~First operator complaint about list-style CLI gaps~~ | ~~Add admin-CLI wrappers for `iac agents list`, `iac operations list --status failed`, `iac audit tail --follow`.~~ **Done** — wrappers landed proactively rather than reactively (no specific operator complaint, but the runbook flow against curl+jq was unwieldy enough that pre-emption made sense). Adds `iac agents list`, `iac ops list --status <s> --limit N`, and `iac audit --follow`. Server-side: new `GET /v1/operations` endpoint + audit `since_id` cursor for the polling loop. See "Decisions log" entry on the API-as-contract policy revision. |
 
 ---

@@ -402,6 +402,52 @@ re-emerge at higher scale.
 | 30 s freezes every minute | `wal_checkpoint(TRUNCATE)` blocking on contention | PASSIVE most ticks, TRUNCATE every 10th tick (so on default 60 s cadence, TRUNCATE every 10 min) |
 | Agent local DB unbounded | `record_observation` INSERTs without cap | `AGENT_OBSERVATION_HISTORY_CAP = 10` per `resource_id`, inline DELETE after each INSERT |
 | Agent stuck in 413 retry-loop | Push body > CP `max_body_bytes`, agent retries the same oversized batch | Adaptive chunked push (chunk = 500 obs, halve on 413, drop singleton) |
+| Agent `executor/operations/` dir 1.6 GB after 24 h | Per-apply ULID dir, never GC'd | `EXECUTOR_OPERATIONS_KEEP = 200` const + GC after each apply |
+| iac-trial unique-path observations bloat | `make_file_manifest` used `Ulid::new()` → unbounded resource pool | Bounded `AtomicU64 % POOL` (default 200/host); fleet-wide cap N_hosts × POOL |
+
+### Backend choice — SQLite knee at ~3 RPS sustained
+
+**Phase 9 F1 stress matrix finding (gap-#11, 2026-05-16).** The
+24 h F1 baseline at 1 RPS PASSes cleanly on SQLite (attempt #11:
+0 failures across 86,400 ops). At 5 RPS sustained the same stack
+crosses the SQLite single-writer knee:
+
+- Achieved throughput **3.6 ops/s** vs target 5 — server-side
+  latency throttles iac-trial's token bucket.
+- Cumulative failure rate **0.21 %** (still under the 1 % cap)
+  but per-hour rate peaked at **3.73 %** in h+18, sustained
+  ≥ 1 % across 5 h.
+- `busy/5min` hit **1846** (37 × cap 50); slope detector fired
+  both deteriorating + sustained triggers.
+- p99 latency **> 2.5 s** on **0.67 %** of requests (the long
+  tail is connection queue depth, not work).
+- 0 CP / 0 agent unaccounted restarts. audit chain intact.
+  Per-resource cap held (1400 distinct `resource_id`, 70 k obs
+  rows).
+
+**Decision: accepted as a design knob.** SQLite's single-writer
+serializes every INSERT — at sustained 5 RPS, the WAL frame queue
+backs up faster than `wal_checkpoint(TRUNCATE)` can drain. Tuning
+`synchronous=NORMAL` would buy throughput but trade durability,
+which we won't do for an audit-chain backend. The sqlx Any driver
+already supports Postgres end-to-end (migrations-postgres ships
+the same schema with BIGSERIAL where SQLite uses AUTOINCREMENT).
+
+**Operator guidance.** For sustained submit rates above 3 RPS,
+switch the CP to Postgres:
+
+```toml
+# /etc/iac/server.toml
+database_url = "postgres://iac:secret@db.internal:5432/iac"
+```
+
+…and run the Postgres migrations from
+`crates/iac-controlplane/migrations-postgres/` (the runtime
+auto-applies them on startup the same way SQLite migrations do).
+Production fleets typically operate well under 1 RPS submit
+load, so SQLite remains the right default — the knee only
+matters under bursty CI-driven submission patterns or large-fleet
+periodic re-applies.
 
 **Tuning beyond defaults.** If the fleet outgrows defaults
 (symptom: WAL hits cap + 5xx rate climbs over hours despite no

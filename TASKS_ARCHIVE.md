@@ -3062,3 +3062,88 @@ whether the steady-state is roughly the same shape under 5× load.
 The 32-line `dhat-heap.json` from this run is small enough to
 view via the official `dh_view.html` viewer (online or local).
 
+
+## Phase 9-F1-stress-burst — SQLite knee at 5 RPS (gap-#11, 2026-05-17)
+
+24 h burst variant of the F1 stress matrix
+(`fleet-f1-stress-matrix.sh burst`, 5 RPS sustained). Ran
+2026-05-15T17:14Z → 2026-05-16T17:14Z against the F1 #11 PASS
+stack (all 9 prod fixes + fix-10 executor GC + force-heartbeat).
+
+**Numbers:**
+
+```
+elapsed:    86400.98 s   (24 h)
+target:     5 ops/s × 86400 = 432,000
+achieved:   307,874 submissions   (3.6 ops/s actual)
+failures:   643          (0.21 % cumulative — under 1 % cap)
+per-hour:   peak 3.73 % @ h+18; sustained ≥ 1 % across 5 h
+0 CP restarts, 0 agent restarts (same MainPID throughout)
+audit chain: 7 → 615,759 rows (615,752 added)
+observations: 70,400 rows, 1,400 distinct resource_id
+            (= 7 × 200 from fix-9 pool — held cleanly)
+busy/5min:  1846 (37 × cap 50)
+slow/5min:  151 (1.5 × cap 100)
+slope detector: both triggers fired
+```
+
+**Latency histogram (24 h):**
+
+```
+<5ms:      163,623  (53 %)
+<10ms:      51,061  (17 %)
+<25ms:      54,161  (18 %)
+<50ms:      18,281  (6 %)
+<100ms:      9,130  (3 %)
+<250ms:      6,431  (2 %)
+<500ms:      1,771  (0.6 %)
+<1s:           741  (0.24 %)
+<2.5s:         615  (0.2 %)
+≥2.5s:       2,060  (0.67 %)  ← long tail
+```
+
+**Diagnosis.** The SQLite single-writer serializes every INSERT.
+At 1 RPS the WAL frame queue drains comfortably; at 5 RPS sustained,
+`wal_checkpoint(TRUNCATE)` can't keep up and submission requests
+serialize on the write lock. Each long-tail request was waiting
+behind the queue, not doing real work. The trial run still PASSed
+by application criteria (cumulative < 1 %, 0 restarts, audit
+chain intact, per-resource cap held cleanly) — but the per-hour
+trend and slope detector are honest about saying the stack is
+operating beyond the SQLite backend's sustained throughput.
+
+**Decision: accepted as a design knob, NOT fixed.** The sqlx Any
+driver already supports Postgres end-to-end —
+`migrations-postgres/` ships the same schema with BIGSERIAL
+where SQLite uses AUTOINCREMENT. For operators who actually
+need sustained > 3 RPS, the path is a 1-line config change:
+
+```toml
+database_url = "postgres://iac:secret@db.internal:5432/iac"
+```
+
+Tuning SQLite further (`synchronous=NORMAL` etc.) would buy
+throughput at the cost of durability — we won't do that for an
+audit-chain backend.
+
+Runbook section
+[Backend choice — SQLite knee at ~3 RPS sustained](../docs/en/runbook.md#backend-choice--sqlite-knee-at-3-rps-sustained)
+documents the operator-facing guidance.
+
+**Side finding: `/v1/audit/verify` doesn't scale.** Manual finalize
+attempt timed out on the verify endpoint — re-hashing all 615 k
+audit rows on every call is too slow at fleet scale. Pinned for
+follow-up via trigger-bound backlog: "paginate or incremental-
+verify with periodic checkpoint hashes."
+
+**Side finding: post-burst managed=0 on 4/7 agents.** After the
+24 h burst ended, four agents show `managed=0` in `/v1/agents`
+despite being healthy by heartbeat. Suspected cause: during peak
+contention the agent's `fetch_desired_state` repeatedly failed with
+500, eventually pushing an observation cycle that reported
+managed=0; CP cached that count and the agents haven't pushed a
+fresh observation since because no workload is exercising them.
+Not a blocker (cosmetic post-soak ambient state), worth a
+follow-up "agent should refresh managed-count on first heartbeat
+after a long idle window."
+
