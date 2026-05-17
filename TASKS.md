@@ -31,6 +31,16 @@ detection, nftables firewall backend. Plus admin CLI wrappers
 (`iac agents list` / `ops list` / `audit --follow`) from the same
 "don't wait for the complaint" wave (`b56fad7`).
 
+**F8 X-Forwarded-For trusted-proxy bucketing** (commit `c36dc89`)
+— closes the single-source / multi-source rate-limit story.
+Harness `fleet-f8m-xff.sh` spins an ephemeral CP locally and
+proves three distinct buckets across X-F-F headers; 7 unit tests
+cover the IP-extraction edge cases.
+
+**F1 density harness** (commit `ef3a01c`) — systemd template
+unit `iac-agent@.service` + per-instance state dirs + scenario
+runner. Implementation only; 24h soak validation deferred.
+
 **Workspace health:** 1125 / 1125 tests green;
 `cargo clippy --workspace --all-targets` clean.
 
@@ -38,43 +48,27 @@ detection, nftables firewall backend. Plus admin CLI wrappers
 
 ## Open — Active backlog
 
-### Phase 9 — F1 stress-matrix variants
+### Phase 9 — Soak validations (long wall-clock)
 
-Baseline F1 PASS validated the stack at 1 RPS sustained for 24 h.
-The burst variant (5 RPS × 24 h) ran 2026-05-15→16 and surfaced
-gap-#11 (SQLite single-writer knee), accepted as a design knob
-("use Postgres for sustained > 3 RPS" — runbook section "Backend
-choice — SQLite knee at ~3 RPS sustained"). Two variants
-remain pre-staged in `trial/scenarios/fleet-f1-stress-matrix.sh`:
+Three variants remain pending; all need ≥ 24 h to validate.
+Harnesses are staged and syntax-checked.
 
 - [ ] **F1 72h variant** — `./trial/scenarios/fleet-f1-stress-matrix.sh
       72h`. 3× baseline duration. Catches slow leaks that aggregate
       below the 24h threshold (e.g. 0.1 MB/h growth ≈ 7 MB / 24 h
       invisible, 22 MB / 72 h trips the absolute-cap check). All
       Phase 9 fixes 1–10 active.
-- [ ] **F1 density variant** — multi-iac-agent-per-VPS via systemd
-      template unit (`iac-agent@.service`) + per-instance state
-      dirs. Stub in the harness today (the `density` case prints
-      a plan and exits 1). Implementation is ~1–2 h; validation
-      ≥ 24 h.
-
-### Phase 9 — mimalloc allocator validation
-
-Feature flag landed in `c712f17` (build via `--features mimalloc`).
-No 24 h soak comparison done yet. Goal: prove that glibc malloc
-arena fragmentation (the F1 #11 +32 MB warm-to-late RSS finding)
-actually goes away vs the default-allocator baseline. Requires
-two parallel 24 h F1 runs (one stock, one mimalloc) and an RSS
-delta comparison.
-
-### Phase 9 — F8 multi-source X-Forwarded-For allowlist
-
-Single-source-IP rate-limit closed in `9da4475`. The trusted-
-proxy follow-up (CP behind a reverse-proxy that sets
-`X-Forwarded-For`) wants real-fleet validation — synthetic
-storm from two source IPs via cp-spare-01 + cp-spare-02 against
-cp-01, with the allowlist letting the proxy header take
-precedence. Harness work ~1 h, run ~30 min.
+- [ ] **F1 density variant** — harness ready (`fleet-f1-stress-density.sh`,
+      commit `<see git log>`): systemd template `iac-agent@.service` +
+      per-instance state dirs, default DENSITY=3 → 21 total agents
+      via 7 VPS. Probes the agent-count axis without renting more
+      hardware. Same finalize pipeline.
+- [ ] **mimalloc allocator validation** — feature flag landed in
+      `c712f17` (build via `--features mimalloc`). Goal: prove that
+      glibc malloc arena fragmentation (the F1 #11 +32 MB warm-to-
+      late RSS finding) actually goes away vs the default-allocator
+      baseline. Requires two parallel 24 h F1 runs (stock vs
+      mimalloc) and an RSS delta comparison.
 
 ---
 

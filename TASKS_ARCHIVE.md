@@ -3315,3 +3315,106 @@ the ergonomic skin") stands.
 session start: 1 rate-limit hot-reload test, 6 nft argv-shape
 tests).
 
+
+## Phase 9-F8-XFF — X-Forwarded-For trusted-proxy bucketing (2026-05-17)
+
+**PASS verdict** on first run (commit `c36dc89`). Closes the
+remaining piece of the F8 story — single-source-IP register cap
+landed earlier (`9da4475`), and this fix addresses the reverse-
+proxy case where every real client arrives from the proxy's
+egress IP.
+
+**Server side.** New `Config::trusted_proxies: Vec<IpAddr>`
+(default empty — pre-fix behaviour preserved). When the raw
+socket peer is in this list, the per-IP rate-limit bucket
+(login, register) keys by the leftmost entry in the
+`X-Forwarded-For` header instead. Untrusted peers continue to
+bucket by socket IP — a malicious client outside the trusted
+list can't set the header to dodge a bucket.
+
+New `api::effective_client_ip(headers, socket_addr, trusted)`
+helper handles three observed shapes: bare IP, IPv4 + port
+(`1.2.3.4:5678` from some proxies), bracketed IPv6
+(`[2001:db8::1]:443`). Malformed header values fall back to
+socket IP with a debug log. Both `register` and `login`
+handlers thread the header map through.
+
+**Test surface.** 7 unit tests in `api::tests` cover the spoof-
+prevention path (untrusted peer's header is ignored), the
+canonical proxy path, the empty-list default, missing-header /
+malformed-header fallback, IPv4-with-port and bare-IPv6
+shapes. The trickiest case was bare IPv6 — the original
+implementation `rsplit_once(':')`-stripped the suffix to
+"handle port", which broke `2001:db8::1` (no port, but lots of
+colons). Rewrote the parser to try-bare-IP-first; only fall to
+port-stripping for the IPv4 (`exactly one colon`) shape, or
+bracketed-form for IPv6.
+
+**Harness verdict.** `trial/scenarios/fleet-f8m-xff.sh` spins up
+an ephemeral CP on 127.0.0.1 with
+`trusted_proxies = ["127.0.0.1"]` and
+`register_per_minute_per_ip = 5`. Three cycles via curl:
+
+```
+cycle 1: 6 × register with X-Forwarded-For: 1.1.1.1
+         expect:  5 × 200 + 1 × 429 (cap=5 enforced)
+         actual:  5 × 200 + 1 × 429 ✓
+
+cycle 2: 5 × register with X-Forwarded-For: 2.2.2.2
+         expect:  5 × 200 (separate bucket — KEY PROOF)
+         actual:  5 × 200 ✓
+
+cycle 3: 1 × register without X-Forwarded-For
+         expect:  1 × 200 (third bucket = socket IP)
+         actual:  1 × 200 ✓
+```
+
+The cycle-2 result is the substantive proof: with the pre-fix
+code, both cycles would have hit the same 127.0.0.1 bucket and
+cycle 2 would have been all 429s.
+
+**Test fixups.** `trusted_proxies: vec![]` propagated to all 28
+test files that construct `Config { ... }` literally + the
+TestServerBuilder default. 1132 / 1132 workspace tests green
+(+7 vs prior 1125).
+
+---
+
+## Phase 9-F1-stress-density — harness implementation (2026-05-17)
+
+Closes the `density` stub in `fleet-f1-stress-matrix.sh` that
+previously printed a plan and exited 1. **Implementation only;
+24 h soak validation deferred** (next session, wall-clock-bound).
+
+Three new artifacts:
+
+- `trial/fleet/iac-agent@.service` — systemd template unit.
+  Each instance `iac-agent@N.service` reads its own config at
+  `/etc/iac/agent-N.toml` and writes state to
+  `/var/lib/iac-agent-N/`. Coexists with the non-template
+  `iac-agent.service` (single-instance baseline) without
+  conflict — different binary paths nowhere overlap.
+- `trial/fleet/agent-density.toml.tmpl` — config template with
+  `__INSTANCE__`, `__AGENT_NAME__`, `__SERVER_URL__`
+  substitutions. Same agent-config shape as the baseline
+  `agent.toml.tmpl`; only state/manifest paths and the
+  hostSelector name differ per slot.
+- `trial/scenarios/fleet-f1-stress-density.sh` — runner.
+  Refuses to start if a baseline F1 trial is in flight (avoids
+  mixing per-resource caps with the bigger agent count). For
+  each VPS: pushes the template service file + per-slot configs,
+  starts all DENSITY×7 instances, waits up to 120 s for every
+  one to register, then nohup's an iac-trial longevity soak
+  targeting all DENSITY×7 agent names. Standard
+  `fleet-f1-status.sh` / `fleet-f1-finalize.sh` pipeline handles
+  the running soak.
+
+Default `DENSITY=3` → 21 total agents on the existing 7-VPS
+fleet. Probes the agent-count axis without renting more
+hardware. Range-checked to `[1, 20]` (20 × 7 = 140 agents would
+be ambitious — beyond that the per-VPS RAM budget bites).
+
+Syntax-checked via `bash -n`; no execution against the real
+fleet in this commit. Validation deferred to a 24 h+ session
+once the fleet is otherwise idle.
+
