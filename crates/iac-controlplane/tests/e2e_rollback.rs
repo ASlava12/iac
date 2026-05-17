@@ -66,6 +66,7 @@ impl TestServer {
             ssh_targets: vec![],
             wal_checkpoint_interval_secs: 0,
             shutdown_timeout_secs: 1,
+            trusted_proxies: vec![],
         };
         let store = Store::connect(&cfg.database_url).await.unwrap();
         let signer = std::sync::Arc::new(

@@ -91,3 +91,137 @@ pub async fn require_role(
 ) -> Result<crate::identity::Identity, ApiError> {
     crate::identity::require_role(state, token, role).await
 }
+
+/// Phase 9 follow-up: pick the IP that the per-IP rate-limit buckets
+/// should key by. If the raw socket peer is in `trusted_proxies`,
+/// read the leftmost entry in `X-Forwarded-For` instead (that's
+/// the canonical "originating client" position in RFC 7239). Any
+/// other peer keeps using the socket IP, so a non-proxied client
+/// can't spoof the header to dodge a bucket.
+///
+/// Malformed header (no parseable IP) falls back to the socket IP
+/// with a debug-level log — better to bucket the proxy itself than
+/// to skip the check entirely.
+pub fn effective_client_ip(
+    headers: &axum::http::HeaderMap,
+    socket_addr: std::net::SocketAddr,
+    trusted_proxies: &[std::net::IpAddr],
+) -> std::net::IpAddr {
+    let socket_ip = socket_addr.ip();
+    if trusted_proxies.is_empty() || !trusted_proxies.iter().any(|p| *p == socket_ip) {
+        return socket_ip;
+    }
+    let Some(hv) = headers.get("x-forwarded-for") else {
+        return socket_ip;
+    };
+    let Ok(s) = hv.to_str() else { return socket_ip };
+    // X-Forwarded-For: client, proxy1, proxy2  → leftmost is the
+    // originating client. Strip whitespace.
+    let leftmost = s.split(',').next().unwrap_or("").trim();
+    // Three shapes to handle:
+    //   `[2001:db8::1]:443`  bracketed v6 with port
+    //   `1.2.3.4:5678`        v4 with port (some proxies)
+    //   `2001:db8::1` / `1.2.3.4`  bare IP
+    // Try bare-IP-parse first to keep IPv6-without-port working
+    // (multi-colon string that's a valid v6 → use as-is).
+    let bare = if leftmost.starts_with('[') {
+        // Bracketed v6: trim `[...]` and optional `:port` suffix.
+        let after_close = leftmost.trim_start_matches('[');
+        after_close.split(']').next().unwrap_or(after_close)
+    } else if leftmost.parse::<std::net::IpAddr>().is_ok() {
+        leftmost
+    } else if leftmost.matches(':').count() == 1 {
+        // v4-with-port shape.
+        leftmost.split(':').next().unwrap_or(leftmost)
+    } else {
+        leftmost
+    };
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip,
+        Err(_) => {
+            tracing::debug!(
+                header = %s,
+                "X-Forwarded-For from trusted proxy not parseable as IP — falling back to socket IP"
+            );
+            socket_ip
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn h(v: &str) -> HeaderMap {
+        let mut hm = HeaderMap::new();
+        hm.insert("x-forwarded-for", HeaderValue::from_str(v).unwrap());
+        hm
+    }
+
+    fn proxy() -> Vec<IpAddr> {
+        vec![IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))]
+    }
+
+    #[test]
+    fn untrusted_peer_returns_socket_ip_even_with_header() {
+        // Header is set but socket peer isn't in trusted_proxies →
+        // ignore the header (the canonical anti-spoof behaviour).
+        let hm = h("1.2.3.4");
+        let socket = "192.168.1.5:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "192.168.1.5");
+    }
+
+    #[test]
+    fn trusted_proxy_returns_xff_leftmost() {
+        // Socket is the trusted proxy; X-F-F leftmost is the real
+        // originating client.
+        let hm = h("1.2.3.4, 10.0.0.1");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "1.2.3.4");
+    }
+
+    #[test]
+    fn empty_trusted_list_keeps_socket_semantics() {
+        let hm = h("1.2.3.4");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &[]);
+        assert_eq!(ip.to_string(), "10.0.0.1");
+    }
+
+    #[test]
+    fn missing_header_from_trusted_proxy_falls_back() {
+        let hm = HeaderMap::new();
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "10.0.0.1");
+    }
+
+    #[test]
+    fn malformed_header_falls_back_to_socket() {
+        let hm = h("not-an-ip");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "10.0.0.1");
+    }
+
+    #[test]
+    fn header_with_port_strips_to_bare_ip() {
+        // Some proxies set "1.2.3.4:5678" entries; we want the IP.
+        let hm = h("1.2.3.4:5678");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "1.2.3.4");
+    }
+
+    #[test]
+    fn ipv6_xff_unbracketed() {
+        let hm = h("2001:db8::1");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "2001:db8::1");
+    }
+}

@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
 async fn register(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<Json<RegisterResponse>> {
     // Phase 9-F8 (security fix): per-IP rate-limit. The endpoint is
@@ -46,9 +47,20 @@ async fn register(
     // both the agents table and the audit chain at line rate. Empirical
     // F8 storm test showed 250+ inserts in 10 s from one host before
     // this fix.
+    //
+    // Phase 9 follow-up: when the CP is behind a reverse proxy listed
+    // in `trusted_proxies`, key by `X-Forwarded-For` so each real
+    // client gets its own bucket. Untrusted peers still bucket by
+    // socket IP — header is ignored, so a malicious client can't
+    // dodge a bucket by setting the header themselves.
+    let client_ip = crate::api::effective_client_ip(
+        &headers,
+        addr,
+        &state.config().trusted_proxies,
+    );
     state
         .rate_limiter
-        .check_and_record_register(&addr.ip().to_string())
+        .check_and_record_register(&client_ip.to_string())
         .await?;
     // Phase 7cc: read TTL config from live snapshot so SIGHUP reload
     // picks up changes for new registrations without a restart.

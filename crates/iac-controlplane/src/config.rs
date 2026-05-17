@@ -106,6 +106,21 @@ pub struct Config {
     /// if your service unit's TimeoutStopSec is also higher and
     /// you want more time for clean shutdown.
     pub shutdown_timeout_secs: u64,
+    /// Phase 9 follow-up: list of IP addresses that, when seen as the
+    /// raw socket peer, are treated as trusted reverse proxies. For
+    /// requests originating from these, the per-IP rate-limit buckets
+    /// (login, register) read the leftmost entry in the
+    /// `X-Forwarded-For` header instead of the socket peer's IP, so a
+    /// single proxy fronting many real clients doesn't squash them
+    /// all into one bucket.
+    ///
+    /// Empty by default — pre-Phase-9 behaviour, no header trust, all
+    /// rate limits keyed by raw socket IP. Operators behind a known
+    /// proxy populate this with their proxy's egress IPs; requests
+    /// from any other peer keep using socket IP regardless of header
+    /// presence (so a malicious client can't spoof X-Forwarded-For to
+    /// dodge a bucket).
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 /// Phase 7ck: declarative SSH push target. Validated at server
@@ -399,6 +414,8 @@ struct RawConfig {
     wal_checkpoint_interval_secs: u64,
     #[serde(default = "default_shutdown_timeout")]
     shutdown_timeout_secs: u64,
+    #[serde(default)]
+    trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 fn default_wal_checkpoint_interval() -> u64 {
@@ -549,6 +566,7 @@ impl Config {
             ssh_targets,
             wal_checkpoint_interval_secs: raw.wal_checkpoint_interval_secs,
             shutdown_timeout_secs: raw.shutdown_timeout_secs,
+            trusted_proxies: raw.trusted_proxies,
         })
     }
 

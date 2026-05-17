@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
 async fn login(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResponse>> {
     if req.username.is_empty() || req.password.is_empty() {
@@ -43,9 +44,17 @@ async fn login(
     // ConnectInfo extractor wasn't wired), so the per-IP login bucket
     // was a no-op even when the config had a non-zero cap. Now the
     // real socket address is plumbed through.
+    //
+    // Phase 9 follow-up: trusted-proxy X-Forwarded-For path — see
+    // register handler for the same shape.
+    let client_ip = crate::api::effective_client_ip(
+        &headers,
+        addr,
+        &state.config().trusted_proxies,
+    );
     state
         .rate_limiter
-        .check_and_record_login(&req.username, &addr.ip().to_string())
+        .check_and_record_login(&req.username, &client_ip.to_string())
         .await?;
     let outcome = state
         .store
