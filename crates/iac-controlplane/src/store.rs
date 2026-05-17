@@ -2938,36 +2938,83 @@ impl Store {
     /// columns and are skipped (legacy data is not retroactively
     /// chained).
     pub async fn audit_verify_chain(&self) -> ApiResult<Option<i64>> {
-        let mut rows = sqlx::query(&sql(
-            "SELECT id, timestamp, actor, kind, severity, operation_id, agent_id,
-                    resource_id, drift_id, payload_json, prev_hash, row_hash
-             FROM audit_events
-             WHERE row_hash IS NOT NULL
-             ORDER BY id ASC",
-        ))
-        .fetch_all(&self.pool)
-        .await?
-        .into_iter();
-        let mut prev_hash: String = String::new();
-        for row in rows.by_ref() {
-            let id: i64 = row.try_get("id")?;
-            let stored_row_hash: String = row.try_get("row_hash")?;
-            let stored_prev_hash: Option<String> = row.try_get("prev_hash")?;
-            let stored_prev = stored_prev_hash.unwrap_or_default();
-            if stored_prev != prev_hash {
-                return Ok(Some(id));
+        // Phase 9 follow-up: the pre-fix implementation called
+        // `fetch_all` against the whole `audit_events` table. F1
+        // stress burst grew the chain to 615 k rows in 24 h and the
+        // verify endpoint timed out (Postgres path loaded every row
+        // into memory; SQLite path was slow but technically
+        // completed inside SQLite, just past HTTP's deadline). The
+        // chunked walk below bounds memory regardless of chain size
+        // and lets the loop exit on first mismatch without having
+        // already pulled everything.
+        self.audit_verify_chain_from(0).await
+    }
+
+    /// Phase 9 follow-up: verify the audit chain from id `from_id`
+    /// onward (verifying `id > from_id`). Operators wanting a quick
+    /// integrity check on the recent tail pass the chain tip from
+    /// their last known-good snapshot here; the endpoint walks only
+    /// new rows. `from_id = 0` walks the whole chain.
+    ///
+    /// Memory is bounded by `CHUNK`. On a broken chain returns the
+    /// first id where stored hash disagrees with computed hash;
+    /// `Ok(None)` means clean.
+    pub async fn audit_verify_chain_from(&self, from_id: i64) -> ApiResult<Option<i64>> {
+        const CHUNK: i64 = 10_000;
+        // Seed prev_hash from the row at `from_id` (or "" if 0). We
+        // verify rows with `id > from_id`; their `prev_hash` field
+        // must match row[from_id].row_hash.
+        let mut prev_hash: String = if from_id <= 0 {
+            String::new()
+        } else {
+            sqlx::query(&sql(
+                "SELECT row_hash FROM audit_events WHERE id = ? AND row_hash IS NOT NULL",
+            ))
+            .bind(from_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .and_then(|r| r.try_get::<String, _>("row_hash").ok())
+            .unwrap_or_default()
+        };
+        let mut last_seen: i64 = from_id;
+        loop {
+            let rows = sqlx::query(&sql(
+                "SELECT id, timestamp, actor, kind, severity, operation_id, agent_id,
+                        resource_id, drift_id, payload_json, prev_hash, row_hash
+                 FROM audit_events
+                 WHERE row_hash IS NOT NULL AND id > ?
+                 ORDER BY id ASC
+                 LIMIT ?",
+            ))
+            .bind(last_seen)
+            .bind(CHUNK)
+            .fetch_all(&self.pool)
+            .await?;
+            if rows.is_empty() {
+                return Ok(None);
             }
-            let owned = row_to_audit_inputs(&row)?;
-            // Hash uses id=0 to match the single-pass insert path; see
-            // `record_audit_on` for why the row's autoincrement id is
-            // not part of the chain hash today.
-            let computed = compute_audit_row_hash(&prev_hash, 0, &owned.as_ref());
-            if computed != stored_row_hash {
-                return Ok(Some(id));
+            for row in &rows {
+                let id: i64 = row.try_get("id")?;
+                let stored_row_hash: String = row.try_get("row_hash")?;
+                let stored_prev_hash: Option<String> = row.try_get("prev_hash")?;
+                let stored_prev = stored_prev_hash.unwrap_or_default();
+                if stored_prev != prev_hash {
+                    return Ok(Some(id));
+                }
+                let owned = row_to_audit_inputs(row)?;
+                let computed = compute_audit_row_hash(&prev_hash, 0, &owned.as_ref());
+                if computed != stored_row_hash {
+                    return Ok(Some(id));
+                }
+                prev_hash = stored_row_hash;
+                last_seen = id;
             }
-            prev_hash = stored_row_hash;
+            // If we fetched fewer than CHUNK rows, the chain ends
+            // here — short-circuit the next LIMIT query.
+            if (rows.len() as i64) < CHUNK {
+                return Ok(None);
+            }
         }
-        Ok(None)
     }
 
     pub async fn list_audit(&self, filter: AuditFilter) -> ApiResult<Vec<AuditEvent>> {
