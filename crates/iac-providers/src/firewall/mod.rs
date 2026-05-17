@@ -14,11 +14,14 @@
 //!
 //! Cross-platform: works wherever iptables is on PATH (mainline
 //! Linux, OpenWrt with the iptables package, most network gear).
-//! Pure-nftables systems (recent Debian / Fedora) need
-//! `iptables-nft` shim — this still uses the `iptables` CLI.
-//! Embedded gear with only nftables: future Phase 5d+ provider.
+//! Pure-nftables systems (recent Debian / Fedora / RHEL 9+) get a
+//! native `nft`-shelling backend selected via the
+//! `IAC_FIREWALL_BACKEND=nft` env var; see `nft.rs`. Default
+//! remains the iptables backend so unset / legacy operators
+//! keep pre-Phase-9 behaviour.
 
 mod backend;
+mod nft;
 mod ops;
 mod spec;
 
@@ -29,6 +32,7 @@ crate::step_actions!(FirewallAction {
 });
 
 pub use backend::{FirewallBackend, IptablesBackend, MockFirewall, ObservedRule};
+pub use nft::NftablesBackend;
 pub use spec::{Family, FirewallRuleSpec, FirewallState};
 
 use iac_core::{
@@ -54,8 +58,40 @@ impl Default for FirewallProvider {
 }
 
 impl FirewallProvider {
+    /// Phase 9 follow-up: pick the backend at construct-time via
+    /// the `IAC_FIREWALL_BACKEND` env var.
+    ///
+    /// - unset / `"iptables"` → [`IptablesBackend`] (default; same
+    ///   behaviour as pre-Phase-9 builds).
+    /// - `"nft"` / `"nftables"` → [`NftablesBackend`], for distros
+    ///   that no longer ship iptables (RHEL 9+, recent Fedora) or
+    ///   operators preferring native nftables semantics.
+    ///
+    /// Unknown values fall back to iptables with a `warn!` — a typo
+    /// shouldn't silently swap the firewall provider out from under
+    /// the operator.
     pub fn new() -> Self {
-        Self { backend: Box::new(IptablesBackend) }
+        let raw = std::env::var("IAC_FIREWALL_BACKEND").ok();
+        let normalised = raw
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase());
+        let backend: Box<dyn FirewallBackend> = match normalised.as_deref() {
+            None | Some("") | Some("iptables") => Box::new(IptablesBackend),
+            Some("nft") | Some("nftables") => {
+                tracing::info!(
+                    "firewall provider: nft backend selected via IAC_FIREWALL_BACKEND"
+                );
+                Box::new(NftablesBackend)
+            }
+            Some(other) => {
+                tracing::warn!(
+                    requested = other,
+                    "unknown IAC_FIREWALL_BACKEND value; falling back to iptables"
+                );
+                Box::new(IptablesBackend)
+            }
+        };
+        Self { backend }
     }
 
     pub fn with_backend(backend: Box<dyn FirewallBackend>) -> Self {
