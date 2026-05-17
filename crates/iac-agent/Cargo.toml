@@ -51,6 +51,16 @@ ed25519-dalek = { workspace = true }
 base64 = { workspace = true }
 # Phase 7cz.14: non-poisoning Mutex for rusqlite connection guard.
 parking_lot = { workspace = true }
+# Phase 9 follow-up: capability allowlist + WASM module hot-reload
+# wrap shared state in ArcSwapOption so the watcher tasks can swap
+# updated values without a tokio-RwLock async dance.
+arc-swap = { workspace = true }
+# Phase 9 follow-up: WASM-module change-detector hashes module
+# bytes on disk and compares against startup baseline. Same hash
+# function used by the existing `module_sha256` pin verification
+# in iac-providers/wasm/spec.rs.
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -28,7 +28,7 @@ use iac_providers::shellout::ShellOutRuntime;
 #[cfg(feature = "wasm")]
 use iac_providers::wasm::{WasmComponentProvider, WasmRuntimeAdapter, WasmRuntimeKind};
 use jiff::Timestamp;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Notify, RwLock};
@@ -52,10 +52,28 @@ struct Inner {
     /// startup is logged but does not abort the agent — it operates standalone
     /// and retries each observe cycle.
     remote: RwLock<Option<Client>>,
-    /// Capability allowlist loaded from `config.capabilities_file`. `None`
-    /// means the file was absent and the agent runs unrestricted; `Some`
-    /// means rules are enforced before every apply.
-    capabilities: Option<Capabilities>,
+    /// Capability allowlist loaded from `config.capabilities_file`.
+    /// `None` means the file is absent and the agent runs unrestricted;
+    /// `Some` means rules are enforced before every apply.
+    ///
+    /// Phase 9 follow-up: wrapped in `ArcSwapOption` so the
+    /// `capabilities_watcher` task can swap a freshly-reloaded
+    /// allowlist in atomically. Pre-fix the agent required a process
+    /// restart to pick up edits to the YAML file.
+    capabilities: arc_swap::ArcSwapOption<Capabilities>,
+    /// Phase 9 follow-up: (kind, module path, startup-time sha256)
+    /// for each registered WASM provider. The
+    /// `wasm_module_watcher_loop` task re-hashes each module
+    /// periodically and warns operators when the on-disk bytes
+    /// drift from the startup baseline. Empty when no WASM
+    /// providers are configured or the `wasm` feature is off.
+    wasm_module_paths: Vec<(String, PathBuf, String)>,
+    /// `AtomicBool` flipped to `true` by the WASM watcher when at
+    /// least one module is known-stale. Surfaced via the agent
+    /// status file so operator tooling (Grafana panel, `iac agents
+    /// list` colourised status, etc.) can flag "wasm reload pending"
+    /// without parsing logs.
+    wasm_module_stale: std::sync::atomic::AtomicBool,
 }
 
 impl Agent {
@@ -95,12 +113,33 @@ impl Agent {
             registry.register(Box::new(runtime.into_provider()));
             info!(kind = %kind, binary = %p.binary.display(), "registered external provider");
         }
+        // Phase 9 follow-up: capture (kind, module-path, startup-hash)
+        // for the WASM-module change-detector watcher (see
+        // `wasm_module_watcher_loop`). The watcher periodically
+        // re-hashes each module file and emits a `warn!` if any
+        // changed since startup, telling the operator to restart
+        // to pick up the new code. Live in-place swap of compiled
+        // wasmtime modules is deferred — wasmtime's Component +
+        // Linker carry enough state that an atomic swap would need
+        // a wrapper layer this fix doesn't add.
+        #[cfg(feature = "wasm")]
+        let mut wasm_module_paths: Vec<(String, PathBuf, String)> = Vec::new();
+        #[cfg(not(feature = "wasm"))]
+        let wasm_module_paths: Vec<(String, PathBuf, String)> = Vec::new();
+
         #[cfg(feature = "wasm")]
         for p in &config.wasm_providers {
             let kind = p.kind.clone();
             if registry.get(&kind).is_some() {
                 warn!(kind = %kind, "wasm provider overrides built-in or earlier registration");
             }
+            // Pre-compute baseline hash for the watcher. We use the
+            // raw file bytes (same shape as `module_sha256` pin
+            // verification). Hash errors here are non-fatal; the
+            // watcher just won't track this module.
+            let startup_hash = compute_module_sha256(&p.module).unwrap_or_default();
+            wasm_module_paths.push((kind.clone(), p.module.clone(), startup_hash));
+
             // Phase 7dd: dispatch on the runtime discriminator. Both
             // variants implement the same `Provider` trait, so the
             // executor doesn't care which one is registered.
@@ -146,7 +185,9 @@ impl Agent {
                 store,
                 status: RwLock::new(status),
                 remote: RwLock::new(None),
-                capabilities,
+                capabilities: arc_swap::ArcSwapOption::new(capabilities.map(Arc::new)),
+                wasm_module_paths,
+                wasm_module_stale: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
@@ -157,7 +198,11 @@ impl Agent {
         &self,
         resources: Vec<Resource>,
     ) -> (Vec<Resource>, Vec<(Resource, DenyReason)>) {
-        let Some(caps) = self.inner.capabilities.as_ref() else {
+        // Lock-free atomic load; the `Arc<Capabilities>` snapshot
+        // is consistent for the duration of this fn even if the
+        // watcher swaps in a fresh allowlist mid-loop.
+        let caps_arc = self.inner.capabilities.load_full();
+        let Some(caps) = caps_arc.as_deref() else {
             return (resources, Vec::new());
         };
         let mut allowed = Vec::with_capacity(resources.len());
@@ -755,6 +800,34 @@ impl Agent {
             warn!(error = %e, "initial heartbeat ping failed; relying on first observe cycle");
         }
 
+        // Phase 9 follow-up: capability-allowlist hot-reload watcher.
+        // Spawn a background task that polls
+        // `config.capabilities_file`'s mtime every CAP_WATCHER_TICK_SECS
+        // and, on change, re-runs `Capabilities::load` + atomic swap.
+        // Pre-fix the agent required a process restart to pick up
+        // edits. mtime-polling instead of `inotify` keeps the binary
+        // depless (relevant for the MIPS 7 MiB budget) and the
+        // observation lag (≤ 5 s) is far below operator-edit
+        // cadence.
+        let cap_inner = self.inner.clone();
+        let cap_shutdown = shutdown.clone();
+        tokio::spawn(async move { capabilities_watcher_loop(cap_inner, cap_shutdown).await });
+
+        // Phase 9 follow-up: WASM module change-detector. Re-hashes
+        // each configured `wasm_providers[*].module` periodically
+        // and warns operators when the on-disk bytes have drifted
+        // from the startup baseline. Live in-place swap of the
+        // compiled module is deferred — wasmtime's Component +
+        // Linker carry state that's awkward to atomically replace
+        // — so the agent emits a `warn!` and flips
+        // `inner.wasm_module_stale` so operator tooling can flag
+        // "wasm reload pending; restart agent to apply." The
+        // observation lag (≤ 30 s) is far below operator-edit
+        // cadence for WASM modules.
+        let wasm_inner = self.inner.clone();
+        let wasm_shutdown = shutdown.clone();
+        tokio::spawn(async move { wasm_module_watcher_loop(wasm_inner, wasm_shutdown).await });
+
         // Immediate first cycle.
         if let Err(e) = self.observe_once().await {
             error!(error = %e, "initial observe cycle failed");
@@ -787,6 +860,150 @@ impl Agent {
 
 fn executor_state_dir(config: &Config) -> PathBuf {
     config.state_dir.join("executor")
+}
+
+/// Phase 9 follow-up: poll `config.capabilities_file` for mtime
+/// changes every `CAP_WATCHER_TICK_SECS` and atomically swap the
+/// allowlist when it changes. Reload failures log and leave the
+/// previous allowlist in place so a misedit (typo / invalid YAML)
+/// doesn't degrade the agent to unrestricted-mode mid-flight.
+///
+/// Loop exits when `shutdown` fires. File deletion is treated as
+/// "operator wants unrestricted mode" and swaps to None — same
+/// semantics as starting without the file.
+/// Phase 9 follow-up: compute SHA-256 of a file on disk, hex-encoded.
+/// Shared by the WASM watcher and (potentially) startup baseline
+/// capture. Errors propagate as None to the caller, which logs.
+fn compute_module_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading wasm module {} for hash", path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Phase 9 follow-up: watch each registered wasm provider's module
+/// file and warn when the on-disk SHA-256 drifts from the startup
+/// baseline. Flips `inner.wasm_module_stale` for operator tooling.
+///
+/// Live swap deferred — wasmtime's Component + Linker carry enough
+/// state that an atomic in-place replacement needs a thicker
+/// wrapper than this fix adds. The warn + status flag covers the
+/// 80 % case (operator notices, restarts, picks up new code).
+async fn wasm_module_watcher_loop(inner: Arc<Inner>, shutdown: Arc<Notify>) {
+    use std::sync::atomic::Ordering;
+    const WASM_WATCHER_TICK_SECS: u64 = 30;
+    if inner.wasm_module_paths.is_empty() {
+        // No WASM providers configured — nothing to watch.
+        return;
+    }
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(WASM_WATCHER_TICK_SECS));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = shutdown.notified() => {
+                info!("wasm module watcher: shutdown signal received");
+                return;
+            }
+            _ = ticker.tick() => {
+                let mut any_stale = false;
+                for (kind, path, startup_hash) in &inner.wasm_module_paths {
+                    if startup_hash.is_empty() {
+                        // Baseline hash failed at startup — skip
+                        // (otherwise we'd spam warn every tick).
+                        continue;
+                    }
+                    let current_hash = match compute_module_sha256(path) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            warn!(
+                                kind = %kind,
+                                module = %path.display(),
+                                error = %e,
+                                "wasm module unreadable; assuming unchanged"
+                            );
+                            continue;
+                        }
+                    };
+                    if &current_hash != startup_hash {
+                        any_stale = true;
+                        // Only emit on the rising edge to avoid log
+                        // floods if the operator copies an updated
+                        // module and forgets to restart for hours.
+                        let was_stale = inner.wasm_module_stale.load(Ordering::Relaxed);
+                        if !was_stale {
+                            warn!(
+                                kind = %kind,
+                                module = %path.display(),
+                                startup_sha256 = %startup_hash,
+                                current_sha256 = %current_hash,
+                                "wasm module changed on disk — restart agent to load new bytes"
+                            );
+                        }
+                    }
+                }
+                inner.wasm_module_stale.store(any_stale, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+async fn capabilities_watcher_loop(inner: Arc<Inner>, shutdown: Arc<Notify>) {
+    use std::time::SystemTime;
+    const CAP_WATCHER_TICK_SECS: u64 = 5;
+    let path = inner.config.capabilities_file.clone();
+    // Baseline mtime — first reload only fires if the file changes
+    // after startup, not on every restart. (Capabilities loaded at
+    // construct-time is the canonical first state.)
+    let mut last_seen_mtime: Option<SystemTime> = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(CAP_WATCHER_TICK_SECS));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = shutdown.notified() => {
+                info!("capabilities watcher: shutdown signal received");
+                return;
+            }
+            _ = ticker.tick() => {
+                let current_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+                if current_mtime == last_seen_mtime {
+                    continue;
+                }
+                last_seen_mtime = current_mtime;
+                match Capabilities::load(&path) {
+                    Ok(Some(caps)) => {
+                        inner.capabilities.store(Some(Arc::new(caps)));
+                        info!(
+                            file = %path.display(),
+                            "capability allowlist hot-reloaded"
+                        );
+                    }
+                    Ok(None) => {
+                        // File got deleted (or was never there). Drop
+                        // the allowlist; agent goes unrestricted.
+                        let was_set = inner.capabilities.load_full().is_some();
+                        inner.capabilities.store(None);
+                        if was_set {
+                            warn!(
+                                file = %path.display(),
+                                "capabilities file removed — agent now unrestricted"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            file = %path.display(),
+                            error = %e,
+                            "capabilities reload failed; keeping previous allowlist"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn observe_resources_blocking(

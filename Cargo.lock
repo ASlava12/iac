@@ -1499,10 +1499,12 @@ name = "iac-agent"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "base64",
  "clap",
  "ed25519-dalek",
  "globset",
+ "hex",
  "iac-core",
  "iac-providers",
  "indexmap",
@@ -1514,6 +1516,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha2",
  "tempfile",
  "tokio",
  "toml",
