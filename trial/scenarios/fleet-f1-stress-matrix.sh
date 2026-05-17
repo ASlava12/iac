@@ -54,21 +54,35 @@ case "$VARIANT" in
         DURATION_SECS=86400 RPS=5.0 exec "$SOAK"
         ;;
     density)
-        echo "=== F1 stress: agent density (STUB) ==="
+        # Phase 9-F1-stress-density: multi-iac-agent-per-VPS via the
+        # systemd template unit `iac-agent@.service` + per-instance
+        # state dirs. F1 baseline PASSed at 7 agents (commit 483ff87);
+        # density variant lets us probe the agent-count axis without
+        # renting more VPS.
+        #
+        # Defaults:
+        #   DENSITY=3        — 3 agents per VPS → 7×3 = 21 total
+        #   DURATION_SECS    — 86400 (24h F1-baseline shape)
+        #   RPS              — 1.0 (proportional to baseline; total
+        #                      submit rate scales with agent count)
+        #
+        # Refuses to start if F1 baseline (agent count 7) is already
+        # active — the density variant assumes a clean fleet.
+        DENSITY="${DENSITY:-3}"
+        if ! [[ "$DENSITY" =~ ^[0-9]+$ ]] || [ "$DENSITY" -lt 1 ] || [ "$DENSITY" -gt 20 ]; then
+            echo "DENSITY must be an integer in [1, 20]; got: $DENSITY" >&2
+            exit 1
+        fi
+        DENSITY_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/fleet-f1-stress-density.sh"
+        [ -x "$DENSITY_SCRIPT" ] || { echo "$DENSITY_SCRIPT missing" >&2; exit 1; }
+        echo "=== F1 stress: agent density ==="
+        echo "Doctrine: $DENSITY agents per VPS × 7 VPS = $((DENSITY * 7)) total agents."
+        echo "Same F1 PASS thresholds (RSS < 5 % growth, 0 unaccounted"
+        echo "restarts, audit chain verifies, < 1 % errors). Probes the"
+        echo "agent-count axis — useful for sizing decisions ('can 1 CP"
+        echo "really hold 50 agents?') without spinning up more VPS."
         echo
-        echo "Not yet implemented. Plan:"
-        echo "  1. systemd template unit iac-agent@.service on each VPS"
-        echo "     (lets us spawn iac-agent@1, iac-agent@2, … with"
-        echo "      isolated state_dir / config)."
-        echo "  2. agent.toml.tmpl with ${INSTANCE} substitution for"
-        echo "     state_dir / db_path / agent_name."
-        echo "  3. fleet-bootstrap with DENSITY=N — install N agents/VPS."
-        echo "  4. iac-trial --targets resolves to all N×7 = 7N names."
-        echo
-        echo "Skipped for now: at 7 agents the 5 fix defaults haven't"
-        echo "fully bedded in. Density variant is more useful AFTER"
-        echo "F1 #7 demonstrates clean PASS at the 7-agent baseline."
-        exit 1
+        exec "$DENSITY_SCRIPT"
         ;;
     *)
         echo "Unknown variant: $VARIANT (try 72h, burst, density)" >&2

@@ -1,0 +1,11 @@
+# Phase 9-F1-stress-density: per-instance agent config rendered by
+# `fleet-f1-stress-matrix.sh density` for each density slot on each
+# VPS. `__AGENT_NAME__`, `__SERVER_URL__`, and `__INSTANCE__` are
+# substituted.
+state_dir         = "/var/lib/iac-agent-__INSTANCE__"
+manifests_dir     = "/var/lib/iac-agent-__INSTANCE__/manifests.d"
+observe_interval_secs = 60
+environment       = "fleet"
+actor             = "fleet-agent"
+server_url        = "__SERVER_URL__"
+agent_name        = "__AGENT_NAME__"

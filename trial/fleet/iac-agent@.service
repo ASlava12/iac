@@ -1,0 +1,32 @@
+[Unit]
+# Phase 9-F1-stress-density: systemd template unit. Each instance
+# `iac-agent@N.service` gets its own state dir + config so multiple
+# agents can run side-by-side on one VPS without colliding on
+# /var/lib/iac-agent or /etc/iac/agent.toml.
+#
+# Instance name (%i) is the slot id (1..DENSITY). Bootstrap renders
+# one agent.toml per slot at /etc/iac/agent-%i.toml; state dir is
+# /var/lib/iac-agent-%i/.
+#
+# Single-instance baseline still uses the non-template iac-agent.service
+# unit alongside this template — they coexist without conflict because
+# the binary, state, and config paths are all different.
+Description=iac agent (Phase 9 fleet trial, instance %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/iac-agent --config /etc/iac/agent-%i.toml run
+Restart=on-failure
+RestartSec=2
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iac-agent@%i
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
