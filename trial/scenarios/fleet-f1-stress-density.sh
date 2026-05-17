@@ -107,7 +107,10 @@ fi
 
 # ---- launch the soak via iac-trial ---------------------------------
 
-mkdir -p "$F1_DIR"
+# `$F1_DIR` is on the CP, not local — the local mkdir was a thinko
+# from the first draft. The ssh_to block below does the real
+# remote mkdir as part of the same heredoc that writes
+# started_at / trial.pid.
 targets_csv=$(IFS=,; echo "${all_target_names[*]}")
 say "$CP_IP" "starting density soak: D=$DENSITY target_count=${#all_target_names[@]} duration=${DURATION_SECS}s rps=$RPS"
 
@@ -115,7 +118,7 @@ say "$CP_IP" "starting density soak: D=$DENSITY target_count=${#all_target_names
 ssh_to "$CP_IP" "
     set -eu
     mkdir -p $F1_DIR
-    date -u +%FT%TZ > $F1_DIR/started_at
+    date +%s > $F1_DIR/started_at
     echo $DURATION_SECS > $F1_DIR/duration_secs
     nohup /usr/local/bin/iac-trial \
         --server-url $SERVER_URL \
