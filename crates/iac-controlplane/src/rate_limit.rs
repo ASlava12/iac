@@ -73,17 +73,24 @@ fn default_register_per_minute_ip() -> Option<u32> {
     Some(20)
 }
 
+/// Phase 9 follow-up: caps are stored as `AtomicU32` (0 = disabled —
+/// matches the historical `.filter(|n| *n > 0)` semantics) so SIGHUP
+/// can hot-swap them without rebuilding the limiter. The per-bucket
+/// `state` map keeps its `Instant` history across reloads — only
+/// the *thresholds* change. That preserves the original observation
+/// that mid-flight buckets shouldn't be reset on a config edit
+/// while still allowing operators to tune caps without a restart.
 #[derive(Debug)]
 pub struct RateLimiter {
-    max_per_minute: Option<u32>,
-    /// Phase 7bh: per-agent cap (`None` / `0` disables).
-    agent_max_per_minute: Option<u32>,
+    max_per_minute: std::sync::atomic::AtomicU32,
+    /// Phase 7bh: per-agent cap (0 = disabled).
+    agent_max_per_minute: std::sync::atomic::AtomicU32,
     /// Phase 7co (security fix #4.2): per-username login cap.
-    login_user_max_per_minute: Option<u32>,
+    login_user_max_per_minute: std::sync::atomic::AtomicU32,
     /// Phase 7co: per-client-IP login cap.
-    login_ip_max_per_minute: Option<u32>,
+    login_ip_max_per_minute: std::sync::atomic::AtomicU32,
     /// Phase 9-F8: per-client-IP register cap.
-    register_ip_max_per_minute: Option<u32>,
+    register_ip_max_per_minute: std::sync::atomic::AtomicU32,
     state: Mutex<HashMap<String, VecDeque<Instant>>>,
     /// Phase 7ae: lock-free counters for the metrics endpoint.
     metrics: RateLimitMetrics,
@@ -110,15 +117,34 @@ pub struct RateLimitMetricsSnapshot {
 
 impl RateLimiter {
     pub fn from_config(cfg: &RateLimitConfig) -> Self {
+        use std::sync::atomic::AtomicU32;
+        let norm = |o: Option<u32>| AtomicU32::new(o.filter(|n| *n > 0).unwrap_or(0));
         Self {
-            max_per_minute: cfg.operations_per_minute.filter(|n| *n > 0),
-            agent_max_per_minute: cfg.agent_requests_per_minute.filter(|n| *n > 0),
-            login_user_max_per_minute: cfg.login_per_minute_per_user.filter(|n| *n > 0),
-            login_ip_max_per_minute: cfg.login_per_minute_per_ip.filter(|n| *n > 0),
-            register_ip_max_per_minute: cfg.register_per_minute_per_ip.filter(|n| *n > 0),
+            max_per_minute: norm(cfg.operations_per_minute),
+            agent_max_per_minute: norm(cfg.agent_requests_per_minute),
+            login_user_max_per_minute: norm(cfg.login_per_minute_per_user),
+            login_ip_max_per_minute: norm(cfg.login_per_minute_per_ip),
+            register_ip_max_per_minute: norm(cfg.register_per_minute_per_ip),
             state: Mutex::new(HashMap::new()),
             metrics: RateLimitMetrics::default(),
         }
+    }
+
+    /// Phase 9 follow-up: hot-swap caps without touching per-bucket
+    /// state. SIGHUP calls this after `reload_config()` succeeds; the
+    /// existing in-flight buckets keep their `Instant` history so
+    /// operators can tune thresholds mid-flight without spurious
+    /// rejection-bursts (every existing client suddenly seeing their
+    /// bucket reset) or unfair freebies (clients in over-budget
+    /// buckets getting their slate wiped).
+    pub fn apply_config(&self, cfg: &RateLimitConfig) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let norm = |o: Option<u32>| o.filter(|n| *n > 0).unwrap_or(0);
+        self.max_per_minute.store(norm(cfg.operations_per_minute), Relaxed);
+        self.agent_max_per_minute.store(norm(cfg.agent_requests_per_minute), Relaxed);
+        self.login_user_max_per_minute.store(norm(cfg.login_per_minute_per_user), Relaxed);
+        self.login_ip_max_per_minute.store(norm(cfg.login_per_minute_per_ip), Relaxed);
+        self.register_ip_max_per_minute.store(norm(cfg.register_per_minute_per_ip), Relaxed);
     }
 
     /// Phase 7co (security fix #4.2): rate-limit a login attempt
@@ -130,18 +156,21 @@ impl RateLimiter {
         username: &str,
         client_ip: &str,
     ) -> ApiResult<()> {
-        if let Some(max) = self.login_user_max_per_minute {
+        use std::sync::atomic::Ordering::Relaxed;
+        let user_max = self.login_user_max_per_minute.load(Relaxed);
+        if user_max > 0 {
             self.check_and_record_keyed_at(
                 RateLimitBucket::login_user(username),
-                max,
+                user_max,
                 Instant::now(),
             )
             .await?;
         }
-        if let Some(max) = self.login_ip_max_per_minute {
+        let ip_max = self.login_ip_max_per_minute.load(Relaxed);
+        if ip_max > 0 {
             self.check_and_record_keyed_at(
                 RateLimitBucket::client(client_ip),
-                max,
+                ip_max,
                 Instant::now(),
             )
             .await?;
@@ -162,7 +191,8 @@ impl RateLimiter {
     /// and we'd rather rate-limit unknowns together than skip the
     /// check.
     pub async fn check_and_record_register(&self, client_ip: &str) -> ApiResult<()> {
-        let Some(max) = self.register_ip_max_per_minute else { return Ok(()); };
+        let max = self.register_ip_max_per_minute.load(std::sync::atomic::Ordering::Relaxed);
+        if max == 0 { return Ok(()); }
         let key = if client_ip.trim().is_empty() { "unknown" } else { client_ip };
         self.check_and_record_keyed_at(
             RateLimitBucket::register_ip(key),
@@ -186,7 +216,8 @@ impl RateLimiter {
     /// Returns `Ok(())` if the call is within budget (and records the
     /// timestamp), `Err(ApiError::TooManyRequests { bucket, .. })` otherwise.
     pub async fn check_and_record(&self, environment: &str) -> ApiResult<()> {
-        let Some(max) = self.max_per_minute else { return Ok(()); };
+        let max = self.max_per_minute.load(std::sync::atomic::Ordering::Relaxed);
+        if max == 0 { return Ok(()); }
         self.check_and_record_at(environment, max, Instant::now()).await
     }
 
@@ -199,7 +230,8 @@ impl RateLimiter {
     /// (Retry-After header, structured `bucket` body field) carries
     /// through.
     pub async fn check_and_record_agent(&self, agent_id: &str) -> ApiResult<()> {
-        let Some(max) = self.agent_max_per_minute else { return Ok(()); };
+        let max = self.agent_max_per_minute.load(std::sync::atomic::Ordering::Relaxed);
+        if max == 0 { return Ok(()); }
         self.check_and_record_keyed_at(
             RateLimitBucket::agent(agent_id),
             max,
@@ -480,6 +512,49 @@ mod tests {
                 assert_eq!(bucket.name, "unknown");
             }
             other => panic!("expected TooManyRequests, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_config_swaps_caps_preserves_bucket_state() {
+        // Phase 9 follow-up: SIGHUP hot-reload of rate-limit config.
+        // Start with cap=2/min on register, fill the bucket from one
+        // IP, then raise the cap to 5. Existing Instants survive
+        // (no slate wipe), but the new cap should let two more
+        // requests in before re-rejecting at the (new) limit.
+        let lim = RateLimiter::from_config(&RateLimitConfig {
+            register_per_minute_per_ip: Some(2),
+            ..Default::default()
+        });
+        assert!(lim.check_and_record_register("1.2.3.4").await.is_ok());
+        assert!(lim.check_and_record_register("1.2.3.4").await.is_ok());
+        assert!(
+            lim.check_and_record_register("1.2.3.4").await.is_err(),
+            "third call should hit the cap=2 limit"
+        );
+
+        // Hot-reload to cap=5; existing 2 hits are preserved, so 3
+        // more should pass and then we hit the new cap.
+        lim.apply_config(&RateLimitConfig {
+            register_per_minute_per_ip: Some(5),
+            ..Default::default()
+        });
+        for i in 0..3 {
+            assert!(
+                lim.check_and_record_register("1.2.3.4").await.is_ok(),
+                "post-reload call {i} should pass under raised cap=5"
+            );
+        }
+        assert!(
+            lim.check_and_record_register("1.2.3.4").await.is_err(),
+            "sixth call total should hit new cap=5 — proves Instants survived swap"
+        );
+
+        // Disabling the cap entirely on reload (None → 0) lets
+        // everything through.
+        lim.apply_config(&RateLimitConfig::default());
+        for _ in 0..50 {
+            assert!(lim.check_and_record_register("1.2.3.4").await.is_ok());
         }
     }
 

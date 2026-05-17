@@ -66,10 +66,12 @@ pub struct AppState {
     pub config_path: Option<PathBuf>,
     pub signer: Arc<ServerSigner>,
     /// Phase 7h: in-memory token-bucket rate limiter. `None` config →
-    /// limiter disabled (default in tests + dev). Not hot-reloadable
-    /// today — the limiter holds per-bucket Instants that would lose
-    /// meaning across a swap. Operators changing rate-limit config
-    /// must restart.
+    /// limiter disabled (default in tests + dev). Hot-reloadable
+    /// (Phase 9 follow-up): the caps live in `AtomicU32`s so SIGHUP
+    /// can swap them via [`RateLimiter::apply_config`] without
+    /// touching per-bucket `Instant` history — operators tuning
+    /// thresholds get no spurious rejection-bursts and no slate-wipe
+    /// freebies for over-budget buckets.
     pub rate_limiter: Arc<RateLimiter>,
     /// Phase 7ad: shared with the webhook loop so the metrics
     /// endpoint can snapshot live counters. `None` when the server
@@ -114,6 +116,9 @@ impl AppState {
         })?;
         let new_config =
             Config::load(Some(path), crate::config::Overrides::default())?;
+        // Phase 9 follow-up: hot-swap rate-limit caps too. Caps live
+        // in AtomicU32s now (0 = disabled); per-bucket state survives.
+        self.rate_limiter.apply_config(&new_config.rate_limit);
         let new_state = Arc::new(ReloadableState::new(Arc::new(new_config)));
         let issues_count = new_state.config_issues.len();
         self.live.store(new_state);
