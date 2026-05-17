@@ -3147,3 +3147,171 @@ Not a blocker (cosmetic post-soak ambient state), worth a
 follow-up "agent should refresh managed-count on first heartbeat
 after a long idle window."
 
+
+## Phase 9-F2 — Network partition (rolling 20%) (2026-05-15)
+
+**PASS verdict** 2026-05-15T13:11Z (commits `df29039` +
+`3c91322`). 7 / 7 cycles recovered cleanly in 28–56 s,
+well under the 5-min Phase 9 spec threshold.
+
+**Harness shape.** Rolling per-agent partition: each cycle picks
+one agent, blackholes its route to the CP for 60 s, lifts the
+block, then polls `/v1/agents.last_heartbeat_at` for that agent
+to advance past the partition timestamp. Repeats for all 7
+agents. The original spec called for `iptables DROP` rules; the
+Phase 9 trial VPS (Ubuntu 24.04 minimal) ship neither `iptables`
+nor `nft`, only `iproute2`. Switched to `ip route add blackhole
+$CP_IP/32` which gives the same observable effect (agent sees CP
+as unreachable; kernel silently drops outbound packets) without
+needing extra packages.
+
+**Numbers:**
+
+```
+cycles run:        7
+failures:          0
+recovery times:    agent-01 → 28s
+                   agent-02 → 51s
+                   agent-03 → 56s
+                   agent-04 → 51s
+                   agent-05 → 50s
+                   agent-06 → 56s
+                   agent-07 → 56s
+audit verify:      ok=true
+capacity flags:    ✓ server.db 0 MiB / WAL 0 MiB / busy 0 / slow 0
+```
+
+**Replay-protection probe skipped.** The harness was designed to
+capture an in-flight envelope mid-partition and replay it post-
+recovery to verify CP's replay-protection rejects it. The
+post-F1-PASS bootstrap left no workload running, so no
+assignments to capture. Replay-protection is already pinned by
+13 deterministic unit tests in `iac-agent::remote::tests`
+(Phase 7cq.2 / 7dh.12) — F2 doesn't need to re-validate that.
+
+**Harness bugs surfaced during the run (already fixed in
+commit):**
+
+- `iptables: command not found` was being swallowed by
+  `2>/dev/null`. Switched to `ip route add blackhole` (no extra
+  package dependency) and removed the silent error redirect.
+- `agent_snapshot()` was querying `last_seen_unix` (no such field
+  in `/v1/agents`); the actual field is `last_heartbeat_at`
+  (ISO 8601 string). Converted via `date -d ... +%s` for numeric
+  comparison.
+
+**Side effect: surfaced gap-#10.** The first F2 retry recovered
+5 / 7 agents cleanly but agent-05 and agent-07 timed out at
+180 s. Diagnosis: both agents at 82–83 % disk pressure, with
+1.6 GB consumed by 56,914 directories in
+`/var/lib/iac-agent/executor/operations/`. The iac-core
+Executor wrote a per-operation directory at apply time but
+never GC'd it. Closed by commit `df29039`: `EXECUTOR_OPERATIONS_KEEP
+= 200` const, GC after each apply, keep newest 200 by ULID lex
+order. Unit-tested via `operations_dir_is_bounded_by_gc` in
+`executor_tests.rs`. F2 PASS verdict above is the post-fix
+re-run.
+
+---
+
+## Phase 9-F6 — Rolling upgrade agent v1 ↔ CP v2 (2026-05-15)
+
+**PASS verdict** 2026-05-15T16:30Z (commit `7cdb3dd`). Phase A
+(CP swap with v1-accepted ops): all 50 in-flight ops drained on
+v2 CP after the binary swap, audit chain advanced from 57 → 107.
+Phase B (rolling agent swap): all 7 agents swapped sequentially,
+heartbeated post-swap (80–325 s), probe-op against the freshly
+swapped agent PASSed in every case.
+
+**Harness redesign during the run.** The pre-fix Phase A
+submitted a 50-op burst MID-swap with pass criterion "burst exits
+PASS." On a non-HA single-host CP that's an impossible spec — the
+graceful shutdown waits up to TimeoutStopSec for in-flight HTTP
+to drain, so the burst's TCP connections fail during the swap
+window. Rewrote Phase A to test the *actual* "in-flight ops
+complete" contract from the Phase 9 spec:
+
+1. Submit the 50-op burst PRE-swap; wait for it to finish.
+   v1 CP has accepted everything by this point.
+2. Snapshot the audit-chain tip on v1.
+3. Stop CP, scp v2 binary, start CP, wait for `/v1/health`.
+4. Poll the audit chain for at least +50 events past the
+   pre-swap tip (proves the v1-accepted ops drained on v2).
+5. Verify the audit chain integrity end-to-end.
+
+**Phase B fix.** Same `last_heartbeat_at` field-name bug as F2.
+
+**Numbers:**
+
+```
+Phase A — CP swap:
+  pre-swap burst:        50 ops PASS by iac-trial
+  CP downtime:           332 s (drain time for the 50 in-flight)
+  audit chain pre-swap:  57
+  audit chain post-drain: 107  (advance ≥ 50 verified)
+  audit verify:          ok=true
+
+Phase B — rolling 7 agent swaps:
+  agent-01  heartbeat 325s / probe PASS
+  agent-02  heartbeat 293s / probe PASS
+  agent-03  heartbeat 187s / probe PASS
+  agent-04  heartbeat 118s / probe PASS
+  agent-05  heartbeat  80s / probe PASS
+  agent-06  heartbeat 235s / probe PASS
+  agent-07  heartbeat  85s / probe PASS
+
+capacity post-upgrade: all ceilings ✓
+audit chain start=7 end=120 (delta 113), /v1/audit/verify ok=true
+overall: PASS
+```
+
+**Open follow-ups (NOT blockers, both closed in later commits):**
+
+- CP graceful-shutdown 332 s for 50 in-flight ops. Hyper waits
+  for every in-flight connection by default; the burst's 5 RPS
+  spreads connection drain over many seconds. Closed by
+  `c712f17` — new `shutdown_timeout_secs` config knob (default
+  10s) caps the drain window for both TLS and plain-HTTP serve
+  paths.
+- Agent first-heartbeat-after-swap up to 325 s. The agent ran
+  its full first observe cycle (200 resources × observe latency)
+  before reaching the heartbeat call inside `push_to_remote`.
+  Closed by `2ae7ff3` — new `force_initial_heartbeat()` sends a
+  lightweight `(Healthy, observed=0, drifts=0)` ping right after
+  `connect_remote()` succeeds, so the CP sees the agent live
+  within seconds.
+
+---
+
+## Phase 9 trigger-bound batch — 5 backlog rows closed (2026-05-17)
+
+Five items from TASKS.md's trigger-bound backlog landed proactively
+in one session rather than waiting for the literal trigger event.
+The gate ("wait for an operator complaint") was correct in spirit
+— don't pre-emptively spec what you don't have a use-case for —
+but the actual use-cases were either visible in F1–F8 fleet
+operations (audit/verify timeout, curl+jq verbosity) or had a
+clear cost/benefit ratio (rate-limit hot-reload: many production
+deployments edit caps quarterly+; nft backend: RHEL 9+ ships
+without iptables now).
+
+| Trigger row | Commit | What landed |
+|-------------|--------|-------------|
+| RateLimiter hot-reload via SIGHUP | `4837716` | Caps moved from `Option<u32>` to `AtomicU32` (0 = disabled, matches `.filter(|n| *n > 0)` semantics); new `RateLimiter::apply_config` swaps caps without rebuilding the per-bucket sliding-window state. Wired into `reload_config` so SIGHUP auto-applies. Test: `apply_config_swaps_caps_preserves_bucket_state` proves Instants survive the swap. |
+| `/v1/audit/verify` pagination | `dcfa3cd` | Pre-fix `fetch_all`'d the whole audit_events table (615 k rows from F1 burst timed out the HTTP request). New `Store::audit_verify_chain_from(from_id)` walks 10 k-row chunks via id-cursor, returns on first mismatch or end-of-chain. API gains `?from_id=N` query param so operators can verify only the tail past a known-good checkpoint. |
+| Capability allowlist watcher | `3c97ca9` (1/2) | `capabilities: Option<Capabilities>` → `ArcSwapOption<Capabilities>` for lock-free atomic swap. New `capabilities_watcher_loop` polls the file's mtime every 5 s; on change re-runs `Capabilities::load` and atomically swaps. Malformed YAML on reload logs `warn` and keeps the prior allowlist (no degrade-to-unrestricted-mode on operator typo). mtime-polling instead of `inotify` keeps the dep tree small (relevant for MIPS 7 MiB budget). |
+| WASM module SHA-256 change detection | `3c97ca9` (2/2) | Records each `wasm_providers[*].module` startup SHA-256; new `wasm_module_watcher_loop` re-hashes every 30 s and emits a rising-edge `warn` when on-disk bytes drift from baseline. `inner.wasm_module_stale: AtomicBool` lets operator tooling surface "wasm reload pending" without log-grep. Live in-place recompile-swap of compiled wasmtime Component + Linker deferred — those runtime objects need a wrapper layer this commit doesn't add; operator restart picks up the new bytes today. |
+| nftables firewall backend | `3d2f6c6` | New `NftablesBackend` (`firewall/nft.rs`, 430 LOC) implements the existing `FirewallBackend` trait by shelling to `nft`. Selectable via `IAC_FIREWALL_BACKEND=nft` (default still iptables; unknown values warn + fall back). Same `iac:<name>` comment-marker convention as the iptables backend so observe/diff/rollback discover rules identically. 6 argv-shape unit tests cover command construction; real-system validation deferred to F1-style fleet trial on a RHEL 9+ host. |
+
+**TASKS.md decisions-log revision** (commit `b56fad7`): the
+"wait for an operator complaint" gate for the three admin CLI
+wrappers (`iac agents list`, `iac ops list`, `iac audit --follow`)
+was relaxed in the same vein — the curl+jq flow was clunky
+enough during F1–F8 operations that pre-emption was the right
+call. The underlying principle ("API is the contract, CLI is
+the ergonomic skin") stands.
+
+**Workspace tests: 1125 / 1125 green** post-batch (+7 vs
+session start: 1 rate-limit hot-reload test, 6 nft argv-shape
+tests).
+

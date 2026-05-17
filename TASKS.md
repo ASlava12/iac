@@ -2,122 +2,79 @@
 
 > Living roadmap. Updated as work progresses. Source of truth for "what's
 > next" across sessions. Completed phases live in
-> [TASKS_ARCHIVE.md](TASKS_ARCHIVE.md).
+> [TASKS_ARCHIVE.md](TASKS_ARCHIVE.md); long-deferred / hardware-gated
+> items live in [FUTURE.md](FUTURE.md).
 
-## Status (2026-05-16)
+## Status (2026-05-17)
 
-Static-clean across six audit rounds (7dh.1–12), three architectural
-deduplication waves (7di.1–6), a bare-metal trial on Pi 4 (8.7),
-**ten F1 real-fleet fixes** (commits `227f65e`, `aebbfb9`,
+**Phase 9 closed** by spec — F1 / F2 / F6 PASS on real fleet,
+F3/F4/F5/F7/F8 covered by local tests or prior fleet harnesses
+(see archive 7dh.13, 9-F7, 9-F8, 9-F1-fix-1..10, 9-F2, 9-F6,
+9-F1-stress-burst). Ten production gaps closed across the F1
+attempts and one in the F2 retry (`227f65e`, `aebbfb9`,
 `9ace0b6`, `eb2b14d`, `7cccd3b`, `02abb92`, `bc9c14f`, `61003e8`,
-`e92de61`, `df29039`; see archive 9-F1-fix-1 through 9-F1-fix-10),
-**Phase 10 cross-compile end-to-end** (commit `f3f0a21`; mipsel-musl
-iac-agent at 7.0 MiB stripped — fits OpenWrt flash budget),
-**Phase 9 observability stack** (Prometheus + Grafana on
-cp-spare-01 scraping all 10 VPS), **Phase 11 prep** (Litestream
-WAL replication PoC), **F8 multi-source-IP follow-up PASS**
-(commit `93f5936`). 1117/1117 workspace tests green,
+`e92de61`, `df29039`). CP slow-leak verdict: NOT a Rust leak
+(commit `3cfffbf` — dhat 371 KB peak, 63 KB at clean shutdown).
+
+**Phase 10 cross-compile** done end-to-end (commit `f3f0a21` +
+runbook recipe in `684436a`). Real-MIPS-device bring-up moved to
+[FUTURE.md](FUTURE.md) (hardware-gated, $25–35).
+
+**Phase 11 prep:** Litestream WAL replication PoC landed
+in an earlier session.
+
+**Trigger-bound backlog cleared proactively** (commit batch
+2026-05-17, archive section "Phase 9 trigger-bound batch"):
+RateLimiter SIGHUP hot-reload, `/v1/audit/verify` pagination,
+capability-allowlist watcher, WASM-module SHA-256 change
+detection, nftables firewall backend. Plus admin CLI wrappers
+(`iac agents list` / `ops list` / `audit --follow`) from the same
+"don't wait for the complaint" wave (`b56fad7`).
+
+**Workspace health:** 1125 / 1125 tests green;
 `cargo clippy --workspace --all-targets` clean.
 
-**Phase 9 closed:**
-- **F1 PASS attempt #11** (2026-05-15T12:42Z): 24h soak, 86,400
-  ops, 0 failures, 9 production gaps closed.
-- **F2 PASS** (2026-05-15T13:11Z): rolling 7 × 60 s blackhole-route
-  network partition, all 7 agents recovered 28–56 s.
-- **F6 PASS** (2026-05-15T16:30Z): pre-swap 50-op burst survived
-  CP rolling upgrade; 7/7 agents rolled, audit chain ok.
-- **CP slow-leak investigation** (commit `3cfffbf`): NOT a Rust
-  leak — dhat profile shows 371 KB peak, 63 KB at clean shutdown,
-  99.996 % of allocations freed. The F1 #11 +32 MB RSS is glibc
-  arena fragmentation + SQLite page cache, not a bug.
-
-**Open (not blockers):**
-- F1 stress matrix burst (5 RPS × 24h) — running 2026-05-15T17:14Z
-  → 2026-05-16T17:14Z; surfaced gap-#11 (write knee at 5×: busy/5min
-  hit 37× cap). Verdict pending finalize.
-- F1 stress matrix 72h / density variants — pre-staged.
-- Phase 10 real-MIPS device bring-up — hardware-gated ($50 + day).
-
 ---
 
-## Now — Deferred until external dependency
+## Open — Active backlog
 
-### Phase 9 — Real fleet validation (10 VPS)
+### Phase 9 — F1 stress-matrix variants
 
-User holds the hardware allocation. The Pi 4 trial (Phase 8.7) covered
-one narrow case (10 agents × 50 RPS, single-host SD-flash); F1–F8 below
-need multi-host distributed environments to be meaningful. Not the same
-as the docker-compose trial harness (Phase 8) — that one mocks
-network/timing on a single host.
+Baseline F1 PASS validated the stack at 1 RPS sustained for 24 h.
+The burst variant (5 RPS × 24 h) ran 2026-05-15→16 and surfaced
+gap-#11 (SQLite single-writer knee), accepted as a design knob
+("use Postgres for sustained > 3 RPS" — runbook section "Backend
+choice — SQLite knee at ~3 RPS sustained"). Two variants
+remain pre-staged in `trial/scenarios/fleet-f1-stress-matrix.sh`:
 
-| #  | Scenario                                    | Pass criterion                                  | Why a real fleet |
-|----|---------------------------------------------|-------------------------------------------------|------------------|
-| ~~F1~~ | ~~24 h soak: 7 agents × 1 RPS~~         | ~~RSS not climbing > 5 % over 24 h; 0 unaccounted restarts; audit chain verifies clean~~ | **PASS on attempt #11** (2026-05-15T12:42Z). 86,400 ops, 0 failures, audit ok, 0 restarts, RSS within bounds. 9 production gaps closed across attempts 1–9 (see archive `9-F1-fix-1..5` and `9-F1-fix-6..9`). Stress matrix queued. |
-| ~~F2~~ | ~~Network partition (rolling 20 % per cycle)~~  | ~~recovery time < 5 min after restore; no split-brain; replay-protection still rejects re-played envelopes~~ | **PASS 2026-05-15T13:11Z** (commit `df29039` + `3c91322`). Rolling 7 × 60 s blackhole-route per agent (iptables/nft absent on trial Ubuntu 24.04 minimal — switched to `ip route add blackhole`). Recovery 28–56 s per agent (threshold 180 s). Audit chain integrity ok across all cycles. Replay-protection probe skipped because no in-flight envelopes (no workload running) — already pinned by 13 deterministic unit tests in `iac-agent::remote::tests`. |
-| ~~F3~~ | ~~Cold reboot of an agent under apply~~ | ~~partial-state reconciles to desired on next observe~~ | **Done locally — see archive 7dh.13.** Real-fleet IPMI/SIGKILL semantics still want validation, but the agent-level reconvergence contract is now pinned by 3 integration tests (`tests/cold_reboot.rs`). |
-| ~~F4~~ | ~~Disk-full / inode-full on an agent~~  | ~~graceful degradation; agent reboots clean; no identity-file corruption~~ | **Done locally — see archive 7dh.13.** Atomic-write contract on `identity.json` pinned by 4 unit tests in `remote::tests`. Real disk-full / overlayfs behaviour still wants a VM trial. |
-| ~~F5~~ | ~~Time-skew attack (agent clock 25 h in past)~~ | ~~replay-protection holds (Phase 7cq.2 / 7dh.12)~~ | **Done locally — see archive 7dh.13.** Symmetric-window age check pinned by 13 deterministic unit tests in `remote::tests`. |
-| ~~F6~~ | ~~Rolling upgrade agent v1 ↔ controlplane v2~~  | ~~wire-protocol compatibility; in-flight ops complete; no agent re-registration storm~~ | **PASS 2026-05-15T16:30Z** (commit `7cdb3dd`). Phase A: 50-op pre-swap burst accepted by v1 CP, all 50 + per-op overhead drained on v2 CP (audit chain advanced 57 → 107). Phase B: 7/7 agents swapped sequentially, all heartbeat post-swap + probe-op PASS. Open follow-ups (not blockers): CP graceful-shutdown 332 s on 50 in-flight ops → SHUTDOWN_TIMEOUT_SECS knob; agent first-heartbeat-after-swap up to 325 s → force-heartbeat-on-start. |
-| ~~F7~~ | ~~Backup/restore of controlplane DB~~   | ~~RPO/RTO measured; audit-chain integrity preserved across restore~~ | **Done — see archive 9-F7.** Hot `VACUUM INTO` snapshot of the live CP DB (no service restart, F1 untouched), restore on a separate VPS, full integrity check + post-restore write. RPO 45.6 s (snapshot time on a 947 MB live DB), RTO 1.6 s (cold-start of restored CP to first 200 on `/v1/health`). audit-tip match + `/v1/audit/verify` ok=true. |
-| ~~F8~~ | ~~DDoS on `/v1/agents/register`~~       | ~~rate-limit holds; legitimate agents not starved~~ | **Done — see archive 9-F8.** Empirical storm proved the gap (250 req / 10 s from one IP, 0 × 429); per-IP register cap (default 20/min) + axum `ConnectInfo` plumbing land in this fix. Re-storm at 30 s × 50 against the fixed binary returned 20 × 200 / 880 × 429 as expected. Multi-source-IP / `X-Forwarded-For` allowlist still wants a real-fleet pass once F1 finishes and the prod CP can be restarted. |
+- [ ] **F1 72h variant** — `./trial/scenarios/fleet-f1-stress-matrix.sh
+      72h`. 3× baseline duration. Catches slow leaks that aggregate
+      below the 24h threshold (e.g. 0.1 MB/h growth ≈ 7 MB / 24 h
+      invisible, 22 MB / 72 h trips the absolute-cap check). All
+      Phase 9 fixes 1–10 active.
+- [ ] **F1 density variant** — multi-iac-agent-per-VPS via systemd
+      template unit (`iac-agent@.service`) + per-instance state
+      dirs. Stub in the harness today (the `density` case prints
+      a plan and exits 1). Implementation is ~1–2 h; validation
+      ≥ 24 h.
 
-**Remaining in Phase 9:** F1 stress-matrix variants
-72 h / density (pre-staged). F1 baseline / F2 / F6 done; F1
-stress **burst** finalized 2026-05-17 — surfaced gap-#11
-(SQLite single-writer knee at sustained 5 RPS); accepted as a
-design knob (use Postgres for > 3 RPS sustained). Slow-leak
-investigation closed (NOT a leak — commit `3cfffbf`).
-F3/F4/F5/F7/F8(single-source) all have
-local test coverage or a fleet-validated harness.
+### Phase 9 — mimalloc allocator validation
 
-**Active workstreams (parallel to F1 #6 running 24 h in background):**
-- F2 — rolling 20 % network partition harness via `iptables` between regions
-- F6 — rolling upgrade harness using cp-spare-02 as the v2 CP
-- F8 multi-source — 2-IP simultaneous storm (cp-spare-01 + cp-spare-02 → cp-01) to verify per-IP isolation
-- F1 stress matrix — 72 h soak, 5–10 RPS variant, multi-agent-per-VPS density variant
-- Phase 10 — cross-compile `mipsel-unknown-linux-musl` + run via `qemu-mipsel-static` for binary-size + functional smoke
-- Observability — Prometheus/Grafana on cp-spare-01 collecting RSS samplers + audit metrics
-- WAL-incremental backup — litestream-style replication CP → cp-spare-02 (sub-second RPO target)
-- Security audit r7 — manual round against post-5-fix code
-- **CP slow-leak investigation** (sixth real-fleet finding from F1 #5 finalize)
-  — CP RSS grew 195→207 MB over 10 h idle; harness fix v2 confirmed
-  +301 % growth from warm baseline to late window. Need heap profiler.
+Feature flag landed in `c712f17` (build via `--features mimalloc`).
+No 24 h soak comparison done yet. Goal: prove that glibc malloc
+arena fragmentation (the F1 #11 +32 MB warm-to-late RSS finding)
+actually goes away vs the default-allocator baseline. Requires
+two parallel 24 h F1 runs (one stock, one mimalloc) and an RSS
+delta comparison.
 
-### Phase 10 — Cross-architecture validation (MIPS / network gear)
+### Phase 9 — F8 multi-source X-Forwarded-For allowlist
 
-README claims "works on network equipment". Validated on aarch64 via Pi
-4; not yet validated on MIPS / OpenWrt-class targets, which are the
-bottom of the "weak hardware" curve and exercise different rustc
-compilation paths (Tier-3 targets).
-
-- [ ] Cross-build for `mipsel-unknown-linux-musl` and `mips64el-...` —
-      both are Tier-3, need `-Z build-std` on nightly OR pre-built
-      `cross` Docker images.
-- [ ] Static binary size budget check — aim < 10 MiB for OpenWrt
-      package install via opkg.
-- [ ] Run a single agent on a real MikroTik / GL.iNet device, exercise
-      `firewall.rule` (iptables) and `file` providers.
-- [ ] Document the cross-compile recipe in `docs/en/runbook.md`.
-
-**Trigger:** physical access to one MIPS device. Cost: $30–80 single
-device, half-day cross-build setup, day for the bring-up.
-
----
-
-## Trigger-bound backlog
-
-Items that have a real cause-effect "do this when X happens" — kept here
-so they don't get lost, but not actively scheduled.
-
-| Trigger                                     | Item |
-|---------------------------------------------|------|
-| ~~Real-fleet trial gets near 2^31 drift rows~~ | ~~Promote audit_events.drift_id from INTEGER to BIGINT~~ **Done** — the column was already BIGINT; comment synced to reality (commit `1650a58`). |
-| ~~Operator complains about restart for capability allowlist edits~~ | ~~Add an inotify watcher on `capabilities_file` to `iac-agent`.~~ **Done** (commit `3c97ca9`) — mtime-polling watcher with ≤ 5 s observation lag, lock-free `ArcSwapOption` for the allowlist; reload failures log + keep prior allowlist. |
-| ~~Operator wants WASM module hot-swap~~     | ~~Add SHA-256-based change detection on the module path, recompile when it changes.~~ **Partial** (commit `3c97ca9`) — SHA-256 change detector + status flag + rising-edge `warn!` shipped. Live in-place recompile-swap of compiled wasmtime Component+Linker is deferred (the runtime objects need a wrapper this commit doesn't add). Operator restart picks up the new module today; the watcher tells them when that's needed. |
-| ~~Rate-limit config changes more than once per quarter~~ | ~~Make `RateLimiter` hot-reloadable across SIGHUP.~~ **Done** (commit `4837716`) — caps live in `AtomicU32`s, swapped via `RateLimiter::apply_config` on SIGHUP; per-bucket `Instant` history survives the swap (no slate-wipe). |
-| ~~Operator running on RHEL with firewalld~~ | ~~Add nftables-native firewall provider~~ **Done** (commit `3d2f6c6`) — `NftablesBackend` selectable via `IAC_FIREWALL_BACKEND=nft`. Same trait as the iptables backend so provider stays backend-agnostic. 6 argv-shape unit tests; real-system validation deferred to fleet trial on RHEL 9+. |
-| ~~`/v1/audit/verify` times out on large chains (real-fleet F1 burst hit it at 615 k rows)~~ | ~~Paginate or incremental-verify…~~ **Done** (commit `dcfa3cd`) — chunked walk in 10 k-row batches via `Store::audit_verify_chain_from(from_id)`; new `?from_id=N` query param lets operators verify only the tail past a known-good checkpoint. Bounded memory regardless of chain length. |
-| ~~First operator complaint about list-style CLI gaps~~ | ~~Add admin-CLI wrappers for `iac agents list`, `iac operations list --status failed`, `iac audit tail --follow`.~~ **Done** — wrappers landed proactively rather than reactively (no specific operator complaint, but the runbook flow against curl+jq was unwieldy enough that pre-emption made sense). Adds `iac agents list`, `iac ops list --status <s> --limit N`, and `iac audit --follow`. Server-side: new `GET /v1/operations` endpoint + audit `since_id` cursor for the polling loop. See "Decisions log" entry on the API-as-contract policy revision. |
+Single-source-IP rate-limit closed in `9da4475`. The trusted-
+proxy follow-up (CP behind a reverse-proxy that sets
+`X-Forwarded-For`) wants real-fleet validation — synthetic
+storm from two source IPs via cp-spare-01 + cp-spare-02 against
+cp-01, with the allowlist letting the proxy header take
+precedence. Harness work ~1 h, run ~30 min.
 
 ---
 
@@ -148,4 +105,5 @@ think about this?" in future planning sessions.
 - **Rate limit + maintenance check run after auth.** 401/400 don't get masked by 429/503; legitimate operators see the right error code.
 - **Workspace lints `forbid(unsafe_code)`.** `std::env::set_var` is unsafe on edition 2024, so test helpers take explicit paths instead of mutating `HOME`.
 - **API is the contract, CLI is the ergonomics layer.** Read-side admin tooling (list operations, list agents, tail audit) lives behind `curl + jq` against documented endpoints. ~~Add wrappers only after a concrete operator complaint.~~ Revised 2026-05-16: three list-style wrappers (`iac agents list`, `iac ops list`, `iac audit --follow`) landed proactively because the curl+jq flow was clunky enough during F1–F8 fleet operations that the cost of having them was clearly less than the cost of typing `curl -H "Authorization: Bearer $TOKEN" .../v1/agents | jq ...` every time. The underlying principle still stands — API stays the contract, CLI stays the ergonomic skin — but the "wait for a complaint" gate was too conservative.
+- **Trigger-bound backlog gate relaxed (2026-05-17).** Same realisation: items kept under "wait for a concrete trigger event" stayed under-explored in practice. Five rows landed proactively this session (RateLimiter SIGHUP, audit/verify pagination, capability watcher, WASM SHA-256 detector, nftables backend) when the use-case was obvious from F1–F8 operations or the marginal cost was low. Keep the trigger-bound section for items whose *design* depends on the trigger details (e.g. nftables-native firewall provider could have gone either way on default backend; needed RHEL operator concretely confirming "yes I want nft" to land as `IAC_FIREWALL_BACKEND` env-var dispatch). Don't keep it as a permanent procrastination shelf.
 - **LegacyAdmin token is bootstrap-permanent.** Originally slated for removal once user-auth landed (Phase 7e); design moved to "keep, gate behind config (`admin_token = null` after bootstrap)" because a fresh control-plane has no users yet and `iac users create` requires Admin.
