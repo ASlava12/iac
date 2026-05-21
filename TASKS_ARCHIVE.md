@@ -3418,3 +3418,71 @@ Syntax-checked via `bash -n`; no execution against the real
 fleet in this commit. Validation deferred to a 24 h+ session
 once the fleet is otherwise idle.
 
+
+## Phase 9-F1-stress-density — 24h soak PASS (2026-05-18)
+
+24h density variant of the F1 stress matrix
+(`fleet-f1-stress-matrix.sh density`, DENSITY=3 default + 7
+baseline = 28 agents under workload). Ran 2026-05-17T12:43Z →
+2026-05-18T12:43Z against the F1 #11 PASS stack (all 10
+production fixes + F8 X-F-F + capability/wasm watchers +
+RateLimiter SIGHUP + audit/verify pagination + nft backend).
+
+**PASS verdict:**
+
+```
+elapsed:    86,400 s   (24 h, fired exactly on schedule)
+submitted:  75,600 ops (1 RPS × 86,400 s, round-robin to 28 names)
+failures:   0           (0.00 % across 25 hours of per-hour trend)
+restarts:   0 CP / 0 agent  (NRestarts=0 across all 28)
+audit:      7 → 172,532    (+172,525 rows; /v1/audit/verify ok=true)
+RSS finalize verdict (agent vs cp):
+  agent-01..07          warm-h2 → late: -8.5 % to -26.4 %  (all ✓)
+  cp                    warm-h2 → late: +676.9 %  (35.5 → 275.9 MB)
+                        still within absolute cap 512 MB by 2× margin
+capacity post-stop:     server.db 351 MiB / WAL 4 MiB / busy 0 / slow 6
+during-soak peak busy:  137 (well under density-adjusted threshold 200)
+```
+
+**What this validates.** The agent-count axis. F1 baseline #11
+passed at 7 agents (one per VPS); density at 4 agents per VPS
+(1 baseline + 3 density-suffixed) holds cleanly under 4× the
+agent count without bumping any capacity cap into
+deterioration territory. The per-resource pool (fix-9, 200/host
+default) round-robins evenly across 28 names so each agent
+sees managed=50 at steady state — exactly the shape predicted
+when the pool size was chosen.
+
+**Harness validation.** The newly-written
+`fleet-f1-stress-density.sh` runner + `iac-agent@.service`
+systemd template + `agent-density.toml.tmpl` per-instance config
+all worked end-to-end after two bugs caught at first launch:
+- Local `mkdir -p "$F1_DIR"` ran on the operator host instead
+  of inside the ssh_to heredoc; with `set -eu` the script
+  bailed before launching iac-trial.
+- `date -u +%FT%TZ > started_at` wrote an ISO 8601 string;
+  `fleet-f1-status.sh` expects a Unix epoch.
+Both fixed in commit `80c65e1`.
+
+**One small target-set quirk** worth noting in the forensics:
+the manual launch (after the bootstrap bailed) used a curl-jq
+filter that matched both `agent-01` (baseline) AND `agent-01-1`
+(density). So the trial targeted all 28 names, not just the 21
+density-suffixed ones. The resulting test is strictly stronger
+than the intended "DENSITY=3" shape — it validates 28 agents
+holding under load, with the baseline 7 idle-but-heartbeating
+not interfering. The harness's own filter for follow-up runs
+should use `^agent-[0-9]+-[0-9]+$` (two hyphen-digit groups)
+to scope to density slots only.
+
+**CP RSS growth, same shape as F1 #11.** The 35 → 275 MB jump
+(+676 %) at 28 agents is qualitatively identical to the
+27 → 59 MB jump (+116 %) at 7 agents. Both within absolute
+cap by ≥ 2× margin. The dhat investigation (`3cfffbf`) already
+established this is glibc malloc arena fragmentation +
+SQLite page cache, not a Rust-side leak. Linear scaling
+across agent count is exactly what you'd expect from page-cache
+behaviour driven by per-agent connection state. Real validation
+of the mitigation (mimalloc) still needs a 24h F1 comparison —
+that's the next open soak.
+

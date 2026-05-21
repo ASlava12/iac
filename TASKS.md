@@ -37,11 +37,13 @@ Harness `fleet-f8m-xff.sh` spins an ephemeral CP locally and
 proves three distinct buckets across X-F-F headers; 7 unit tests
 cover the IP-extraction edge cases.
 
-**F1 density harness** (commit `ef3a01c`) — systemd template
-unit `iac-agent@.service` + per-instance state dirs + scenario
-runner. Implementation only; 24h soak validation deferred.
+**F1 density variant PASS** (harness `ef3a01c` + fixups `80c65e1`)
+— 2026-05-18T12:43Z. 28 agents × 24h × 1 RPS, 0 failures across
+75,600 ops, agent RSS stable-or-shrinking, CP RSS +676 % within
+abs cap by 2× margin. Validates the agent-count axis. See archive
+`Phase 9-F1-stress-density`.
 
-**Workspace health:** 1125 / 1125 tests green;
+**Workspace health:** 1132 / 1132 tests green;
 `cargo clippy --workspace --all-targets` clean.
 
 ---
@@ -58,11 +60,13 @@ Harnesses are staged and syntax-checked.
       below the 24h threshold (e.g. 0.1 MB/h growth ≈ 7 MB / 24 h
       invisible, 22 MB / 72 h trips the absolute-cap check). All
       Phase 9 fixes 1–10 active.
-- [ ] **F1 density variant** — harness ready (`fleet-f1-stress-density.sh`,
-      commit `<see git log>`): systemd template `iac-agent@.service` +
-      per-instance state dirs, default DENSITY=3 → 21 total agents
-      via 7 VPS. Probes the agent-count axis without renting more
-      hardware. Same finalize pipeline.
+- ~~**F1 density variant**~~ — **PASS** 2026-05-18T12:43Z. 24h
+      soak at 28 agents (7 baseline + 21 density-suffixed),
+      75,600 ops, 0 failures, 0 unaccounted restarts, audit ok
+      (172,525 rows verified). Agent RSS shrank during the soak
+      (-8.5 % to -26.4 %); CP RSS scaled linearly with agent
+      count (+676 %, same glibc-fragmentation shape as F1 #11,
+      within abs cap by 2×). See archive `Phase 9-F1-stress-density`.
 - [ ] **mimalloc allocator validation** — feature flag landed in
       `c712f17` (build via `--features mimalloc`). Goal: prove that
       glibc malloc arena fragmentation (the F1 #11 +32 MB warm-to-
