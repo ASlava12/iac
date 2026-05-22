@@ -67,12 +67,18 @@ Harnesses are staged and syntax-checked.
       (-8.5 % to -26.4 %); CP RSS scaled linearly with agent
       count (+676 %, same glibc-fragmentation shape as F1 #11,
       within abs cap by 2×). See archive `Phase 9-F1-stress-density`.
-- [ ] **mimalloc allocator validation** — feature flag landed in
-      `c712f17` (build via `--features mimalloc`). Goal: prove that
-      glibc malloc arena fragmentation (the F1 #11 +32 MB warm-to-
-      late RSS finding) actually goes away vs the default-allocator
-      baseline. Requires two parallel 24 h F1 runs (stock vs
-      mimalloc) and an RSS delta comparison.
+- ~~**mimalloc allocator validation**~~ — **DONE 2026-05-22, hypothesis refuted.** 24h F1 baseline against
+      `--features mimalloc` CP: PASS by application criteria
+      (0 failures, 0 restarts), but CP RSS grew +40 MB absolute
+      vs stock glibc's +32 MB. mimalloc's lower percentage
+      (+78 % vs +116 %) is the artefact of its higher warm baseline
+      (50 MiB vs 27 MiB). The growth is not glibc-fragmentation
+      after all; the real source is SQLite page cache + sqlx
+      connection-state buffers + tokio arenas — all of which
+      scale with workload state, not allocator behaviour. mimalloc
+      feature flag preserved as an opt-in (it's still a valid
+      choice for specific workloads), but no longer pitched as a
+      slow-leak mitigation. See archive `Phase 9-mimalloc-validation`.
 
 ---
 

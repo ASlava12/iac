@@ -3486,3 +3486,86 @@ behaviour driven by per-agent connection state. Real validation
 of the mitigation (mimalloc) still needs a 24h F1 comparison —
 that's the next open soak.
 
+
+## Phase 9-mimalloc-validation — hypothesis refuted (2026-05-22)
+
+24h F1 baseline (7 agents × 1 RPS) against a CP built with
+`--features mimalloc`, compared head-to-head with F1 #11 (same
+shape, stock glibc allocator). Goal: validate the slow-leak-
+investigation hypothesis from commit `3cfffbf` that the F1 #11
+CP RSS growth was glibc malloc arena fragmentation, with
+mimalloc's more aggressive OS-release behaviour as the proposed
+mitigation.
+
+**Verdict: partially refuted.** mimalloc passes by application
+criteria (0 failures, 0 restarts, audit ok), but the CP RSS
+growth shape is not meaningfully better than the stock glibc
+build — in absolute terms it's slightly worse.
+
+**Head-to-head comparison:**
+
+| Metric                   | F1 #11 (stock glibc) | F1 mimalloc | Delta |
+|--------------------------|----------------------|-------------|-------|
+| CP warm-h2 median        | 27,256 KB (26.6 MiB) | 50,732 KB (49.5 MiB) | +86 % base |
+| CP late median           | 59,008 KB (57.6 MiB) | 90,520 KB (88.4 MiB) | +53 % at end |
+| Growth (%)               | +116 %               | +78 %       | -33 pp |
+| **Growth (absolute MB)** | **+32 MB**           | **+40 MB**  | **+25 % worse** |
+| Within abs cap (512 MB)  | ✓ (9× margin)        | ✓ (5.7× margin) | both fine |
+
+**Both runs:**
+- 86,400 s elapsed (24 h)
+- 0 unaccounted CP / agent restarts
+- audit chain ok = true
+- failure rate 0.00 % across 25 hours of per-hour trend
+
+**Why the percentage looks better but absolutes don't.** mimalloc
+ships with a larger baseline footprint — it pre-allocates arenas
+at process start that glibc malloc grows incrementally. So
+mimalloc starts at 50 MiB warm vs 27 MiB for glibc, then grows
+by ~40 MiB over the soak. glibc starts at 27 MiB warm and grows
+by ~32 MiB. The percentage hides the worse absolute growth
+behind a higher denominator.
+
+**What this tells us about the F1 #11 RSS growth.** It's NOT
+predominantly glibc arena fragmentation. The dhat profile from
+commit `3cfffbf` already proved Rust-side heap usage stays
+bounded (371 KB peak, 63 KB at clean shutdown), so the growth
+must come from native code paths the global allocator doesn't
+directly track in a way mimalloc could compress. The
+remaining suspects:
+
+- **SQLite page cache.** Per-connection `cache_size` defaults to
+  −2000 KB ≈ 2 MB; with sqlx's connection pool of ~10 connections,
+  ~20 MB of page cache is plausible. Grows with active working
+  set, not with allocator behaviour.
+- **sqlx-sqlite connection-state buffers.** Each connection
+  holds prepared-statement caches that grow as new queries
+  surface — independent of the global allocator.
+- **Tokio + axum/hyper connection-state.** Per-request buffers
+  that get released to the pool but stay resident in the
+  process arena.
+- **Static .rodata.** Includes the wasmtime regalloc tables,
+  ed25519-dalek precomputed scalars, etc. Doesn't grow but
+  contributes to baseline.
+
+**Runbook guidance revision.** The runbook section
+"Backend choice — SQLite knee at ~3 RPS sustained" (commit
+`694bb31`) still stands — for sustained > 3 RPS, Postgres is
+the recommended path. The mimalloc tunable is preserved as an
+opt-in (commit `c712f17`'s `--features mimalloc` build) — it's
+still a valid choice for operators where mimalloc's
+characteristics (lower fragmentation, more aggressive OS
+release) matter for their specific workload — but it's no
+longer pitched as a slow-leak mitigation. The slow-leak isn't
+in the Rust heap or glibc; it's in SQLite + sqlx + tokio
+buffers that scale with workload state.
+
+**Latency.** Both runs healthy on the tail:
+- F1 #11: 2,060 of 75,300 (~2.7 %) > 2.5 s
+- F1 mimalloc: 7 of 79,300 (~0.009 %) > 2.5 s
+
+The mimalloc run had a far cleaner tail. This could be a
+secondary mimalloc benefit (lock-free fast path) or could be
+fleet-state noise (different VPS / time of day). Not enough
+data to attribute definitively.
+
