@@ -45,6 +45,23 @@ pub struct RetentionConfig {
     /// fetched are kept.
     #[serde(default = "default_assignment_days")]
     pub assignment_terminal_days: u32,
+    /// Phase 9-F1-fix-12: cap `desired_states` per `resource_id` to
+    /// this many of the newest rows. The assignment-fetch SELECT
+    /// projects current state by scanning `desired_states`; without
+    /// a cap the table grows linearly (one row per
+    /// (operation, resource)) and the SELECT plan deteriorates
+    /// past ~150 k rows. F1 72h soak hit this knee at h+55,
+    /// driving the tail-latency events that showed up as 0.01 %
+    /// failure rate near the end of the soak.
+    ///
+    /// Default 10 — mirrors `observation_max_per_resource`'s
+    /// rationale (the most recent applied state per resource is
+    /// what callers actually read; older revisions are
+    /// debugging-history that retention can prune). 1400 resources
+    /// × cap 10 ≈ 14 k steady-state rows, two orders of magnitude
+    /// below the 150 k knee.
+    #[serde(default = "default_desired_state_max_per_resource")]
+    pub desired_state_max_per_resource: u32,
     /// How often to run the prune loop, in seconds.
     ///
     /// Phase 9-F1-fix-2: default lowered from 3600 (1 h) to 300 (5 min).
@@ -99,6 +116,15 @@ fn default_interval_secs() -> u64 {
     // table for the whole pruning window either.
     300
 }
+fn default_desired_state_max_per_resource() -> u32 {
+    // Phase 9-F1-fix-12 (gap-#12 from F1 72h, 2026-05-25): cap
+    // desired_states per resource_id. F1 baseline (24h) at
+    // ~27 k desired_states held fine; 72h at ~250 k started
+    // crossing the SELECT slow threshold around h+55. Cap=10
+    // bounds steady-state at 14 k for the trial's 1400-resource
+    // pool — far below the 150 k knee.
+    10
+}
 fn default_observation_max_per_resource() -> u32 {
     // Phase 9-F1-fix-8 (gap-#8 from F1 #8, 2026-05-13): lowered
     // from 50 to 10. The 50-row-per-resource cap was set in fix-2
@@ -125,6 +151,7 @@ impl Default for RetentionConfig {
             assignment_terminal_days: default_assignment_days(),
             interval_secs: default_interval_secs(),
             observation_max_per_resource: default_observation_max_per_resource(),
+            desired_state_max_per_resource: default_desired_state_max_per_resource(),
         }
     }
 }
@@ -146,6 +173,9 @@ pub struct PruneStats {
     /// from `observations` so operators can see how much each policy
     /// contributes; sum into `total` for the overall pass count.
     pub observations_per_resource: u64,
+    /// Phase 9-F1-fix-12: rows dropped by the desired_states
+    /// per-resource cap. Same shape as `observations_per_resource`.
+    pub desired_states_per_resource: u64,
 }
 
 impl PruneStats {
@@ -156,6 +186,7 @@ impl PruneStats {
             + self.assignments_terminal
             + self.user_tokens_expired
             + self.observations_per_resource
+            + self.desired_states_per_resource
     }
 }
 
@@ -185,6 +216,13 @@ pub async fn prune_once(store: &Store, config: &RetentionConfig) -> ApiResult<Pr
         stats.observations_per_resource = prune_observations_per_resource(
             store,
             i64::from(config.observation_max_per_resource),
+        )
+        .await?;
+    }
+    if config.desired_state_max_per_resource > 0 {
+        stats.desired_states_per_resource = prune_desired_states_per_resource(
+            store,
+            i64::from(config.desired_state_max_per_resource),
         )
         .await?;
     }
@@ -277,6 +315,53 @@ async fn prune_observations_per_resource(
                                 ORDER BY observed_at DESC, id DESC
                             ) AS rn
                      FROM observations
+                 ) AS ranked
+                 WHERE rn > ?
+                 LIMIT ?
+             )";
+    let mut total = 0u64;
+    loop {
+        let res = sqlx::query(&sql(q))
+            .bind(max_per_resource)
+            .bind(CHUNK_SIZE)
+            .execute(store.pool())
+            .await?;
+        let n = res.rows_affected();
+        total += n;
+        if n < CHUNK_SIZE as u64 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(INTER_CHUNK_PAUSE_MS)).await;
+    }
+    Ok(total)
+}
+
+/// Phase 9-F1-fix-12 (gap-#12 from F1 72h, 2026-05-25): keep at
+/// most `max_per_resource` desired_states rows per `resource_id`,
+/// dropping the oldest by `id` (autoincrement → chronological).
+/// Same shape as `prune_observations_per_resource`: ROW_NUMBER
+/// window over partitions, chunked DELETE with 50 ms pause to
+/// avoid blocking writers.
+///
+/// The assignment-fetch SELECT crosses its 1 s slow-statement
+/// threshold around 150 k desired_states rows. Default cap=10
+/// × 1400 trial resources holds steady-state at 14 k, two orders
+/// of magnitude below the knee.
+async fn prune_desired_states_per_resource(
+    store: &Store,
+    max_per_resource: i64,
+) -> ApiResult<u64> {
+    const CHUNK_SIZE: i64 = 5_000;
+    const INTER_CHUNK_PAUSE_MS: u64 = 50;
+    let q = "DELETE FROM desired_states
+             WHERE id IN (
+                 SELECT id FROM (
+                     SELECT id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY resource_id
+                                ORDER BY id DESC
+                            ) AS rn
+                     FROM desired_states
                  ) AS ranked
                  WHERE rn > ?
                  LIMIT ?
@@ -672,6 +757,105 @@ mod tests {
 
         let count: (i64,) =
             sqlx::query_as(&sql("SELECT COUNT(*) FROM observations")).fetch_one(store.pool()).await.unwrap();
+        assert_eq!(count.0, 4);
+    }
+
+    /// Phase 9-F1-fix-12 (gap-#12 from F1 72h). Mirrors the
+    /// observations per-resource cap test for desired_states.
+    /// `desired_states` keys by (operation_id, resource_id) so we
+    /// insert N operations × 1 resource → N desired_states rows,
+    /// then expect the cap to leave only the newest.
+    async fn insert_desired_states_n(store: &Store, resource_id: &str, n: usize) {
+        for i in 0..n {
+            // operations table requires an id + created_at; we
+            // synthesize unique ids so the FK on desired_states
+            // (operation_id REFERENCES operations(id) ON DELETE
+            // CASCADE) is satisfied.
+            let op_id = format!("op-{resource_id}-{i:03}");
+            sqlx::query(&sql(
+                "INSERT INTO operations
+                    (id, kind, environment, requested_by, status, created_at, matched_policies_json)
+                 VALUES (?, 'apply', 'test', 'test', 'succeeded', ?, '[]')",
+            ))
+            .bind(&op_id)
+            .bind(ago(0))
+            .execute(store.pool())
+            .await
+            .unwrap();
+            sqlx::query(&sql(
+                "INSERT INTO desired_states
+                    (operation_id, resource_id, kind, environment, spec_json, metadata_json)
+                 VALUES (?, ?, 'file', 'test', '{}', '{}')",
+            ))
+            .bind(&op_id)
+            .bind(resource_id)
+            .execute(store.pool())
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn desired_states_per_resource_cap_keeps_n_newest() {
+        let dir = TempDir::new().unwrap();
+        let store = store_in(&dir).await;
+
+        // 5 ops touching resource X, 3 ops touching resource Y.
+        // Each op creates one desired_states row → 5 + 3 = 8 rows.
+        // Cap = 2 → keep 2 newest per resource, drop 3 from X +
+        // 1 from Y = 4 total.
+        insert_desired_states_n(&store, "file/test/x", 5).await;
+        insert_desired_states_n(&store, "file/test/y", 3).await;
+
+        let cfg = RetentionConfig {
+            // Disable other paths so we exercise the new cap alone.
+            audit_days: 0,
+            observation_days: 0,
+            drift_resolved_days: 0,
+            assignment_terminal_days: 0,
+            observation_max_per_resource: 0,
+            desired_state_max_per_resource: 2,
+            ..RetentionConfig::default()
+        };
+        let stats = prune_once(&store, &cfg).await.unwrap();
+        assert_eq!(stats.desired_states_per_resource, 4);
+
+        let counts: Vec<(String, i64)> = sqlx::query_as(&sql(
+            "SELECT resource_id, COUNT(*) FROM desired_states GROUP BY resource_id ORDER BY resource_id",
+        ))
+        .fetch_all(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            counts,
+            vec![
+                ("file/test/x".to_string(), 2),
+                ("file/test/y".to_string(), 2),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn desired_states_per_resource_cap_zero_disables() {
+        let dir = TempDir::new().unwrap();
+        let store = store_in(&dir).await;
+        insert_desired_states_n(&store, "file/test/x", 4).await;
+
+        let cfg = RetentionConfig {
+            audit_days: 0,
+            observation_days: 0,
+            drift_resolved_days: 0,
+            assignment_terminal_days: 0,
+            observation_max_per_resource: 0,
+            desired_state_max_per_resource: 0,
+            ..RetentionConfig::default()
+        };
+        let stats = prune_once(&store, &cfg).await.unwrap();
+        assert_eq!(stats.desired_states_per_resource, 0);
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM desired_states"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 4);
     }
 
