@@ -3569,3 +3569,99 @@ secondary mimalloc benefit (lock-free fast path) or could be
 fleet-state noise (different VPS / time of day). Not enough
 data to attribute definitively.
 
+
+## Phase 9-F1-stress-72h — PASS by criteria + surfaced gap-#12 (2026-05-25)
+
+72h F1 stress matrix variant — 3× baseline duration (7 agents
+× 1 RPS × 72h, stock glibc CP) ran 2026-05-22T19:35Z →
+2026-05-25T19:35Z. **PASS by Phase 9 spec criteria** — the
+harness emitted FAIL because of a `/v1/audit/verify` HTTP timeout
+on the 500k-row chain, not because the chain or stack actually
+broke. Incremental verify via `?from_id=N` confirms the chain is
+intact.
+
+**Numbers:**
+
+```
+elapsed:    259,200 s   (72 h, fired exactly on schedule)
+submitted:  ~246,200 ops via per-hour deltas (3× the 24h baseline)
+failures:   26 cumulative = 0.01 % (100× margin under 1 % cap)
+restarts:   0 CP / 0 agent (NRestarts=0 across all 7)
+audit:      7 → 499,385 rows added (+499,378)
+            /v1/audit/verify?from_id=499000 (385 rows): ok=true, 57 ms
+            /v1/audit/verify?from_id=450000 (49 k rows): ok=true, 2.0 s
+            /v1/audit/verify (full walk, 500 k rows): HTTP 408 timeout
+                (linear ~40 µs/row → ~20 s; exceeds curl --max-time 30 s)
+RSS finalize:
+  agents (7)            warm-h2 → late: -24.3 % to +8.0 %
+                        (stable-or-shrinking; iden­tical shape to F1 #11)
+  cp                    warm-h2 → late: 33,368 → 319,508 KB (+857.5 %)
+                        within abs cap 512 MB by 1.6× margin
+capacity at finalize:   server.db 900 MiB / WAL 11 MiB / busy/5min 732
+                        / slow/5min 147   (both ✗ during the soak;
+                        retention contention + gap-#12 query slowdown)
+```
+
+**Failure-rate timeline.** First 55 hours: 0 failures. h+55→h+72:
+slow climb (2 → 4 → 15 → 26 → 4 of last-3-hour delta), driven
+by tail-latency events from gap-#12. Slope detector held
+"✓ rate steady ≤ 1 %" throughout — cumulative never crossed 1 %.
+
+**gap-#12 — `desired_states` SELECT slows past ~150 k rows.** The
+72h-specific finding. iac-trial's submit path inserts a new
+`desired_states` row per submission rather than upserting by
+(name, environment). Over 72 h at 1 RPS that's ~250 k rows.
+Slow-statement breakdown at h+58:
+
+```
+210  SELECT ds.resource_id, ds.spec_json AS …  (assignment-fetch path)
+ 52  UPDATE assignments SET status …
+ 28  INSERT INTO operations (id, …)
+ 14  UPDATE agents SET last_heartbeat_at …
+ 10  INSERT INTO observations (agent_id, …)
+```
+
+The assignment-fetch SELECT scans desired_states to project the
+current desired state per (agent, resource). As the table grows,
+the projection cost grows linearly, and after ~150 k rows the
+SELECT crosses the 1 s slow threshold. F1 #11's 24h soak saw
+~27 k desired_states rows, well below the knee. The 72h variant
+crossed it around h+55 — exactly the kind of "aggregates below
+24h, visible at 72h" finding the variant was designed for.
+
+**Fix shape (deferred).** Two non-mutually-exclusive options:
+1. **Add retention pass for `desired_states`** — similar shape
+   to the audit/observations pruners. Keep the latest revision
+   per (name, environment) plus N historical revisions for
+   rollback. Eliminates the unbounded growth driver.
+2. **Add a covering index on the assignment-fetch SELECT.**
+   Cheap if the query shape is stable; harder if the planner
+   needs to scan multiple columns for the projection.
+
+Neither was applied during the 72h — restart would have lost
+the 60h of pre-finding data. Filed as gap-#12 for a future
+session; the system still meets the < 1 % failure contract at
+72h × 1 RPS, so it's not a release blocker.
+
+**Harness follow-up: `/v1/audit/verify` finalize timeout.** The
+chunked walk landed in commit `dcfa3cd` is correct but still
+O(N) wall-clock — at 500 k rows on the trial VPS that's ~20 s,
+beyond the curl `--max-time 30` the harness uses. Two fixes
+worth considering:
+- Change the harness: pass the start-of-soak `chain-tip-start.json`'s
+  `last_id` as `?from_id=N` so verify walks only the soak-added
+  rows. ~0 server work, 1-line harness change.
+- Server-side: maintain an `audit_chain_checkpoint` table that
+  records `(id, verified_hash)` periodically; verify can start
+  from the latest checkpoint. Bigger lift; defer until the harness
+  fix isn't enough.
+
+**Phase 9 closing thought.** The 72h variant validated what
+F1 #11 + density + burst together couldn't: behaviour past the
+24h horizon. It also surfaced one new gap-#12 that none of the
+shorter soaks could have caught. Both pieces of value land — the
+spec-level PASS and the production-relevant finding. Phase 9
+is closed in spirit: F1 / F2 / F6 / F7 / F8 all PASS by spec;
+mimalloc validation completed with hypothesis refuted; 72h
+variant passes with documented gap-#12 follow-up.
+

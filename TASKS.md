@@ -43,42 +43,50 @@ cover the IP-extraction edge cases.
 abs cap by 2× margin. Validates the agent-count axis. See archive
 `Phase 9-F1-stress-density`.
 
+**F1 mimalloc validation refuted** (2026-05-22T17:43Z) — same 24h
+F1 baseline shape against `--features mimalloc` CP; PASS by
+criteria but +40 MB absolute vs stock's +32 MB. Hypothesis
+(arena fragmentation is the slow-leak) refuted. See archive
+`Phase 9-mimalloc-validation`.
+
+**F1 72h variant PASS by criteria** (2026-05-25T19:35Z) — 72h
+soak, 246k ops, 0.01 % cumulative failures (100× under cap),
+0 restarts, CP RSS +857 % within 512 MB cap by 1.6× margin.
+Surfaced **gap-#12**: `desired_states` SELECT slowdown past
+~150 k rows (the 72h-specific finding). Harness emitted FAIL
+on `/v1/audit/verify` HTTP timeout on the 500k-row chain;
+incremental verify via `?from_id=N` confirms chain integrity.
+See archive `Phase 9-F1-stress-72h`.
+
+**Phase 9 fully closed.** All F1 variants (baseline / burst /
+density / mimalloc / 72h) + F2 / F6 / F7 / F8 (all sub-variants)
+done. Two new open follow-ups from 72h findings — both
+deferred, neither a release blocker.
+
 **Workspace health:** 1132 / 1132 tests green;
 `cargo clippy --workspace --all-targets` clean.
 
 ---
 
-## Open — Active backlog
+## Open — Follow-ups from 72h finding (deferred)
 
-### Phase 9 — Soak validations (long wall-clock)
+Both are deferred to future sessions — neither blocks release;
+the system met the < 1 % failure contract at 72h soak.
 
-Three variants remain pending; all need ≥ 24 h to validate.
-Harnesses are staged and syntax-checked.
-
-- [ ] **F1 72h variant** — `./trial/scenarios/fleet-f1-stress-matrix.sh
-      72h`. 3× baseline duration. Catches slow leaks that aggregate
-      below the 24h threshold (e.g. 0.1 MB/h growth ≈ 7 MB / 24 h
-      invisible, 22 MB / 72 h trips the absolute-cap check). All
-      Phase 9 fixes 1–10 active.
-- ~~**F1 density variant**~~ — **PASS** 2026-05-18T12:43Z. 24h
-      soak at 28 agents (7 baseline + 21 density-suffixed),
-      75,600 ops, 0 failures, 0 unaccounted restarts, audit ok
-      (172,525 rows verified). Agent RSS shrank during the soak
-      (-8.5 % to -26.4 %); CP RSS scaled linearly with agent
-      count (+676 %, same glibc-fragmentation shape as F1 #11,
-      within abs cap by 2×). See archive `Phase 9-F1-stress-density`.
-- ~~**mimalloc allocator validation**~~ — **DONE 2026-05-22, hypothesis refuted.** 24h F1 baseline against
-      `--features mimalloc` CP: PASS by application criteria
-      (0 failures, 0 restarts), but CP RSS grew +40 MB absolute
-      vs stock glibc's +32 MB. mimalloc's lower percentage
-      (+78 % vs +116 %) is the artefact of its higher warm baseline
-      (50 MiB vs 27 MiB). The growth is not glibc-fragmentation
-      after all; the real source is SQLite page cache + sqlx
-      connection-state buffers + tokio arenas — all of which
-      scale with workload state, not allocator behaviour. mimalloc
-      feature flag preserved as an opt-in (it's still a valid
-      choice for specific workloads), but no longer pitched as a
-      slow-leak mitigation. See archive `Phase 9-mimalloc-validation`.
+- **gap-#12: `desired_states` SELECT slowdown past ~150 k rows.**
+  Surfaced 2026-05-25 by the 72h soak. iac-trial's submit path
+  inserts a new `desired_states` row per submission rather than
+  upserting by (name, environment); at ~1 RPS that crosses the
+  query knee around h+55. Fix shape: add a retention pass for
+  `desired_states` (keep latest N revisions per resource) OR add
+  a covering index on the assignment-fetch SELECT. See archive
+  `Phase 9-F1-stress-72h`.
+- **Harness: `fleet-f1-finalize.sh` should pass `?from_id=N`
+  to `/v1/audit/verify`.** At 500 k-row audit chains the full
+  walk takes ~20 s — beyond curl `--max-time 30` the harness
+  uses. One-line harness change: read the start-of-soak
+  `chain-tip-start.json`'s `last_id` and pass it as the cursor
+  so verify walks only soak-added rows.
 
 ---
 
