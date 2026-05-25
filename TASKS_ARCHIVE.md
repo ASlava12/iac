@@ -3665,3 +3665,83 @@ is closed in spirit: F1 / F2 / F6 / F7 / F8 all PASS by spec;
 mimalloc validation completed with hypothesis refuted; 72h
 variant passes with documented gap-#12 follow-up.
 
+
+## Phase 9-F1-fix-12 — desired_states per-resource cap (2026-05-25)
+
+Closes gap-#12 surfaced by the F1 72h soak. Commits `3a78fc9`
+(harness verify cursor) + `dc8bdfe` (server-side retention).
+
+**Server-side: `desired_state_max_per_resource` retention cap.**
+
+Mirror of the observations per-resource cap (commit `aebbfb9` +
+fix-7 chunking). New `RetentionConfig::desired_state_max_per_resource`
+field (default 10). New `prune_desired_states_per_resource()`
+runs alongside the observations pruner in `prune_once()`:
+
+- ROW_NUMBER() OVER (PARTITION BY resource_id ORDER BY id DESC)
+  — id is AUTOINCREMENT so larger id = newer row.
+- Chunked DELETE with `CHUNK_SIZE = 5000` and
+  `INTER_CHUNK_PAUSE_MS = 50`, identical to the observations
+  pruner. Prevents long lock-hold against the assignment-fetch
+  SELECT path during the prune.
+- `PruneStats::desired_states_per_resource` counter (separate
+  from observations) so operators see per-policy contribution.
+
+Default 10 chosen by the same logic as observations cap=10:
+the most recent desired-state revision per resource is what
+the assignment-fetch SELECT actually projects. Older revisions
+are debugging history; the rollback path uses the
+`operations/<ulid>/` directory tree (executor state, separate
+from desired_states), so pruning desired_states doesn't break
+the rollback contract.
+
+For the trial's 1400-resource pool: 14 k steady-state rows,
+two orders of magnitude below the 150 k SELECT knee surfaced
+by the 72h soak. Production fleets with larger resource pools
+scale linearly: 10 k resources × cap 10 = 100 k rows — still
+under the knee.
+
+**Unit tests.** 2 new tests covering the typical cap shape
+and the disable-by-zero path:
+
+- `desired_states_per_resource_cap_keeps_n_newest` — 5 ops for
+  resource X + 3 for Y, cap=2 → keep 2 of each, drop 4 total.
+- `desired_states_per_resource_cap_zero_disables` — 4 rows,
+  cap=0 → no pruning.
+
+11 / 11 retention unit tests green; 1134 / 1134 workspace
+tests overall (+2 vs 1132 prior to gap-#12 fix).
+
+**Harness-side: finalize verify cursor.**
+
+`fleet-f1-finalize.sh` was calling `/v1/audit/verify` with no
+query string, which defaults to `from_id=0` (full chain walk).
+At 500 k rows that's ~20 s server-side, beyond curl
+`--max-time 30`. The pagination commit `dcfa3cd` bounded
+memory but didn't shorten the wall-clock — the harness
+needed to ask the right question.
+
+Fix: read the start-of-soak `chain-tip-start.json`'s `last_id`
+(already loaded into `$start_id` a few lines up for the
+"rows added" arithmetic), pass it as `?from_id=$start_id`.
+Verify then walks only soak-added rows — same correctness
+contract, bounded by soak audit volume rather than total
+chain length. Also raises `--max-time` 30 → 60 s as a
+belt-and-braces hedge for high-throughput soaks.
+
+**Impact summary.**
+
+Before fix-12:
+- 72h soak: tail-latency events from h+55 onward (gap-#12)
+- Finalize FAIL on verify timeout (harness bug)
+
+After fix-12:
+- desired_states bounded at 14 k steady-state for the trial
+  pool, no SELECT knee at any duration
+- Finalize walks only soak-added audit rows, completes in
+  ~2 s instead of timing out
+
+Phase 9 is now truly closed — no remaining follow-ups from
+any of the soak findings, no remaining trigger-bound items,
+no open Phase 9 backlog.
+

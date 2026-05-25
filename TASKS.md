@@ -68,25 +68,24 @@ deferred, neither a release blocker.
 
 ---
 
-## Open — Follow-ups from 72h finding (deferred)
+## Open
 
-Both are deferred to future sessions — neither blocks release;
-the system met the < 1 % failure contract at 72h soak.
+Nothing. Phase 9 fully closed. Both 72h follow-ups landed:
 
-- **gap-#12: `desired_states` SELECT slowdown past ~150 k rows.**
-  Surfaced 2026-05-25 by the 72h soak. iac-trial's submit path
-  inserts a new `desired_states` row per submission rather than
-  upserting by (name, environment); at ~1 RPS that crosses the
-  query knee around h+55. Fix shape: add a retention pass for
-  `desired_states` (keep latest N revisions per resource) OR add
-  a covering index on the assignment-fetch SELECT. See archive
-  `Phase 9-F1-stress-72h`.
-- **Harness: `fleet-f1-finalize.sh` should pass `?from_id=N`
-  to `/v1/audit/verify`.** At 500 k-row audit chains the full
-  walk takes ~20 s — beyond curl `--max-time 30` the harness
-  uses. One-line harness change: read the start-of-soak
-  `chain-tip-start.json`'s `last_id` and pass it as the cursor
-  so verify walks only soak-added rows.
+- ~~**gap-#12: `desired_states` SELECT slowdown**~~ —
+  **closed by F1 fix #12** (commit `dc8bdfe`). New
+  `desired_state_max_per_resource` retention cap (default 10)
+  mirrors the observations cap shape: ROW_NUMBER per
+  resource_id, chunked DELETE with 50 ms pauses to avoid
+  blocking writers. Steady-state at 14 k rows for the trial's
+  1400-resource pool — two orders of magnitude below the
+  150 k SELECT knee. 2 new unit tests, all 1134 workspace
+  tests green.
+- ~~**Harness: finalize `/v1/audit/verify` cursor**~~ —
+  **closed by commit `3a78fc9`**. fleet-f1-finalize.sh now
+  passes `?from_id=$start_id` (read from chain-tip-start.json
+  one block up) so verify walks only soak-added rows.
+  --max-time bumped 30 → 60 s as belt-and-braces.
 
 ---
 
