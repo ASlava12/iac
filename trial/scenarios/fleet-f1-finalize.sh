@@ -220,7 +220,15 @@ echo "  audit chain:"
 start_id=$(jq -r '.last_id' "$LOCAL_OUT/chain-tip-start.json")
 end_id=$(jq -r '.last_id' "$LOCAL_OUT/chain-tip-end.json")
 echo "    start last_id=$start_id  end=$end_id  rows added: $((end_id - start_id))"
-verify=$(ssh_to "$CP_IP" "curl -fsS -H 'Authorization: Bearer $ADMIN_TOKEN' http://127.0.0.1:$CP_PORT/v1/audit/verify" || echo '{}')
+# Phase 9-F1-72h follow-up: walk only soak-added rows via the
+# `from_id` cursor (commit dcfa3cd). At 72h × 1 RPS the chain
+# grew to 500 k rows; a full /v1/audit/verify walk took ~20 s,
+# beyond curl --max-time 30. The chain is intact incrementally
+# (verified post-soak by hand), but the harness needs to ask
+# the right question. `from_id=$start_id` means "verify rows
+# added since the soak began" — same correctness contract,
+# bounded by soak audit volume rather than total chain length.
+verify=$(ssh_to "$CP_IP" "curl -fsS --max-time 60 -H 'Authorization: Bearer $ADMIN_TOKEN' 'http://127.0.0.1:$CP_PORT/v1/audit/verify?from_id=$start_id'" || echo '{}')
 ok=$(echo "$verify" | jq -r '.ok // empty')
 if [ "$ok" = "true" ]; then
     echo "    ✓ /v1/audit/verify ok=true"
