@@ -66,6 +66,11 @@ jobs:
   # macOS — admin CLI + control-plane. The agent has Linux-only
   # provider shell-outs (iptables, systemctl) that compile but
   # can't actually do work on macOS, so we don't ship it here.
+  #
+  # Only aarch64 is built: Apple-silicon is the modern macOS
+  # desktop architecture (M1+, since 2020), x86_64 macOS hits its
+  # final OS release with Tahoe 26 in 2025 and is end-of-line.
+  # x86_64 admins can run the Linux binary or build from source.
   # --------------------------------------------------------------
   macos:
     name: macos-${{ matrix.arch }}
@@ -75,8 +80,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
-            runner: macos-13
           - arch: aarch64
             runner: macos-14
     steps:
