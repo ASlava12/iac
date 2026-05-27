@@ -986,14 +986,28 @@ async fn capabilities_watcher_loop(inner: Arc<Inner>, shutdown: Arc<Notify>) {
                         );
                     }
                     Ok(None) => {
-                        // File got deleted (or was never there). Drop
-                        // the allowlist; agent goes unrestricted.
+                        // File disappeared between watcher ticks. We
+                        // refuse to fall back to "unrestricted" here:
+                        // an attacker who deletes the policy file
+                        // (privilege bug, disk wipe, ops mishap) would
+                        // otherwise flip the agent to unrestricted
+                        // mode with only a `warn!` for company. Keep
+                        // the last-known good allowlist in place and
+                        // log loudly so operators notice and either
+                        // restore the file or restart the agent.
+                        //
+                        // If the operator's actual intent is to remove
+                        // the allowlist (rare; the recommended shape
+                        // is `default_kind_policy: allow` in the
+                        // existing file), they must restart the agent
+                        // with `capabilities_file` unset in the config.
                         let was_set = inner.capabilities.load_full().is_some();
-                        inner.capabilities.store(None);
                         if was_set {
-                            warn!(
+                            error!(
                                 file = %path.display(),
-                                "capabilities file removed — agent now unrestricted"
+                                "capabilities file removed mid-runtime — \
+                                 keeping last-known allowlist; restart agent \
+                                 to clear it intentionally"
                             );
                         }
                     }
