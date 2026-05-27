@@ -209,19 +209,23 @@ async fn submit(
     let matched_names: Vec<String> = matched.iter().map(|p| p.name.clone()).collect();
     let requires_approval = matched.iter().any(|p| p.requires_approval);
 
-    // Phase 7n: per-policy rate limits. Each matched policy with a
-    // `rate_limit_per_minute` cap enforces its own bucket. We check
-    // every cap before recording any of them, so a single submission
-    // doesn't half-consume budgets when one policy rejects. Since the
-    // limiter records on success, looping in order produces the right
-    // semantics: stricter caps reject earlier, no partial recording.
-    for policy in &matched {
-        if let Some(cap) = policy.rate_limit_per_minute {
-            state
-                .rate_limiter
-                .check_and_record_policy(&policy.name, cap)
-                .await?;
-        }
+    // Phase 7n + Phase 9 follow-up: per-policy rate limits. Each
+    // matched policy with a `rate_limit_per_minute` cap enforces its
+    // own bucket. The earlier `for policy in &matched` loop committed
+    // each cap as it iterated, so a submission that ended up rejected
+    // by the second policy still consumed budget from the first. The
+    // batched call below runs check + record under a single mutex
+    // hold: dry-run all caps, then commit all on success. Truly
+    // atomic, no partial recording.
+    let policy_caps: Vec<(&str, u32)> = matched
+        .iter()
+        .filter_map(|p| p.rate_limit_per_minute.map(|cap| (p.name.as_str(), cap)))
+        .collect();
+    if !policy_caps.is_empty() {
+        state
+            .rate_limiter
+            .check_and_record_policies(&policy_caps)
+            .await?;
     }
 
     let outcome = state

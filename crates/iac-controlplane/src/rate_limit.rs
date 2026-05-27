@@ -254,6 +254,10 @@ impl RateLimiter {
     /// independently of the env-level bucket. Each policy gets its own
     /// 60-second sliding window so multiple policies matching the same
     /// submission can each contribute a constraint.
+    ///
+    /// Single-policy form; the API submit handler usually wants
+    /// [`Self::check_and_record_policies`] so a multi-policy submission
+    /// is atomic across all of them (no half-charged buckets).
     pub async fn check_and_record_policy(
         &self,
         policy_name: &str,
@@ -268,6 +272,73 @@ impl RateLimiter {
             Instant::now(),
         )
         .await
+    }
+
+    /// Phase 9 follow-up: atomic two-phase check + record across a
+    /// batch of `(policy_name, cap)` pairs. Previously
+    /// [`Self::check_and_record_policy`] was called in a loop; the
+    /// first policy's `record` committed even if a later policy
+    /// rejected the request, leaking budget into rejected submits and
+    /// drifting from the comment that promised "no partial recording".
+    ///
+    /// Held under a single `state` lock so the dry-run check and the
+    /// commit pass see the same snapshot — no other request can race
+    /// in between.
+    pub async fn check_and_record_policies(
+        &self,
+        policies: &[(&str, u32)],
+    ) -> ApiResult<()> {
+        use std::sync::atomic::Ordering::Relaxed;
+        // Filter out disabled caps up-front so they don't pollute the
+        // metrics counter.
+        let active: Vec<(RateLimitBucket, u32)> = policies
+            .iter()
+            .filter(|(_, cap)| *cap > 0)
+            .map(|(name, cap)| (RateLimitBucket::policy(*name), *cap))
+            .collect();
+        if active.is_empty() {
+            return Ok(());
+        }
+        let now = Instant::now();
+        let mut state = self.state.lock().await;
+        // Phase 1: every bucket must accept under its current count.
+        // We don't mutate any queue yet — abort cleanly if any policy
+        // is at cap, with the SAME bucket / retry_after_secs shape
+        // that single-policy callers produced.
+        for (bucket, max) in &active {
+            self.metrics.checks_total.fetch_add(1, Relaxed);
+            let key = format!("{}:{}", bucket.r#type, bucket.name);
+            let q = state.entry(key).or_default();
+            let cutoff = now.checked_sub(Duration::from_secs(60));
+            if let Some(cutoff) = cutoff {
+                while let Some(&t) = q.front() {
+                    if t < cutoff {
+                        q.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if q.len() >= *max as usize {
+                let retry_secs = q
+                    .front()
+                    .map(|&t| 60u64.saturating_sub(now.duration_since(t).as_secs()))
+                    .unwrap_or(60)
+                    .max(1);
+                self.metrics.rejected_total.fetch_add(1, Relaxed);
+                return Err(ApiError::TooManyRequests {
+                    bucket: bucket.clone(),
+                    retry_after_secs: retry_secs,
+                });
+            }
+        }
+        // Phase 2: commit. All checks passed under the same lock so
+        // we can't race against ourselves; push every hit.
+        for (bucket, _) in &active {
+            let key = format!("{}:{}", bucket.r#type, bucket.name);
+            state.entry(key).or_default().push_back(now);
+        }
+        Ok(())
     }
 
     /// Env-level variant with explicit `Instant` for tests.
@@ -597,5 +668,57 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn policies_batched_no_partial_recording_on_reject() {
+        // Regression: the old `for policy in &matched { check_and_record_policy(...) }`
+        // loop committed each policy's hit before checking the next.
+        // A submission rejected by the *second* policy still consumed
+        // budget from the first. `check_and_record_policies` runs both
+        // phases under one lock; a rejected batch should leave every
+        // bucket untouched.
+        let cfg = RateLimitConfig::default();
+        let lim = RateLimiter::from_config(&cfg);
+
+        // policy A: cap=2 (room for one more)
+        // policy B: cap=1, already at 1 hit → will reject the batch
+        assert!(lim.check_and_record_policy("policy-a", 2).await.is_ok());
+        assert!(lim.check_and_record_policy("policy-b", 1).await.is_ok());
+
+        // Batched submit hitting both: B is already at cap, so the
+        // whole batch must reject WITHOUT consuming A's remaining slot.
+        let err = lim
+            .check_and_record_policies(&[("policy-a", 2), ("policy-b", 1)])
+            .await
+            .expect_err("batch must reject when any bucket is at cap");
+        match err {
+            ApiError::TooManyRequests { bucket, .. } => {
+                assert_eq!(bucket.r#type, "policy");
+                assert_eq!(bucket.name, "policy-b");
+            }
+            other => panic!("expected TooManyRequests, got {other:?}"),
+        }
+
+        // Proof of no partial recording: policy A should still have
+        // exactly 1 free slot. If the buggy old loop had committed,
+        // this would fail.
+        assert!(
+            lim.check_and_record_policy("policy-a", 2).await.is_ok(),
+            "policy-a was wrongly debited even though the batch rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn policies_batched_disabled_caps_are_skipped() {
+        let lim = RateLimiter::from_config(&RateLimitConfig::default());
+        // cap = 0 means "disabled"; the batch should commit zero hits.
+        assert!(
+            lim.check_and_record_policies(&[("zero-cap", 0)])
+                .await
+                .is_ok()
+        );
+        // No bucket should have been created.
+        assert!(lim.check_and_record_policy("zero-cap", 1).await.is_ok());
     }
 }

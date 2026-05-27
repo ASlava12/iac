@@ -1265,11 +1265,17 @@ impl Store {
         actor: &str,
         reason: Option<&str>,
     ) -> ApiResult<u32> {
+        let mut tx = self.pool.begin().await?;
+        // Re-check status inside the tx so a concurrent approve/reject
+        // racing with us can't be missed. The atomic guard is the
+        // final conditional UPDATE below (rows_affected == 1) — this
+        // early read just avoids doing routing work that's about to be
+        // thrown away. Both reads see the same isolation snapshot.
         let row = sqlx::query(&sql(
             "SELECT environment, status FROM operations WHERE id = ?",
         ))
         .bind(op_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or(ApiError::NotFound)?;
         let status: String = row.try_get("status")?;
@@ -1284,14 +1290,13 @@ impl Store {
         let desired_rows = sqlx::query(&sql("SELECT resource_id, kind, environment, spec_json
              FROM desired_states WHERE operation_id = ?"))
         .bind(op_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
         let agents: Vec<(String, String, String)> =
             sqlx::query_as(&sql("SELECT id, name, environment FROM agents"))
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *tx)
                 .await?;
 
-        let mut tx = self.pool.begin().await?;
         let now = Timestamp::now().to_string();
 
         // Phase 7by: rebuild the full ResourceForRouting list, topo-sort
@@ -1392,10 +1397,17 @@ impl Store {
         } else {
             None
         };
-        sqlx::query(&sql("UPDATE operations
+        // Conditional UPDATE pins the row to `pending_approval` —
+        // if a concurrent approve / reject already moved it, this
+        // returns rows_affected == 0 and we roll back. Without this
+        // guard two approvers racing would each insert their own
+        // assignments and the second UPDATE would silently leave them
+        // dangling against a "succeeded" operation. Belt-and-braces
+        // alongside the in-tx status read above.
+        let upd = sqlx::query(&sql("UPDATE operations
              SET status = ?, approved_by = ?, approved_at = ?, approval_reason = ?,
                  finished_at = COALESCE(?, finished_at)
-             WHERE id = ?"))
+             WHERE id = ? AND status = 'pending_approval'"))
         .bind(new_status)
         .bind(approver_display)
         .bind(&now)
@@ -1404,6 +1416,12 @@ impl Store {
         .bind(op_id)
         .execute(&mut *tx)
         .await?;
+        if upd.rows_affected() != 1 {
+            return Err(ApiError::Conflict(format!(
+                "operation {op_id} no longer in pending_approval (concurrent approve/reject); \
+                 refusing to overwrite"
+            )));
+        }
 
         record_audit_on(
             &mut tx,
