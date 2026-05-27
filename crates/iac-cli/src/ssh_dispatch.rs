@@ -301,25 +301,48 @@ pub fn bootstrap_iac_binary(target: &SshTarget) -> Result<String> {
         _ => local_iac_path()?,
     };
     let sha_full = file_sha256_full(&local_iac)?;
-    if let Ok(expected) = std::env::var("IAC_BOOTSTRAP_BINARY_SHA256") {
-        let expected = expected.trim().to_lowercase();
-        if !expected.is_empty() && expected != sha_full {
-            anyhow::bail!(
-                "iac bootstrap binary {} sha256 mismatch:\n  expected: {expected}\n    actual: {sha_full}\n\
-                 Refusing to ship an unverified binary to {label}.",
-                local_iac.display(),
-                label = target.label,
-            );
+    match std::env::var("IAC_BOOTSTRAP_BINARY_SHA256") {
+        Ok(expected) if !expected.trim().is_empty() => {
+            let expected = expected.trim().to_lowercase();
+            if expected != sha_full {
+                anyhow::bail!(
+                    "iac bootstrap binary {} sha256 mismatch:\n  expected: {expected}\n    actual: {sha_full}\n\
+                     Refusing to ship an unverified binary to {label}.",
+                    local_iac.display(),
+                    label = target.label,
+                );
+            }
         }
-    } else {
-        eprintln!(
-            "[!] auto-bootstrap: about to ship {} (sha256 {}) to {} as {}. \
-             Set IAC_BOOTSTRAP_BINARY_SHA256 to suppress this warning + enforce the hash on every push.",
-            local_iac.display(),
-            sha_full,
-            target.label,
-            target.user,
-        );
+        // No pinned hash. Interactively this is a warn-and-proceed
+        // (operator is watching and the sha is printed). But in a
+        // non-interactive context (CI, cron, `| sh`) a warning scrolls
+        // past unseen and an unattended run would ship whatever
+        // `current_exe()` happens to be to root on every target — the
+        // exact poisoned-dev-box → fleet-RCE channel #4.5 was meant to
+        // close. Phase 9 follow-up: fail-closed when stdin isn't a TTY.
+        _ => {
+            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                eprintln!(
+                    "[!] auto-bootstrap: about to ship {} (sha256 {}) to {} as {}. \
+                     Set IAC_BOOTSTRAP_BINARY_SHA256 to suppress this warning + enforce the hash on every push.",
+                    local_iac.display(),
+                    sha_full,
+                    target.label,
+                    target.user,
+                );
+            } else {
+                anyhow::bail!(
+                    "auto-bootstrap refused in non-interactive mode: shipping {} (sha256 {}) \
+                     to {} as {} without IAC_BOOTSTRAP_BINARY_SHA256 set. Pin the hash \
+                     (IAC_BOOTSTRAP_BINARY_SHA256={}) to authorise the push from CI/automation.",
+                    local_iac.display(),
+                    sha_full,
+                    target.label,
+                    target.user,
+                    sha_full,
+                );
+            }
+        }
     }
     let sha = sha_full[..8].to_string();
     let remote_path = format!("/tmp/iac-applier-{sha}");
