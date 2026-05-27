@@ -486,13 +486,34 @@ impl Client {
                 self.verifiers.len()
             )
         })?;
+        let now = jiff::Timestamp::now();
         if let Some(max_age) = max_envelope_age_secs() {
-            check_envelope_freshness(
-                jiff::Timestamp::now(),
-                &env.created_at,
-                max_age,
-                FUTURE_GRACE_SECS,
-            )?;
+            check_envelope_freshness(now, &env.created_at, max_age, FUTURE_GRACE_SECS)?;
+        }
+        // Phase 9 follow-up: honour the server's `expires_at` if set.
+        // Previously the field rode the wire purely as documentation —
+        // the agent only enforced its own `max_envelope_age_secs`
+        // window, so a server attempting to issue short-lived
+        // assignments couldn't actually narrow the replay window the
+        // agent would accept. Now any envelope whose declared expiry
+        // is in the past (allowing the same NTP-tolerance grace as
+        // created_at) is refused.
+        if let Some(exp_str) = env.expires_at.as_deref() {
+            match exp_str.parse::<jiff::Timestamp>() {
+                Ok(exp) => {
+                    let overdue = now.as_second().saturating_sub(exp.as_second());
+                    if overdue > FUTURE_GRACE_SECS {
+                        anyhow::bail!(
+                            "envelope expires_at {exp_str:?} already past (overdue by {overdue}s) — refusing to verify"
+                        );
+                    }
+                }
+                Err(_) => {
+                    anyhow::bail!(
+                        "envelope expires_at {exp_str:?} unparseable — refusing to verify"
+                    );
+                }
+            }
         }
         let payload_json = serde_json::to_vec(&env.payload)?;
         let msg = canonical_assignment_message(

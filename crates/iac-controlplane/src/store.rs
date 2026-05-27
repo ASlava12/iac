@@ -1769,29 +1769,123 @@ impl Store {
     /// agent (excluding ones that ended in failure). Routing hints
     /// (`spec.hostSelector`) are stripped so the agent sees the same shape
     /// it gets in apply assignments.
+    ///
+    /// Phase 9 follow-up: the previous implementation joined
+    /// `desired_states` to `assignments` by `operation_id` only. If an
+    /// operation routed resources to multiple agents (typical when a
+    /// manifest spans db / api / lb hosts), every agent that had ANY
+    /// assignment in that operation would see the WHOLE operation's
+    /// desired_states — including resources routed to other agents.
+    /// That's a cross-agent information leak: a DMZ host could read
+    /// internal-host file contents, secret-substituted env vars, etc.
+    ///
+    /// The corrected flow:
+    ///   1. Pull this agent's apply-kind assignments (non-failed).
+    ///   2. Parse each payload to learn which resource_ids this agent
+    ///      was actually told to apply, paired with the assignment's
+    ///      operation_id.
+    ///   3. Fetch desired_states for exactly those (operation_id,
+    ///      resource_id) pairs, then collapse to the newest spec per
+    ///      resource_id.
     pub async fn list_desired_state_for_agent(
         &self,
         agent_id: &str,
     ) -> ApiResult<Vec<DesiredStateItem>> {
-        let rows = sqlx::query(&sql(
-            "SELECT ds.resource_id, ds.spec_json AS resource_json, ds.operation_id, o.created_at
-             FROM desired_states ds
-             JOIN operations o ON o.id = ds.operation_id
-             JOIN assignments a ON a.operation_id = ds.operation_id
-             WHERE a.agent_id = ?
-               AND a.status != 'failed'
-             ORDER BY ds.resource_id, o.created_at DESC, ds.id DESC",
+        // Step 1: this agent's non-failed apply assignments.
+        let assignments = sqlx::query(&sql(
+            "SELECT operation_id, payload_json
+             FROM assignments
+             WHERE agent_id = ?
+               AND status != 'failed'
+               AND kind = 'apply'",
         ))
         .bind(agent_id)
         .fetch_all(&self.pool)
         .await?;
 
-        // Collapse to the latest entry per resource_id (rows are ordered with
-        // newest first within each resource_id group).
+        // Step 2: extract the set of (operation_id, resource_id) pairs
+        // this agent legitimately knows about. Resource id shape is
+        // `kind/environment/name` — same form desired_states stores.
+        use std::collections::HashSet;
+        let mut owned_pairs: HashSet<(String, String)> = HashSet::new();
+        for row in &assignments {
+            let op_id: String = row.try_get("operation_id")?;
+            let payload_json: String = row.try_get("payload_json")?;
+            let payload: serde_json::Value = match serde_json::from_str(&payload_json) {
+                Ok(v) => v,
+                // A torn payload row is operator-fixable but we should
+                // skip it rather than 500 — the consumer (an agent
+                // poll) just gets fewer items and the bad row shows up
+                // in /v1/operations for inspection.
+                Err(_) => continue,
+            };
+            let Some(resources) = payload.get("resources").and_then(|r| r.as_array()) else {
+                continue;
+            };
+            for res in resources {
+                let kind = res.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                let name = res
+                    .pointer("/metadata/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                // metadata.environment can be omitted in manifests;
+                // when missing, server-side routing falls back to the
+                // operation's environment. We approximate that here by
+                // pulling from the resource if present and skipping
+                // pairs we can't construct cleanly.
+                let env = res
+                    .pointer("/metadata/environment")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if kind.is_empty() || name.is_empty() || env.is_empty() {
+                    continue;
+                }
+                owned_pairs.insert((op_id.clone(), format!("{kind}/{env}/{name}")));
+            }
+        }
+        if owned_pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Step 3: bulk-fetch desired_states for this agent's operations
+        // (cheap; the operation count per agent is small) and filter
+        // in-memory by (operation_id, resource_id) ∈ owned_pairs. Doing
+        // the filter as a SQL IN-list with composite keys is awkward
+        // across SQLite/Postgres dialects; the in-Rust filter is O(n)
+        // anyway because owned_pairs is a HashSet.
+        let op_ids: HashSet<&str> = owned_pairs.iter().map(|(o, _)| o.as_str()).collect();
+        // Build a parameter list. sqlx::query doesn't directly support
+        // a slice as a single IN-arg under `Any`, so we expand `?` per
+        // op_id and bind each.
+        let placeholders = std::iter::repeat_n("?", op_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let raw_sql = format!(
+            "SELECT ds.resource_id, ds.spec_json AS resource_json, ds.operation_id, o.created_at
+             FROM desired_states ds
+             JOIN operations o ON o.id = ds.operation_id
+             WHERE ds.operation_id IN ({placeholders})
+             ORDER BY ds.resource_id, o.created_at DESC, ds.id DESC"
+        );
+        let query_str = sql(&raw_sql);
+        // Bind owned ops by value so the temp string survives `await`.
+        let op_ids_owned: Vec<String> = op_ids.iter().map(|s| (*s).to_string()).collect();
+        let mut query = sqlx::query(&query_str);
+        for op in &op_ids_owned {
+            query = query.bind(op);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+
+        // Step 4: collapse to the newest entry per resource_id while
+        // enforcing the (op, rid) ownership filter.
         let mut out: Vec<DesiredStateItem> = Vec::new();
         let mut last_seen: Option<String> = None;
         for row in rows {
             let rid: String = row.try_get("resource_id")?;
+            let op_id: String = row.try_get("operation_id")?;
+            if !owned_pairs.contains(&(op_id.clone(), rid.clone())) {
+                continue;
+            }
             if last_seen.as_deref() == Some(&rid) {
                 continue;
             }
@@ -1800,7 +1894,7 @@ impl Store {
             strip_routing_hints(&mut value);
             out.push(DesiredStateItem {
                 resource_id: rid.clone(),
-                operation_id: row.try_get("operation_id")?,
+                operation_id: op_id,
                 created_at: row.try_get("created_at")?,
                 resource: value,
             });
