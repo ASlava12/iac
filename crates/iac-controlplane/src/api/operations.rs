@@ -515,13 +515,35 @@ pub(crate) fn extract_routing(
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("resource missing 'metadata.name'".into()))?
         .to_string();
-    // `metadata.environment` is optional in the manifest; fall back to op env.
-    let environment = raw
+    // `metadata.environment` is optional in the manifest; absent =
+    // inherit the operation's environment. When present it MUST match
+    // the operation's env — Phase 9 follow-up. Previously a mismatch
+    // was silently accepted and the resource_id was stored with the
+    // manifest's env, while policy/rate-limit/maintenance checks all
+    // ran against the request env. A submission against `staging`
+    // could thus stash a `prod` resource in the desired_states table
+    // and dispatch it through the staging rate budget; mismatch is
+    // either a manifest bug or an env-bypass attempt — fail loudly.
+    let environment = match raw
         .get("metadata")
         .and_then(|m| m.get("environment"))
         .and_then(|v| v.as_str())
-        .unwrap_or(op_env)
-        .to_string();
+    {
+        None => op_env.to_string(),
+        Some(env) if env == op_env => env.to_string(),
+        Some(env) => {
+            return Err(ApiError::BadRequest(format!(
+                "resource '{}' declares metadata.environment={env:?} but operation \
+                 is for environment {op_env:?}; cross-env submissions are not \
+                 permitted — either drop the metadata.environment field or submit \
+                 the operation under the matching environment",
+                raw.get("metadata")
+                    .and_then(|m| m.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>")
+            )));
+        }
+    };
     let host_selector = raw
         .get("spec")
         .and_then(|s| s.get("hostSelector"))

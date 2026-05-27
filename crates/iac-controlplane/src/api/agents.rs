@@ -1,5 +1,5 @@
 use crate::api::{BearerToken, require_role};
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::identity::Role;
 use crate::server::AppState;
 use axum::{
@@ -112,8 +112,23 @@ async fn observations(
     BearerToken(token): BearerToken,
     Json(req): Json<ObservationBatch>,
 ) -> ApiResult<Json<ObservationAck>> {
-    let _ = state.store.authenticate(&agent_id, &token).await?;
+    let record = state.store.authenticate(&agent_id, &token).await?;
     state.rate_limiter.check_and_record_agent(&agent_id).await?;
+    // Phase 9 follow-up: an authenticated staging agent could
+    // previously push observations stamped with `resource_id`s in
+    // another environment (e.g. `file/prod/...`). Server stored them
+    // verbatim, polluting drift views and UI for the wrong env and
+    // potentially masking real prod drift. Reject any batch item
+    // whose resource_id environment doesn't match the agent's record.
+    for item in &req.items {
+        if item.resource_id.environment != record.environment {
+            return Err(ApiError::BadRequest(format!(
+                "observation resource_id env {:?} does not match agent env {:?}; \
+                 refusing cross-env observation",
+                item.resource_id.environment, record.environment
+            )));
+        }
+    }
     let n = state
         .store
         .record_observations(&agent_id, &req.items)
@@ -127,8 +142,20 @@ async fn drift(
     BearerToken(token): BearerToken,
     Json(req): Json<DriftBatch>,
 ) -> ApiResult<Json<DriftAck>> {
-    let _ = state.store.authenticate(&agent_id, &token).await?;
+    let record = state.store.authenticate(&agent_id, &token).await?;
     state.rate_limiter.check_and_record_agent(&agent_id).await?;
+    // Phase 9 follow-up: same cross-env guard as observations above.
+    // A drift report for `file/prod/...` from a staging agent would
+    // page on-call for an env this agent has no business touching.
+    for item in &req.items {
+        if item.resource_id.environment != record.environment {
+            return Err(ApiError::BadRequest(format!(
+                "drift resource_id env {:?} does not match agent env {:?}; \
+                 refusing cross-env drift report",
+                item.resource_id.environment, record.environment
+            )));
+        }
+    }
     let n = state.store.record_drift(&agent_id, &req.items).await?;
     // Auto-close any open drift not in this batch — we treat each drift push
     // as the agent's complete current state.
