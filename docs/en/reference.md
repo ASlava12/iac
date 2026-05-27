@@ -28,26 +28,31 @@ hostile network can't inject work.
 
 Loaded by `iac-controlplane --config <path>`. Reload soft fields with
 `SIGHUP` (Phase 7bx) — policies, modules, retention, maintenance
-windows, retry-after format reload atomically. Hard fields (`bind`,
-`database_url`, `tls`, `rate_limit`, `webhooks`) require a restart.
+windows, retry-after format, and `rate_limit` reload atomically. Hard
+fields (`bind`, `database_url`, `tls`, `webhooks`) still require a
+restart.
 
 ```toml
 bind          = "0.0.0.0:8443"
 database_url  = "sqlite:///var/lib/iac/server/server.db?mode=rwc"
 state_dir     = "/var/lib/iac/server"
-admin_token   = "<long random string — used by `iac login`>"
+admin_token   = "<long random string — legacy bearer-token bootstrap path>"
 max_body_bytes = 8388608   # 8 MiB; bump for large manifest sets
 
 # Agent token TTL — None (omit) means tokens never expire (legacy).
 # Recommended for production: 86400 (24h) with auto-rotation enabled.
 agent_token_ttl_secs = 86400
 
-# TLS. Drop the block to run on plain HTTP (dev/internal only).
+# TLS. `mode` is required when [tls] is present:
+#   "none"   — plain HTTP (dev/internal only)
+#   "server" — HTTPS with server cert
+#   "mutual" — mTLS; clients must present a cert signed by client_ca_file
+# Drop the [tls] block entirely for the same effect as mode = "none".
 [tls]
-cert_file       = "/etc/iac/tls/server.crt"
-key_file        = "/etc/iac/tls/server.key"
-client_ca_file  = "/etc/iac/tls/ca.crt"   # optional: enables mTLS
-require_client_cert = false               # set true to reject anon
+mode           = "server"
+cert_file      = "/etc/iac/tls/server.crt"
+key_file       = "/etc/iac/tls/server.key"
+client_ca_file = "/etc/iac/tls/ca.crt"   # required when mode = "mutual"
 
 # Retention — how long to keep terminal operations + audit events.
 [retention]
@@ -103,12 +108,13 @@ spec:
   composed:   "postgres://app:${secret://sops/db.enc.yaml#password}@db/app"
 ```
 
-References are resolved at the control plane *before* the assignment
-envelope is signed, so the agent only ever sees plaintext through the
-same signed-envelope path that protects every other secret backend.
-Manifest files themselves never contain plaintext.
+Secret references travel through the control plane store as-is and
+are resolved at agent-fetch time — the resolved plaintext is folded
+into the signed assignment envelope just before delivery, so the
+agent sees only the substituted value and the stored manifest never
+contains plaintext.
 
-The full schema is in [crates/iac-controlplane/src/config.rs](../crates/iac-controlplane/src/config.rs).
+The full schema is in [crates/iac-controlplane/src/config.rs](../../crates/iac-controlplane/src/config.rs).
 
 ## Agent config (`agent.toml`)
 
@@ -135,10 +141,10 @@ client_key_file  = "/etc/iac/tls/agent.key"
 `capabilities.yaml`:
 
 ```yaml
-# Optional. Default: `allow` — kinds without an explicit rules block
-# are unrestricted. Set to `deny` for strict mode (kinds without a
-# block are rejected outright).
-default_kind_policy: allow
+# Optional. Default: `deny` (Phase 7cz.6 fail-closed flip) — kinds
+# without an explicit rules block are rejected outright. Set to `allow`
+# for the permissive shape (kinds without a block are unrestricted).
+default_kind_policy: deny
 
 # Per-kind sections. Each block has `allow` (and `deny` for path-based
 # kinds). Globs use the `globset` flavour (`*`, `**`, `?`, `[…]`).
@@ -189,19 +195,21 @@ is controlled solely by the top-level default.
 kind: file
 spec:
   path: /etc/foo.conf       # absolute path required
-  mode: "0644"              # octal string
-  content: "..."            # OR content_from: <path>
-  owner: root               # optional, defaults to current uid
-  group: root
+  mode: "0644"              # optional, octal string
+  content: "..."            # inline content; omit to manage only metadata
+  owner: root               # optional; omitted = leave ownership alone
+  group: root               # optional; omitted = leave group alone
   state: present            # present|absent
 ```
 
 * **Allowlist:** section `files:` (path globs); identifier = `spec.path`
-* **Pitfalls:** `mode` must be a quoted string (octal). The agent must
-  have write permission to the parent directory; for `/etc/*` that
-  usually means agent runs as root or via `sudo`. Atomic writes use
-  `<path>.iac.tmp` then rename — make sure the FS supports rename
-  on the target dir (most do; some FUSE mounts don't).
+* **Pitfalls:** `mode` must be a quoted string (octal). When `owner` or
+  `group` is omitted the agent does not touch ownership — it does not
+  default to the current user. The agent must have write permission to
+  the parent directory; for `/etc/*` that usually means agent runs as
+  root or via `sudo`. Atomic writes use `<path>.iac.tmp` then rename —
+  make sure the FS supports rename on the target dir (most do; some
+  FUSE mounts don't).
 * **Sample:**
 
   ```yaml
@@ -220,26 +228,28 @@ spec:
 
 ### `systemd.unit`
 
+The systemd provider manages unit *state* only (enabled / active);
+shipping the unit file itself is the operator's job — declare a
+separate `file` resource for `/etc/systemd/system/<name>.service`
+when you need that.
+
 ```yaml
 kind: systemd.unit
 spec:
-  name: nginx              # service name without .service suffix
-  state: present           # present|absent
+  name: nginx              # unit name; .service suffix is allowed (and added if absent)
+  type: service            # service|timer|socket|mount|… (default: service)
   enabled: true            # systemctl enable / disable
   active: true             # systemctl start / stop
-  unit_file: |             # OR unit_file_from: <path>
-    [Unit]
-    Description=...
-    [Service]
-    ExecStart=/usr/sbin/nginx -g 'daemon off;'
 ```
 
-* **Allowlist:** section `systemd:` (name globs, allow-only); identifier = unit name (e.g. `nginx`)
+* **Allowlist:** section `systemd:` (name globs, allow-only); identifier = unit name (e.g. `nginx.service`)
 * **Pitfalls:** `enabled` and `active` are independent — `enabled:
   true` without `active: true` configures auto-start at boot but
-  doesn't start the service now. Reload triggers (`systemctl
-  daemon-reload`) fire only when `unit_file` content changes; not on
-  `enabled`/`active` toggles. `name` must not include `.service`.
+  doesn't start the service now. To change a unit *file*, pair this
+  resource with a `file` resource that writes
+  `/etc/systemd/system/<name>.service` and run `systemctl
+  daemon-reload` out-of-band (or via a `cron.job` / wrapper script);
+  this provider deliberately doesn't touch the file system.
 * **Sample:** see `service` composite — it wraps `file` + `systemd.unit`.
 
 ### `package`
@@ -248,19 +258,18 @@ spec:
 kind: package
 spec:
   name: nginx
-  state: present           # present|absent|latest
+  state: present           # present|absent — `latest` is NOT supported
   version: "1.18.0-6.1"    # optional pin — only with state=present
+  backend: apt             # only `apt` is implemented today (default)
 ```
 
 * **Allowlist:** section `packages:` (name globs, allow-only); identifier = `spec.name`
-* **Pitfalls:** Backend autodetect (apt → dnf → pacman) reads
-  `/etc/os-release`; on bespoke distros the agent may pick the wrong
-  backend. State `latest` runs an upgrade on every apply — use it
-  sparingly to avoid surprise upgrades during canary rollouts. Use
-  `version: "<exact>"` to pin a specific version instead (apt:
-  `apt-get install name=version`); a pin mismatch triggers an
-  update step on the next apply. `state: absent` with `version`
-  set is rejected at validate-time.
+* **Pitfalls:** Today only the `apt` backend is implemented; dnf /
+  pacman / apk are on the roadmap but currently fail at validate time.
+  For "always upgrade" semantics, set `version` to a pinned upstream
+  and bump it through GitOps — there is no rolling `state: latest`
+  shortcut. A pin mismatch triggers an update step on the next apply.
+  `state: absent` with `version` set is rejected at validate-time.
 
 ### `docker.container`
 
@@ -273,7 +282,7 @@ spec:
   env:
     NGINX_HOST: "example.com"
   volumes: ["/var/www:/usr/share/nginx/html:ro"]
-  restart: unless-stopped              # docker --restart=
+  restart_policy: unless-stopped       # maps to docker --restart=
   state: present
 ```
 
@@ -328,19 +337,22 @@ spec:
 ```yaml
 kind: nginx.vhost
 spec:
-  name: example
-  server_name: example.com
-  upstream: 127.0.0.1:8080
+  config_path: /etc/nginx/conf.d/example.conf   # absolute path to write
+  server_names: ["example.com", "www.example.com"]
+  upstream: "http://127.0.0.1:8080"             # full scheme://host:port
   state: present
 ```
 
 * **Allowlist:** section `nginx_vhost:` (path globs); identifier = `spec.config_path`
-* **Pitfalls:** Rendered into `/etc/nginx/sites-available/<name>` and
-  symlinked to `sites-enabled/`. Service reload (`nginx -s reload`) is
-  only triggered when the rendered content changes. To customise the
-  template (TLS, custom headers) use `file` + `systemd.unit`
-  directly — the vhost provider intentionally doesn't expose every
-  knob.
+* **Pitfalls:** The provider writes verbatim to `spec.config_path` —
+  there's no sites-available/sites-enabled symlink dance. Pick a path
+  nginx already includes (`conf.d/*.conf` on most distros). `upstream`
+  must include a scheme prefix (`http://` or `https://`) and be a
+  single endpoint. The backend runs `nginx -t` before declaring the
+  apply successful and triggers a reload via `systemctl reload nginx`.
+  To customise the template (TLS, custom headers) drop the vhost
+  resource and use a `file` resource that writes the full config —
+  this provider deliberately doesn't expose every knob.
 
 ### `cron.job`
 
@@ -356,37 +368,42 @@ spec:
 
 * **Allowlist:** section `cron:` (name globs, allow-only); identifier = `spec.name`
 * **Pitfalls:** Writes to `/etc/cron.d/iac-<name>` with a tag header
-  so a hand-edit (or another tool's edit) is safe. Schedule uses the
-  classic 5-field syntax (no `@yearly` / seconds). Command runs
-  through `/bin/sh -c` — quote env-var expansions carefully.
+  so a hand-edit (or another tool's edit) is safe. Schedule accepts
+  the classic 5-field syntax **or** Vixie's `@`-macros (`@yearly`,
+  `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly`,
+  `@reboot`); seconds are not supported. Command runs through
+  `/bin/sh -c` — quote env-var expansions carefully.
 
-### `firewall.rule` (iptables)
+### `firewall.rule`
 
 ```yaml
 kind: firewall.rule
 spec:
-  name: allow-https        # used as the iptables comment tag
+  name: allow-https        # used as the iptables / nft comment tag
   chain: INPUT
   action: ACCEPT
   protocol: tcp
-  destination_port: 443
+  port: 443                # destination port
   state: present
 ```
 
 * **Allowlist:** no per-kind section — falls through to `default_kind_policy`
-* **Pitfalls:** Uses iptables `-m comment --comment "iac:<name>"` for
-  identity — comments are how we find our rules on next observe.
-  Survives `iptables -F` because we re-apply on observe; doesn't
-  survive a kernel reboot unless you persist via your distro's tooling
-  (`iptables-persistent` on Debian, `firewalld` permanent rules on
-  RHEL — IaC doesn't manage that today). nftables backend is on the
-  Phase 8 roadmap.
+* **Pitfalls:** Default backend is iptables and identifies its rules
+  via `-m comment --comment "iac:<name>"`. The nftables backend
+  (Phase 9 follow-up) is opt-in via `IAC_FIREWALL_BACKEND=nft` (or
+  `nftables`) — for RHEL 9+, recent Fedora, and operators who prefer
+  native nftables semantics. Survives `iptables -F` / `nft flush`
+  because we re-apply on observe; doesn't survive a kernel reboot
+  unless you persist via your distro's tooling (`iptables-persistent`
+  on Debian, `nftables.service` save/restore — IaC doesn't manage
+  that today).
 
 ### `monitoring.check`
 
 ```yaml
 kind: monitoring.check
 spec:
+  name: app-health         # REQUIRED — used as the check identifier
   type: http               # http|tcp
   target: http://localhost:8080/healthz
   expected_status: 200     # http only
@@ -417,11 +434,15 @@ spec:
 ```
 
 * **Allowlist:** no per-kind section — falls through to `default_kind_policy`
-* **Pitfalls:** Writes to `/etc/sysctl.d/iac-<name>.conf` then runs
-  `sysctl -p <file>`. Some keys (e.g. `net.bridge.*`) require the
-  matching kernel module to be loaded first — IaC won't load it
-  for you. Quote the value as a string even when numeric (YAML's
-  type coercion bites on values like `0644`).
+* **Pitfalls:** Writes the runtime value directly to
+  `/proc/sys/<key-with-slashes>` — no shell-out, no `sysctl -p`, no
+  third-party deps. **The change is runtime-only and lost on reboot.**
+  For boot persistence, pair this with a `file` resource that writes
+  `/etc/sysctl.d/iac-<name>.conf` so the kernel re-applies on next
+  start. Some keys (e.g. `net.bridge.*`) require the matching kernel
+  module to be loaded first — IaC won't load it for you. Quote the
+  value as a string even when numeric (YAML's type coercion bites on
+  values like `0644`).
 
 ### `dns.record`
 
@@ -504,18 +525,23 @@ spec:
 
 ### Composites
 
-`kind: service` expands server-side into `docker.container` + optional
-`nginx.vhost` + optional `monitoring.check`. Keeps manifests concise:
+`kind: service` expands server-side into `docker.container` plus an
+`nginx.vhost` when `domain` is set. Keeps manifests concise:
 
 ```yaml
 kind: service
 spec:
   name: web
   image: nginx:1.27
-  ports: ["80:80"]
-  domain: example.com
-  health_path: /healthz
+  port: 80                 # published host port (single value, not a list)
+  internal_port: 80        # optional; the container's listen port (default 80)
+  domain: example.com      # optional — when set, emits an nginx.vhost
 ```
+
+The composite emits the Docker container plus, if `domain` is set,
+a matching `nginx.vhost`. There is no implicit `monitoring.check`
+today; declare one explicitly alongside the `service` when you want
+a health gate.
 
 Operators can also declare custom composites under `[[modules]]` in
 `server.toml` (Phase 7bv): a TOML template + `{{ var }}` scalar
@@ -708,7 +734,7 @@ Optional, opted into by exporting `iac_methods() -> i64` returning a JSON-array 
 
 **Each top-level method call gets a fresh `Store`** with full fuel budget — a previous call's overrun can't poison the next one. Plugins that need persistent state must store it outside the module (e.g. in a host-managed file the agent owns).
 
-**Writing a plugin in Rust.** Build with `cargo build --release --target wasm32-unknown-unknown`; export the ABI via `#[no_mangle] pub extern "C" fn iac_observe(...) -> i64 { ... }`. A minimal scratchpad allocator is fine — see [`crates/iac-providers/src/wasm/runtime.rs`](crates/iac-providers/src/wasm/runtime.rs) tests for an end-to-end WAT example.
+**Writing a plugin in Rust.** Build with `cargo build --release --target wasm32-unknown-unknown`; export the ABI via `#[no_mangle] pub extern "C" fn iac_observe(...) -> i64 { ... }`. A minimal scratchpad allocator is fine — see [`crates/iac-providers/src/wasm/runtime.rs`](../../crates/iac-providers/src/wasm/runtime.rs) tests for an end-to-end WAT example.
 
 #### Component-model variant (`runtime = "component"`)
 
@@ -726,7 +752,7 @@ max_memory_bytes = 16777216
 fuel_per_call = 100_000_000
 ```
 
-**WIT interface** (canonical source: [`crates/iac-providers/wit/plugin.wit`](crates/iac-providers/wit/plugin.wit)):
+**WIT interface** (canonical source: [`crates/iac-providers/wit/plugin.wit`](../../crates/iac-providers/wit/plugin.wit)):
 
 ```wit
 package iac:plugin@0.1.0;
@@ -797,7 +823,7 @@ The bytes round-trip verbatim. Plugins that need richer rollback semantics (mult
 
 **Same sandbox, same lifecycle.** Fuel limits, memory caps. By default no I/O — identical to the core variant. Component plugins can opt into capability-driven I/O via the `[wasi]` block (next section).
 
-**Reference fixture.** [`crates/iac-providers/tests/fixtures/test-plugin/`](crates/iac-providers/tests/fixtures/test-plugin/) is a complete working component plugin in ~50 lines of Rust — copy it as a starting point.
+**Reference fixture.** [`crates/iac-providers/tests/fixtures/test-plugin/`](../../crates/iac-providers/tests/fixtures/test-plugin/) is a complete working component plugin in ~50 lines of Rust — copy it as a starting point.
 
 #### WASI preview2 capabilities
 
@@ -845,7 +871,7 @@ The output is already a component (no `wasm-tools component new` step needed). P
 
 **Fail-closed.** If a plugin's component imports `wasi:filesystem` but the operator forgot the `[wasi]` block (or set `preopens = []`), instantiation fails at agent startup with a clear "missing import" error. Operators get a loud signal, not silent malfunction.
 
-**Reference fixture.** [`crates/iac-providers/tests/fixtures/wasi-plugin/`](crates/iac-providers/tests/fixtures/wasi-plugin/) reads a host-preopened file via `std::fs` and reflects the contents back through `observe`. Starting point for plugins that need filesystem state.
+**Reference fixture.** [`crates/iac-providers/tests/fixtures/wasi-plugin/`](../../crates/iac-providers/tests/fixtures/wasi-plugin/) reads a host-preopened file via `std::fs` and reflects the contents back through `observe`. Starting point for plugins that need filesystem state.
 
 ### When to pick which
 
@@ -881,9 +907,10 @@ Three identity classes share one bearer-token auth:
 Roles form an inclusion lattice: `Viewer < Operator < Approver < Admin`.
 
 ```bash
-iac users create --server <url> --user alice --role operator
-iac users create --server <url> --user bob   --role approver
-iac users create --server <url> --user root  --role admin
+iac users create --server <url> --user alice --roles operator
+iac users create --server <url> --user bob   --roles approver
+iac users create --server <url> --user root  --roles admin
+# Multiple roles: --roles operator,approver
 ```
 
 `Operator` can submit ops, `Approver` can also approve gated ops,
@@ -1026,6 +1053,13 @@ identity_file  = "/etc/iac/ssh/edge.key"   # SSH key auth only
 remote_iac_path = "/usr/local/bin/iac"     # must be pre-installed
 capabilities   = ["file", "sysctl.setting"] # allowlist; empty = any
 connect_timeout_secs = 10
+
+# Host-key handling. Default policy is "strict" — known_hosts_file is
+# required and unknown server keys are rejected. For first-touch dev
+# spikes, swap in host_key_policy = "accept_new" (TOFU): the first
+# fingerprint is pinned and any later change is rejected.
+host_key_policy  = "strict"
+known_hosts_file = "/etc/iac/ssh/known_hosts"
 ```
 
 Prerequisites on each target:
@@ -1143,7 +1177,7 @@ agents you can retire safely after one full poll cycle.
 
 ## Performance + capacity
 
-Stress harness in [crates/iac-controlplane/tests/stress.rs](../crates/iac-controlplane/tests/stress.rs).
+Stress harness in [crates/iac-controlplane/tests/stress.rs](../../crates/iac-controlplane/tests/stress.rs).
 Run with:
 
 ```bash
@@ -1192,7 +1226,7 @@ When defaults stop being enough, switch to Postgres and the per-CP
 ceiling moves from "single-host SQLite write-throughput" to
 "network round-trip" — typically a 5–10× headroom jump.
 
-**Sources:** see [TASKS_ARCHIVE.md](../TASKS_ARCHIVE.md) sections
+**Sources:** see [TASKS_ARCHIVE.md](../../TASKS_ARCHIVE.md) sections
 `Phase 9-F1-fix-1` through `Phase 9-F1-fix-5` for the full forensic
 write-up of each finding.
 

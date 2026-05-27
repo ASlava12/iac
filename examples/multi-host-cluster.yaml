@@ -8,6 +8,13 @@
 # layer 1 = api, layer 2 = lb. Each layer fully completes before the
 # next dispatches. Add --canary-pct 50 on submit to also gate within
 # each layer.
+#
+# Heads-up: the v1 `iac` CLI flattens `metadata.dependsOn` during
+# YAML→JSON round-tripping (the Metadata struct in iac-core doesn't
+# carry the field yet). Until that gap closes, submit this manifest
+# through the API directly (`POST /v1/operations` with the field
+# preserved) if you need the dispatch ordering; with `iac apply` the
+# resources fan out into one layer.
 ---
 apiVersion: iac.example/v1
 kind: docker.container
@@ -24,7 +31,7 @@ spec:
     POSTGRES_DB: app
   volumes:
     - "/var/lib/postgres/data:/var/lib/postgresql/data"
-  restart: unless-stopped
+  restart_policy: unless-stopped
   hostSelector:
     name: vm-db
 ---
@@ -35,6 +42,7 @@ metadata:
   environment: prod
   dependsOn: ["docker.container/prod/postgres"]
 spec:
+  name: postgres-up
   type: tcp
   target: localhost:5432
   timeout_secs: 5
@@ -59,7 +67,7 @@ spec:
   ports: ["8080:8080"]
   env:
     DATABASE_URL: "postgres://app:${secret://env/POSTGRES_PASSWORD}@vm-db.internal:5432/app"
-  restart: unless-stopped
+  restart_policy: unless-stopped
   hostSelector:
     name: vm-api
 ---
@@ -70,6 +78,7 @@ metadata:
   environment: prod
   dependsOn: ["docker.container/prod/api"]
 spec:
+  name: api-health
   type: http
   target: http://localhost:8080/healthz
   retries: 10
@@ -110,7 +119,7 @@ metadata:
     - "monitoring.check/prod/api-health"
 spec:
   name: nginx
-  state: present
+  type: service
   active: true
   enabled: true
   hostSelector:

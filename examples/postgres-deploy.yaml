@@ -11,6 +11,14 @@
 #   iac apply postgres-deploy.yaml --yes
 #
 # All three resources reach `succeeded` only if postgres is alive.
+#
+# Heads-up: the v1 `iac` CLI flattens `metadata.dependsOn` during
+# YAML→JSON round-tripping (the Metadata struct in iac-core doesn't
+# carry the field yet). On a single-host local apply this still works
+# because the resources land in one layer and the executor runs them
+# in declared order. For a server-side dispatch where layer ordering
+# matters, submit via the API (`POST /v1/operations`) until the CLI
+# gap closes.
 ---
 apiVersion: iac.example/v1
 kind: file

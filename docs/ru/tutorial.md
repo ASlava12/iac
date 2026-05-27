@@ -86,8 +86,8 @@ iac plan hello.yaml
 
 ## Локальный rollback (откат)
 
-Каждый успешный apply записывается в `~/.local/share/iac/operations/`.
-Откатить последний apply:
+Каждый успешный apply записывается в `$IAC_STATE_DIR/operations/`
+(по умолчанию `~/.iac/state/operations/`). Откатить последний apply:
 
 ```bash
 iac operations          # список последних op id
@@ -129,15 +129,19 @@ database_url = "sqlite:///var/lib/iac/server/server.db?mode=rwc"
 state_dir = "/var/lib/iac/server"
 admin_token = "поменяй-меня-на-длинный-секрет"
 [tls]
+mode      = "server"
 cert_file = "/etc/iac/tls/server.crt"
 key_file  = "/etc/iac/tls/server.key"
+# Для mTLS поставь mode = "mutual" и добавь:
+# client_ca_file = "/etc/iac/tls/clients-ca.pem"
 EOF
 
 iac-controlplane --config /etc/iac/server.toml
 ```
 
-Для быстрого теста можно запустить на plain HTTP (убери `[tls]`
-блок и поставь `bind = "127.0.0.1:8080"`).
+Для быстрого теста можно запустить на plain HTTP (поставь
+`mode = "none"` в `[tls]` или убери блок целиком, и
+`bind = "127.0.0.1:8080"`).
 
 ### Регистрируем agent
 
@@ -162,8 +166,15 @@ iac-agent --config /etc/iac/agent.toml
 ### Submit с операторской стороны
 
 ```bash
+# Реальные пользователи: `iac login` вызывает POST /v1/auth/login с
+# паролем, который ты задал при `iac users create`. Токен кешируется
+# в ~/.iac/credentials.json (режим 0600).
 iac login --server https://iac.example.com:8443 --user admin
-# (вставить admin_token из server.toml)
+
+# Bootstrap-сокращение: пропустить `iac login` и передать статический
+# admin_token из server.toml через env-переменную IAC_ADMIN_TOKEN.
+# Полезно до первого реального User'а; не для повседневных операторов.
+# IAC_ADMIN_TOKEN=... iac apply ...
 
 iac apply manifests/ --server https://iac.example.com:8443 \
                      --environment prod --yes
@@ -194,6 +205,9 @@ environment = "edge"
 host = "10.0.0.1"
 user = "admin"
 identity_file = "/etc/iac/ssh/edge.key"
+# Обязательно при дефолтном host_key_policy = "strict". Для dev-спайка
+# можно поставить host_key_policy = "accept_new" и обойтись без файла.
+known_hosts_file = "/etc/iac/ssh/known_hosts"
 ```
 
 Control plane сам ходит SSH к таким target'ам когда им нужно

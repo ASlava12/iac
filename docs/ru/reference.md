@@ -29,28 +29,33 @@ RBAC (управление правами) + approval (согласование)
 
 ## Конфиг сервера (`server.toml`)
 
-Грузится `iac-controlplane --config <path>`. Перезагрузка soft-полей
-по `SIGHUP` (Phase 7bx) — policies, modules, retention, maintenance
-windows, retry-after format. Hard-поля (`bind`, `database_url`,
-`tls`, `rate_limit`, `webhooks`) требуют рестарта.
+Грузится `iac-controlplane --config <path>`. Перезагрузка мягких
+полей по `SIGHUP` (Phase 7bx) — policies, modules, retention,
+maintenance windows, retry-after format и `rate_limit` атомарно.
+Жёсткие поля (`bind`, `database_url`, `tls`, `webhooks`) всё ещё
+требуют рестарта.
 
 ```toml
 bind          = "0.0.0.0:8443"
 database_url  = "sqlite:///var/lib/iac/server/server.db?mode=rwc"
 state_dir     = "/var/lib/iac/server"
-admin_token   = "<длинная случайная строка — `iac login` использует её>"
-max_body_bytes = 8388608   # 8 MiB; увеличь для больших manifest setов
+admin_token   = "<длинная случайная строка — legacy bearer-token для первичного запуска>"
+max_body_bytes = 8388608   # 8 MiB; увеличь для больших наборов манифестов
 
 # Agent token TTL — None (опустить) = токены вечные (legacy).
 # Рекомендация для prod: 86400 (24h) с auto-rotation.
 agent_token_ttl_secs = 86400
 
-# TLS. Убери блок чтобы запустить на plain HTTP (dev/internal only).
+# TLS. Поле `mode` обязательно, если присутствует [tls]:
+#   "none"   — plain HTTP (только для dev/internal)
+#   "server" — HTTPS с сертификатом сервера
+#   "mutual" — mTLS; клиент обязан показать сертификат, подписанный client_ca_file
+# Полностью убрать блок [tls] = эквивалент mode = "none".
 [tls]
-cert_file       = "/etc/iac/tls/server.crt"
-key_file        = "/etc/iac/tls/server.key"
-client_ca_file  = "/etc/iac/tls/ca.crt"   # опционально: включает mTLS
-require_client_cert = false               # true чтобы реджектить anon
+mode           = "server"
+cert_file      = "/etc/iac/tls/server.crt"
+key_file       = "/etc/iac/tls/server.key"
+client_ca_file = "/etc/iac/tls/ca.crt"   # обязательно при mode = "mutual"
 
 # Retention — сколько хранить terminal операции + audit события.
 [retention]
@@ -99,6 +104,13 @@ user           = "admin"
 identity_file  = "/etc/iac/ssh/edge.key"
 remote_iac_path = "/usr/local/bin/iac"
 capabilities   = ["file", "sysctl.setting"]
+
+# Проверка ключа хоста. По умолчанию policy = "strict" — known_hosts_file
+# обязателен, незнакомые ключи отбрасываются. Для dev-спайка можно
+# host_key_policy = "accept_new" (TOFU): первый фингерпринт пиннится,
+# любое изменение позже = отказ.
+host_key_policy  = "strict"
+known_hosts_file = "/etc/iac/ssh/known_hosts"
 ```
 
 ### Синтаксис secret-ссылок
@@ -113,11 +125,11 @@ spec:
   composed:   "postgres://app:${secret://sops/db.enc.yaml#password}@db/app"
 ```
 
-Ссылки резолвятся на control plane *перед* подписью envelope'а
-(Phase 7co — на agent-fetch time, не submit-time), поэтому plaintext
-никогда не попадает в DB и идёт к агенту тем же signed-envelope
-путём, что защищает остальной wire-трафик. Сами манифесты тоже
-plaintext не содержат.
+Ссылки на секреты лежат в хранилище control plane как есть и
+резолвятся в момент выдачи задания агенту (agent-fetch time):
+plaintext подставляется в подписанный envelope непосредственно
+перед отправкой, поэтому агент видит только подставленное значение,
+а в БД и манифестах хранится только ссылка.
 
 Полная схема — в [crates/iac-controlplane/src/config.rs](../../crates/iac-controlplane/src/config.rs).
 
@@ -146,10 +158,10 @@ client_key_file  = "/etc/iac/tls/agent.key"
 `capabilities.yaml`:
 
 ```yaml
-# Опционально. Default: `allow` — kinds без явного rules-блока
-# не ограничены. Поставьте `deny` для строгого режима (kinds без
-# блока отвергаются сразу).
-default_kind_policy: allow
+# Опционально. Default: `deny` (Phase 7cz.6 — fail-closed перевод) —
+# kinds без явного rules-блока отбрасываются сразу. Поставьте
+# `allow` для пермиссивной формы (kinds без блока не ограничены).
+default_kind_policy: deny
 
 # Per-kind секции. Каждый блок имеет `allow` (и `deny` для
 # path-based kinds). Globs — flavour `globset` (`*`, `**`, `?`,
@@ -197,16 +209,18 @@ per-kind секции — проваливается в `default_kind_policy`"*,
 kind: file
 spec:
   path: /etc/foo.conf       # абсолютный path обязателен
-  mode: "0644"              # octal string (в кавычках!)
-  content: "..."            # ИЛИ content_from: <path>
-  owner: root               # опционально, по умолчанию текущий uid
-  group: root
+  mode: "0644"              # опционально, octal string (в кавычках!)
+  content: "..."            # inline-контент; опусти чтобы управлять только метаданными
+  owner: root               # опционально; опущено = не трогать владельца
+  group: root               # опционально; опущено = не трогать группу
   state: present            # present|absent
 ```
 
 * **Allowlist:** секция `files:` (path globs); идентификатор = `spec.path`
 * **Подводные камни:** `mode` — обязательно строка в кавычках (YAML
-  иначе превратит `0644` в число). Агенту нужен write на родительскую
+  иначе превратит `0644` в число). Если `owner` или `group` не задан,
+  агент НЕ трогает владельца/группу — не подставляет текущего
+  пользователя по умолчанию. Агенту нужен write на родительскую
   директорию; для `/etc/*` — обычно root или `sudo`. Атомарная запись
   использует `<path>.iac.tmp` + rename — на FS без поддержки rename
   на месте (некоторые FUSE-маунты) не сработает.
@@ -228,26 +242,26 @@ spec:
 
 ### `systemd.unit`
 
+Этот провайдер управляет только *состоянием* юнита (enabled / active);
+доставка файла юнита — задача оператора: при необходимости объяви
+отдельный `file`-ресурс для `/etc/systemd/system/<name>.service`.
+
 ```yaml
 kind: systemd.unit
 spec:
-  name: nginx              # имя сервиса без .service
-  state: present           # present|absent
+  name: nginx              # имя юнита; суффикс .service допустим (и добавится автоматически)
+  type: service            # service|timer|socket|mount|… (по умолчанию: service)
   enabled: true            # systemctl enable / disable
   active: true             # systemctl start / stop
-  unit_file: |             # ИЛИ unit_file_from: <path>
-    [Unit]
-    Description=...
-    [Service]
-    ExecStart=/usr/sbin/nginx -g 'daemon off;'
 ```
 
-* **Allowlist:** секция `systemd:` (name globs, allow-only); идентификатор = unit name (например `nginx`)
+* **Allowlist:** секция `systemd:` (name globs, allow-only); идентификатор = unit name (например `nginx.service`)
 * **Подводные камни:** `enabled` и `active` — независимы. `enabled:
   true` без `active: true` настроит autostart, но не запустит сервис
-  сейчас. `daemon-reload` срабатывает только при изменении содержимого
-  `unit_file`, а не при тогглах `enabled`/`active`. `name` — без
-  суффикса `.service`.
+  сейчас. Чтобы изменить *файл* юнита, объяви рядом `file`-ресурс,
+  пишущий `/etc/systemd/system/<name>.service`, и сделай
+  `systemctl daemon-reload` отдельно (через `cron.job` или скрипт-обёртку);
+  этот провайдер сознательно не трогает файловую систему.
 
 ### `package`
 
@@ -255,19 +269,18 @@ spec:
 kind: package
 spec:
   name: nginx
-  state: present           # present|absent|latest
+  state: present           # present|absent — `latest` НЕ поддерживается
   version: "1.18.0-6.1"    # опциональный pin — только при state=present
+  backend: apt             # сегодня реализован только `apt` (default)
 ```
 
 * **Allowlist:** секция `packages:` (name globs, allow-only); идентификатор = `spec.name`
-* **Подводные камни:** Backend-autodetect (apt → dnf → pacman) читает
-  `/etc/os-release`; на нестандартных дистрах может выбрать не тот.
-  `latest` запускает upgrade на каждый apply — осторожно во время
-  canary, может неожиданно поднять версию. Используйте
-  `version: "<точная>"` чтобы зафиксировать конкретную версию (apt:
-  `apt-get install name=version`); pin-mismatch триггерит update step
-  на следующем apply. `state: absent` вместе с `version` отвергается
-  на validate-этапе.
+* **Подводные камни:** Сегодня реализован только бэкенд `apt`;
+  dnf / pacman / apk в roadmap, но пока падают на validate-этапе.
+  Для семантики "всегда последняя версия" фиксируйте `version`
+  явно и обновляйте его через GitOps — катящегося `state: latest`
+  больше нет. Pin-mismatch триггерит update step на следующем apply.
+  `state: absent` вместе с `version` отвергается на validate-этапе.
 
 ### `docker.container`
 
@@ -280,7 +293,7 @@ spec:
   env:
     NGINX_HOST: "example.com"
   volumes: ["/var/www:/usr/share/nginx/html:ro"]
-  restart: unless-stopped               # docker --restart=
+  restart_policy: unless-stopped        # становится docker --restart=
   state: present
 ```
 
@@ -334,18 +347,22 @@ spec:
 ```yaml
 kind: nginx.vhost
 spec:
-  name: example
-  server_name: example.com
-  upstream: 127.0.0.1:8080
+  config_path: /etc/nginx/conf.d/example.conf   # абсолютный путь записи
+  server_names: ["example.com", "www.example.com"]
+  upstream: "http://127.0.0.1:8080"             # полный scheme://host:port
   state: present
 ```
 
 * **Allowlist:** секция `nginx_vhost:` (path globs); идентификатор = `spec.config_path`
-* **Подводные камни:** Рендерится в `/etc/nginx/sites-available/<name>`
-  + symlink в `sites-enabled/`. Reload (`nginx -s reload`) срабатывает
-  только при изменении контента. Для тонкой кастомизации (TLS,
-  custom-headers) — используйте `file` + `systemd.unit` напрямую,
-  vhost-провайдер сознательно не выводит каждую опцию.
+* **Подводные камни:** Провайдер пишет ровно по `spec.config_path` —
+  никакого танца sites-available/sites-enabled с симлинками. Выбирайте
+  путь, который nginx уже инклюдит (`conf.d/*.conf` на большинстве
+  дистрибутивов). `upstream` обязан содержать префикс схемы (`http://`
+  или `https://`) и быть одним эндпоинтом. Бэкенд запускает `nginx -t`
+  перед тем как объявить apply успешным, и делает reload через
+  `systemctl reload nginx`. Для тонкой кастомизации (TLS, custom-headers)
+  откажитесь от vhost-ресурса и используйте `file`-ресурс с полным
+  конфигом — этот провайдер сознательно не выводит каждую опцию.
 
 ### `cron.job`
 
@@ -362,36 +379,41 @@ spec:
 * **Allowlist:** секция `cron:` (name globs, allow-only); идентификатор = `spec.name`
 * **Подводные камни:** Пишет в `/etc/cron.d/iac-<name>` с tag-заголовком
   — ручная правка (или правка другим инструментом) безопасна. Schedule
-  — классический 5-полевой синтаксис (без `@yearly`/секунд). Команда
-  выполняется через `/bin/sh -c` — аккуратно с подстановкой env-vars
-  (кавычки!).
+  принимает классический 5-полевой синтаксис **или** Vixie-макросы
+  (`@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`,
+  `@hourly`, `@reboot`); секунды не поддерживаются. Команда выполняется
+  через `/bin/sh -c` — аккуратно с подстановкой env-vars (кавычки!).
 
-### `firewall.rule` (iptables)
+### `firewall.rule`
 
 ```yaml
 kind: firewall.rule
 spec:
-  name: allow-https        # используется как iptables comment tag
+  name: allow-https        # тег comment в iptables / nft
   chain: INPUT
   action: ACCEPT
   protocol: tcp
-  destination_port: 443
+  port: 443                # destination port
   state: present
 ```
 
 * **Allowlist:** нет per-kind секции — проваливается в `default_kind_policy`
-* **Подводные камни:** Идентификация — через iptables `-m comment
-  --comment "iac:<name>"`. Переживает `iptables -F` (мы пере-применяем
-  на observe), но не переживает reboot, если не персистите через
-  средства дистрибутива (`iptables-persistent` на Debian, постоянные
-  правила firewalld на RHEL — IaC этим пока не управляет). nftables-
-  бэкенд — Phase 8.
+* **Подводные камни:** Бэкенд по умолчанию — iptables, идентифицирует
+  свои правила через `-m comment --comment "iac:<name>"`. Бэкенд
+  nftables (доработка Phase 9) включается через переменную
+  `IAC_FIREWALL_BACKEND=nft` (или `nftables`) — для RHEL 9+, недавних
+  Fedora и операторов, предпочитающих нативные nftables-семантики.
+  Переживает `iptables -F` / `nft flush` (мы пере-применяем на observe),
+  но не переживает reboot, если не персистите через средства
+  дистрибутива (`iptables-persistent` на Debian, `nftables.service`
+  save/restore — IaC этим пока не управляет).
 
 ### `monitoring.check`
 
 ```yaml
 kind: monitoring.check
 spec:
+  name: app-health         # ОБЯЗАТЕЛЬНО — идентификатор проверки
   type: http               # http|tcp
   target: http://localhost:8080/healthz
   expected_status: 200     # http only
@@ -421,11 +443,15 @@ spec:
 ```
 
 * **Allowlist:** нет per-kind секции — проваливается в `default_kind_policy`
-* **Подводные камни:** Пишет в `/etc/sysctl.d/iac-<name>.conf` + запускает
-  `sysctl -p <file>`. Некоторые ключи (например `net.bridge.*`) требуют
-  предварительной загрузки модуля ядра — IaC сам модуль не загрузит.
-  Value — всегда строка в кавычках (даже для числа): YAML иначе превратит
-  `0644` в число.
+* **Подводные камни:** Пишет значение runtime прямо в
+  `/proc/sys/<ключ-через-слэши>` — без shell-out, без `sysctl -p`,
+  без сторонних зависимостей. **Изменение только runtime, теряется
+  при ребуте.** Для сохранения между перезагрузками объяви рядом
+  `file`-ресурс, пишущий в `/etc/sysctl.d/iac-<name>.conf`, чтобы
+  ядро перезагрузило значение при следующем старте. Некоторые ключи
+  (например `net.bridge.*`) требуют предварительной загрузки модуля
+  ядра — IaC сам модуль не загрузит. Value — всегда строка в кавычках
+  (даже для числа): YAML иначе превратит `0644` в число.
 
 ### `dns.record`
 
@@ -506,23 +532,28 @@ spec:
     cloudflare_api_token: "${secret://env/CF_API_TOKEN}"
   ```
 
-### Composites
+### Композитные ресурсы (composites)
 
-`kind: service` раскрывается серверной стороной в `docker.container` +
-optional `nginx.vhost` + optional `monitoring.check`:
+`kind: service` раскрывается серверной стороной в `docker.container`
+плюс `nginx.vhost`, если задан `domain`:
 
 ```yaml
 kind: service
 spec:
   name: web
   image: nginx:1.27
-  ports: ["80:80"]
-  domain: example.com
-  health_path: /healthz
+  port: 80                 # публикуемый host-порт (одно значение, не список)
+  internal_port: 80        # опционально; порт прослушивания контейнера (default 80)
+  domain: example.com      # опционально — при наличии генерируется nginx.vhost
 ```
 
-Кастомные composites — `[[modules]]` в server.toml (Phase 7bv): TOML
-template + `{{ var }}` scalar substitution.
+Композит создаёт Docker-контейнер и, если задан `domain`,
+соответствующий `nginx.vhost`. Никакой неявной `monitoring.check`
+сегодня нет; объяви её отдельно рядом с `service`, если нужен
+health-гейт.
+
+Кастомные композиты объявляются как `[[modules]]` в server.toml
+(Phase 7bv): TOML-шаблон с подстановкой скаляров через `{{ var }}`.
 
 ## Кастомные провайдеры
 
@@ -710,7 +741,7 @@ fuel_per_call = 100_000_000                       # ~100M инструкций, 
 
 **Каждый top-level вызов получает свежий `Store`** с полным fuel-бюджетом — overrun предыдущего вызова не отравит следующий. Плагинам, которым нужно persistent state, хранить его снаружи модуля (host-managed файл, которым владеет агент).
 
-**Писать плагин на Rust.** `cargo build --release --target wasm32-unknown-unknown`; экспортируйте ABI через `#[no_mangle] pub extern "C" fn iac_observe(...) -> i64 { ... }`. Минимальный scratchpad-аллокатор хватит — пример end-to-end WAT в тестах [`crates/iac-providers/src/wasm/runtime.rs`](crates/iac-providers/src/wasm/runtime.rs).
+**Писать плагин на Rust.** `cargo build --release --target wasm32-unknown-unknown`; экспортируйте ABI через `#[no_mangle] pub extern "C" fn iac_observe(...) -> i64 { ... }`. Минимальный scratchpad-аллокатор хватит — пример end-to-end WAT в тестах [`crates/iac-providers/src/wasm/runtime.rs`](../../crates/iac-providers/src/wasm/runtime.rs).
 
 #### Component-model вариант (`runtime = "component"`)
 
@@ -728,7 +759,7 @@ max_memory_bytes = 16777216
 fuel_per_call = 100_000_000
 ```
 
-**WIT-интерфейс** (источник: [`crates/iac-providers/wit/plugin.wit`](crates/iac-providers/wit/plugin.wit)):
+**WIT-интерфейс** (источник: [`crates/iac-providers/wit/plugin.wit`](../../crates/iac-providers/wit/plugin.wit)):
 
 ```wit
 package iac:plugin@0.1.0;
@@ -799,7 +830,7 @@ rollback: func(metadata: metadata, checkpoint-json: string) -> result<_, string>
 
 **Sandbox и lifecycle — те же.** Fuel limits, memory caps. По умолчанию без I/O — идентично core-варианту. Component-плагины могут opt-in'ом получить capability-driven I/O через `[wasi]` блок (следующая секция).
 
-**Эталонный fixture.** [`crates/iac-providers/tests/fixtures/test-plugin/`](crates/iac-providers/tests/fixtures/test-plugin/) — готовый working компонент-плагин в ~50 строках Rust — копируйте как стартовую точку.
+**Эталонный fixture.** [`crates/iac-providers/tests/fixtures/test-plugin/`](../../crates/iac-providers/tests/fixtures/test-plugin/) — готовый working компонент-плагин в ~50 строках Rust — копируйте как стартовую точку.
 
 #### WASI preview2 capabilities
 
@@ -847,7 +878,7 @@ Output уже компонент (`wasm-tools component new` шаг не нуж�
 
 **Fail-closed.** Если плагин импортирует `wasi:filesystem`, но оператор забыл `[wasi]` блок (или поставил `preopens = []`) — instantiation падает на старте агента с ясным "missing import" error'ом. Loud signal, не silent malfunction.
 
-**Эталонный fixture.** [`crates/iac-providers/tests/fixtures/wasi-plugin/`](crates/iac-providers/tests/fixtures/wasi-plugin/) — читает host-preopened файл через `std::fs` и возвращает контент через `observe`. Стартовая точка для плагинов, которым нужен filesystem state.
+**Эталонный fixture.** [`crates/iac-providers/tests/fixtures/wasi-plugin/`](../../crates/iac-providers/tests/fixtures/wasi-plugin/) — читает host-preopened файл через `std::fs` и возвращает контент через `observe`. Стартовая точка для плагинов, которым нужен filesystem state.
 
 ### Что выбирать
 
@@ -884,9 +915,10 @@ Output уже компонент (`wasm-tools component new` шаг не нуж�
 Роли в решётке (lattice): `Viewer < Operator < Approver < Admin`.
 
 ```bash
-iac users create --server <url> --user alice --role operator
-iac users create --server <url> --user bob   --role approver
-iac users create --server <url> --user root  --role admin
+iac users create --server <url> --user alice --roles operator
+iac users create --server <url> --user bob   --roles approver
+iac users create --server <url> --user root  --roles admin
+# Несколько ролей: --roles operator,approver
 ```
 
 ## Политики и шлюзы согласования (policies + approval gates)
@@ -979,6 +1011,13 @@ identity_file  = "/etc/iac/ssh/edge.key"   # только SSH-ключ
 remote_iac_path = "/usr/local/bin/iac"     # должен быть pre-installed
 capabilities   = ["file", "sysctl.setting"] # allowlist; пустой = любое
 connect_timeout_secs = 10
+
+# Проверка ключа хоста. По умолчанию policy = "strict" — known_hosts_file
+# обязателен, незнакомые ключи отбрасываются. Для dev-спайка можно
+# host_key_policy = "accept_new" (TOFU): первый фингерпринт пиннится,
+# любое изменение позже = отказ.
+host_key_policy  = "strict"
+known_hosts_file = "/etc/iac/ssh/known_hosts"
 ```
 
 Предварительные требования (prerequisites) на каждом хосте:

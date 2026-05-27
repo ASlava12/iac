@@ -93,8 +93,8 @@ When an operator submits a manifest:
 
 The control plane:
 1. Validates the operation (RBAC, policies, manifest schema).
-2. Routes resources to agents via `metadata.spec.hostSelector.name`.
-3. Computes layers from `dependsOn` (Phase 7by phased apply).
+2. Routes resources to agents via `spec.hostSelector.name`.
+3. Computes layers from `metadata.dependsOn` (Phase 7by phased apply).
 4. If canary specified, splits each layer into batch 0 (canary) and
    batch 1 (baseline).
 5. Persists assignment rows in the store, sorted by layer + batch.
@@ -108,9 +108,17 @@ into the operation status.
 
 Two orthogonal axes gate dispatch:
 
-* **Layers** (Phase 7by) come from `metadata.dependsOn`. Layer-N+1
-  cannot start until every layer-N assignment has reached terminal
-  state (succeeded). A failure in any layer cancels every later layer.
+* **Layers** (Phase 7by) come from `metadata.dependsOn`, a list of
+  `<kind>/<environment>/<name>` resource ids that must finish first.
+  Layer-N+1 cannot start until every layer-N assignment has reached
+  terminal state (succeeded). A failure in any layer cancels every
+  later layer. **Note:** today the field is read server-side from the
+  raw resource JSON; if you submit through `iac` CLI, the
+  `iac-core::Metadata` struct drops unknown keys during YAML→JSON
+  round-tripping, so `metadata.dependsOn` declared in a manifest is
+  currently lost before reaching the server. Tracked as a CLI gap;
+  workaround until fixed is to submit the operation through the API
+  directly (`POST /v1/operations`) with the field preserved.
 * **Canary batches** (Phase 7cg) within a layer split agents into
   `batch=0` (dispatched first, the canary) and `batch=1` (waits in
   `pending_canary`). Failure in canary cancels the rest of the rollout.

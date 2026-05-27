@@ -3127,7 +3127,7 @@ throughput at the cost of durability — we won't do that for an
 audit-chain backend.
 
 Runbook section
-[Backend choice — SQLite knee at ~3 RPS sustained](../docs/en/runbook.md#backend-choice--sqlite-knee-at-3-rps-sustained)
+[Backend choice — SQLite knee at ~3 RPS sustained](docs/en/runbook.md#backend-choice--sqlite-knee-at-3-rps-sustained)
 documents the operator-facing guidance.
 
 **Side finding: `/v1/audit/verify` doesn't scale.** Manual finalize

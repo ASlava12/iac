@@ -80,8 +80,8 @@ The plan output will show the file as drifted. `iac apply` re-converges it.
 
 ## Rolling back locally
 
-Every successful apply is recorded in `~/.local/share/iac/operations/`. To
-roll back the most recent apply:
+Every successful apply is recorded under `$IAC_STATE_DIR/operations/`
+(default `~/.iac/state/operations/`). To roll back the most recent apply:
 
 ```bash
 iac operations          # list recent op ids
@@ -105,15 +105,18 @@ database_url = "sqlite:///var/lib/iac/server/server.db?mode=rwc"
 state_dir = "/var/lib/iac/server"
 admin_token = "change-me-something-long"
 [tls]
+mode      = "server"
 cert_file = "/etc/iac/tls/server.crt"
 key_file  = "/etc/iac/tls/server.key"
+# For mTLS, set mode = "mutual" and add:
+# client_ca_file = "/etc/iac/tls/clients-ca.pem"
 EOF
 
 iac-controlplane --config /etc/iac/server.toml
 ```
 
-For a quick test you can run it on plain HTTP (drop the `[tls]` block and
-use `bind = "127.0.0.1:8080"`).
+For a quick test you can run it on plain HTTP (set `mode = "none"` in
+`[tls]` or drop the block entirely, and use `bind = "127.0.0.1:8080"`).
 
 ### Register an agent
 
@@ -137,8 +140,15 @@ Subsequent runs reuse the persisted identity in `state_dir/identity.json`.
 ### Submit from the operator side
 
 ```bash
+# Real users: `iac login` calls POST /v1/auth/login with the password
+# you set when you ran `iac users create`. Token is cached in
+# ~/.iac/credentials.json (mode 0600).
 iac login --server https://iac.example.com:8443 --user admin
-# (paste admin_token from server config)
+
+# Bootstrap shortcut: skip `iac login` entirely and pass the static
+# admin_token from server.toml via the IAC_ADMIN_TOKEN env var. Useful
+# until you provision your first real User; not for day-2 operators.
+# IAC_ADMIN_TOKEN=... iac apply ...
 
 iac apply manifests/ --server https://iac.example.com:8443 \
                      --environment prod --yes
@@ -168,6 +178,9 @@ environment = "edge"
 host = "10.0.0.1"
 user = "admin"
 identity_file = "/etc/iac/ssh/edge.key"
+# Required under the default host_key_policy = "strict". For a dev
+# spike you can swap in host_key_policy = "accept_new" instead.
+known_hosts_file = "/etc/iac/ssh/known_hosts"
 ```
 
 The control plane SSHes to such targets when they need a change.
