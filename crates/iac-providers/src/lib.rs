@@ -4,6 +4,17 @@
 // Phase 7cz.16: tests-only exemption for unwrap/expect/panic.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+// Crate-wide test-only mutex. Several test modules in this crate
+// write a `.sh` plugin script and immediately `Command::spawn()` it.
+// Under parallel cargo-test, a sibling test's fork()+exec() can
+// inherit our just-opened write fd before O_CLOEXEC fires, and our
+// subsequent exec() of the same script returns ETXTBSY (Linux
+// "Text file busy"). Tests in `process/handle.rs`,
+// `process/provider.rs`, and `shellout/provider.rs` hold this lock
+// across "write script → spawn" to close the window.
+#[cfg(test)]
+pub(crate) static SPAWN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[macro_use]
 mod sha256_pin;
 mod step_action;

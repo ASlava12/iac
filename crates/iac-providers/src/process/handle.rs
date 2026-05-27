@@ -403,14 +403,18 @@ fn read_response_until(proc: &mut RunningProc, deadline: Instant) -> std::io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SPAWN_LOCK;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
     fn mk_plugin_script(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
         let p = dir.join("plugin.sh");
-        let mut f = std::fs::File::create(&p).unwrap();
-        writeln!(f, "#!/bin/sh").unwrap();
-        f.write_all(body.as_bytes()).unwrap();
+        {
+            let mut f = std::fs::File::create(&p).unwrap();
+            writeln!(f, "#!/bin/sh").unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
         let mut perm = std::fs::metadata(&p).unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&p, perm).unwrap();
@@ -419,6 +423,7 @@ mod tests {
 
     #[test]
     fn handshake_then_one_call() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         // Plugin emits hello, then echoes one observe response.
         let plugin = mk_plugin_script(
@@ -451,6 +456,7 @@ echo '{"id":1,"result":{"present":true,"spec":{"name":"x"}}}'
 
     #[test]
     fn protocol_version_mismatch_fails_handshake() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let plugin = mk_plugin_script(
             tmp.path(),
@@ -465,17 +471,23 @@ sleep 5
             args: vec![],
             env: vec![],
             restart_on_crash: false,
-            handshake_timeout_secs: 2,
-            call_timeout_secs: 2,
+            // 10s, not 2s: CI runners (ARM, Windows-on-ARM, FreeBSD
+            // QEMU) periodically take >2s to spawn `sh` and pipe the
+            // first echo back, which used to surface as a handshake
+            // timeout, masking the assertion we actually want to test.
+            handshake_timeout_secs: 10,
+            call_timeout_secs: 10,
             binary_sha256: None,
         };
         let handle = PluginHandle::new(spec);
         let err = handle.call("observe", serde_json::Value::Null).unwrap_err();
-        assert!(format!("{err:?}").contains("protocol_version"));
+        let msg = format!("{err:?}");
+        assert!(msg.contains("protocol_version"), "unexpected error: {msg}");
     }
 
     #[test]
     fn kind_mismatch_fails_handshake() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let plugin = mk_plugin_script(
             tmp.path(),
@@ -490,8 +502,8 @@ sleep 5
             args: vec![],
             env: vec![],
             restart_on_crash: false,
-            handshake_timeout_secs: 2,
-            call_timeout_secs: 2,
+            handshake_timeout_secs: 10,
+            call_timeout_secs: 10,
             binary_sha256: None,
         };
         let handle = PluginHandle::new(spec);
@@ -502,6 +514,7 @@ sleep 5
 
     #[test]
     fn application_error_round_trips() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let plugin = mk_plugin_script(
             tmp.path(),
@@ -531,6 +544,7 @@ echo '{"id":1,"error":"backend down"}'
     /// transport-shaped failures the cool-off blocks further spawns.
     #[test]
     fn restart_cooloff_kicks_in_after_repeated_crashes() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         // Plugin that exits 1 immediately, before sending hello.
         let plugin = mk_plugin_script(tmp.path(), "exit 1\n");

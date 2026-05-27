@@ -213,6 +213,8 @@ mod tests {
         p
     }
 
+    use crate::SPAWN_LOCK;
+
     fn mk_provider(observe: &Path, apply: &Path) -> ShellOutProvider {
         let spec = ShellOutSpec {
             kind: "test.k".into(),
@@ -269,6 +271,7 @@ mod tests {
 
     #[test]
     fn apply_propagates_failure_status() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let observe = mk_script(
             dir.path(),
@@ -294,6 +297,7 @@ mod tests {
 
     #[test]
     fn run_times_out_long_running_command() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         let observe = mk_script(dir.path(), "observe", "#!/bin/sh\nsleep 10\n");
         let apply = mk_script(

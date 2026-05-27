@@ -92,6 +92,7 @@ use methods as _legacy_methods_constants;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SPAWN_LOCK;
     use iac_core::diff::DiffKind;
     use iac_core::operation::StepStatus;
     use iac_core::provider::{ApplyContext, Provider};
@@ -105,9 +106,12 @@ mod tests {
 
     fn mk_plugin(dir: &Path, body: &str) -> std::path::PathBuf {
         let p = dir.join("plug.sh");
-        let mut f = std::fs::File::create(&p).unwrap();
-        writeln!(f, "#!/bin/sh").unwrap();
-        f.write_all(body.as_bytes()).unwrap();
+        {
+            let mut f = std::fs::File::create(&p).unwrap();
+            writeln!(f, "#!/bin/sh").unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
         let mut perm = std::fs::metadata(&p).unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&p, perm).unwrap();
@@ -148,6 +152,7 @@ mod tests {
 
     #[test]
     fn full_create_flow_with_plugin() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         // Plugin: hello → observe (absent) → apply (ok). One process,
         // multiple round-trips.
@@ -202,6 +207,7 @@ done
 
     #[test]
     fn plugin_can_return_application_error() {
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let plug = mk_plugin(
             tmp.path(),
