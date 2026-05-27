@@ -1,0 +1,82 @@
+name: CI
+
+# Runs on every push and PR against the default branch. Three jobs:
+#   - fmt:    `cargo fmt --check` — rejects unformatted Rust
+#   - clippy: `cargo clippy -- -D warnings` — treats lints as errors
+#   - test:   `cargo test --workspace --release --no-fail-fast`
+#
+# All jobs target stable Rust on Linux. The release-build matrix for
+# cross-platform binaries lives in `release.yml` — it triggers only
+# on version tags so PR cycles stay fast.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# Cancel in-flight CI on the same branch when a new push lands —
+# saves runner minutes when a PR is iterating quickly.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust + rustfmt
+        run: |
+          rustup toolchain install stable --component rustfmt --profile minimal
+          rustup default stable
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust + clippy
+        run: |
+          rustup toolchain install stable --component clippy --profile minimal
+          rustup default stable
+      # Cache the cargo registry + git index + target dir keyed by
+      # Cargo.lock so subsequent runs don't re-resolve every crate.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: cargo test (workspace, release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+      # `--no-fail-fast` keeps every test running to surface every
+      # breakage in one CI run, not just the first.
+      - run: cargo test --workspace --release --no-fail-fast

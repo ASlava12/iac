@@ -1,0 +1,186 @@
+name: Release
+
+# Triggers on version tags (e.g. `v1.2.3`). Builds platform-specific
+# binaries and attaches them to the GitHub Release created from the
+# tag.
+#
+# Crate-portability notes — this is a Linux-first project. As of
+# Phase 9 the catalog ships providers that shell out to iptables,
+# systemd, etc., so the agent binary is genuinely Linux-only at
+# runtime. We still attempt cross-platform builds for the
+# control-plane (`iac-controlplane`) and operator CLI (`iac-cli`)
+# because those are useful as the head of a heterogeneous fleet —
+# admins on macOS or Windows want a local `iac` CLI even if the
+# managed agents live on Linux boxes. The matrix is conservative:
+# the Linux job is the only one that's expected to always pass;
+# the rest are best-effort and use `continue-on-error: true` so a
+# regression in a non-Linux target doesn't block the Linux release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  # `softprops/action-gh-release` needs write access to attach
+  # binaries to the auto-created release.
+  contents: write
+
+jobs:
+  # --------------------------------------------------------------
+  # Linux — the canonical target. Builds the full workspace.
+  # --------------------------------------------------------------
+  linux:
+    name: linux-x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build full workspace (release)
+        run: cargo build --release --workspace
+      - name: Package binaries
+        run: |
+          set -eu
+          ARTDIR="iac-${GITHUB_REF_NAME}-linux-x86_64"
+          mkdir -p "$ARTDIR"
+          for bin in iac iac-controlplane iac-agent iac-trial; do
+            if [ -x "target/release/$bin" ]; then
+              cp "target/release/$bin" "$ARTDIR/"
+            fi
+          done
+          cp README.md LICENSE* "$ARTDIR/" 2>/dev/null || true
+          tar czf "${ARTDIR}.tar.gz" "$ARTDIR"
+          sha256sum "${ARTDIR}.tar.gz" > "${ARTDIR}.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            iac-*-linux-x86_64.tar.gz
+            iac-*-linux-x86_64.tar.gz.sha256
+
+  # --------------------------------------------------------------
+  # macOS — admin CLI + control-plane. The agent has Linux-only
+  # provider shell-outs (iptables, systemctl) that compile but
+  # can't actually do work on macOS, so we don't ship it here.
+  # --------------------------------------------------------------
+  macos:
+    name: macos-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-13
+          - arch: aarch64
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build iac-cli + iac-controlplane (release)
+        run: cargo build --release -p iac-cli -p iac-controlplane
+      - name: Package binaries
+        run: |
+          set -eu
+          ARTDIR="iac-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}"
+          mkdir -p "$ARTDIR"
+          for bin in iac iac-controlplane; do
+            if [ -x "target/release/$bin" ]; then
+              cp "target/release/$bin" "$ARTDIR/"
+            fi
+          done
+          cp README.md LICENSE* "$ARTDIR/" 2>/dev/null || true
+          tar czf "${ARTDIR}.tar.gz" "$ARTDIR"
+          shasum -a 256 "${ARTDIR}.tar.gz" > "${ARTDIR}.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            iac-*-macos-*.tar.gz
+            iac-*-macos-*.tar.gz.sha256
+
+  # --------------------------------------------------------------
+  # Windows — admin CLI only. `tokio::signal::unix` and the
+  # Linux-shaped provider catalog mean the control-plane and
+  # agent don't build cleanly here yet; that's tracked under
+  # v2 in TASKS.md. The CLI is mostly portable HTTP-against-API.
+  # --------------------------------------------------------------
+  windows:
+    name: windows-x86_64
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+        shell: bash
+      - name: Build iac-cli (release)
+        run: cargo build --release -p iac-cli
+      - name: Package binaries
+        shell: bash
+        run: |
+          set -eu
+          ARTDIR="iac-${GITHUB_REF_NAME}-windows-x86_64"
+          mkdir -p "$ARTDIR"
+          if [ -f "target/release/iac.exe" ]; then
+            cp "target/release/iac.exe" "$ARTDIR/"
+          fi
+          cp README.md LICENSE* "$ARTDIR/" 2>/dev/null || true
+          # Use zip on Windows runners (no native gzip in PowerShell)
+          7z a "${ARTDIR}.zip" "$ARTDIR"
+          certutil -hashfile "${ARTDIR}.zip" SHA256 > "${ARTDIR}.zip.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            iac-*-windows-x86_64.zip
+            iac-*-windows-x86_64.zip.sha256
+
+  # --------------------------------------------------------------
+  # FreeBSD — no native GitHub Actions runner exists, so we drive
+  # a QEMU-backed FreeBSD VM via `vmactions/freebsd-vm`. Builds
+  # iac-cli + iac-controlplane; agent's Linux-isms are out of
+  # scope as on macOS. Best-effort: FreeBSD CI is famously slow
+  # (~15-20 min cold) and the VM image occasionally rotates.
+  # --------------------------------------------------------------
+  freebsd:
+    name: freebsd-x86_64
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build inside FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.1'
+          usesh: true
+          # `rustup` is the cleanest cross-distro way to get a
+          # current stable toolchain on FreeBSD — the base pkg
+          # `rust` lags by months.
+          prepare: |
+            pkg install -y curl bash
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          run: |
+            . "$HOME/.cargo/env"
+            cargo build --release -p iac-cli -p iac-controlplane
+            ARTDIR="iac-${GITHUB_REF_NAME}-freebsd-x86_64"
+            mkdir -p "$ARTDIR"
+            for bin in iac iac-controlplane; do
+              if [ -x "target/release/$bin" ]; then
+                cp "target/release/$bin" "$ARTDIR/"
+              fi
+            done
+            cp README.md "$ARTDIR/" || true
+            tar czf "${ARTDIR}.tar.gz" "$ARTDIR"
+            sha256 -q "${ARTDIR}.tar.gz" > "${ARTDIR}.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            iac-*-freebsd-x86_64.tar.gz
+            iac-*-freebsd-x86_64.tar.gz.sha256
