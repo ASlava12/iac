@@ -749,8 +749,22 @@ impl Agent {
     }
 
     /// One-shot plan, no side effects.
+    ///
+    /// Runs the same capability filter as `apply_once` so the plan an
+    /// operator sees matches what `apply` would actually execute —
+    /// previously plan listed every resource in the manifest and apply
+    /// then dropped capability-denied ones at the very last moment,
+    /// which produced confusing audit trails and silently masked
+    /// allowlist policy from the operator.
     pub async fn plan_once(&self) -> Result<PlanResult> {
         let resources = self.load_manifests().await?;
+        let (resources, denied) = self.enforce_capabilities(resources);
+        if !denied.is_empty() {
+            warn!(
+                count = denied.len(),
+                "skipping resources rejected by capability allowlist in plan output"
+            );
+        }
         let inner = self.inner.clone();
         let result = task::spawn_blocking(move || -> Result<PlanResult> {
             let exec = Executor::new(

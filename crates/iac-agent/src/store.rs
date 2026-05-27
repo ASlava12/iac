@@ -76,6 +76,29 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // The DB holds observation history + drift events + dispatch
+        // metadata; on a multi-user host (typically not the case for a
+        // dedicated agent VM, but cheap to defend) this stops a
+        // non-`iac` UID from reading the file just because the
+        // surrounding state_dir was created with a loose umask.
+        // Windows + journal_mode=WAL also creates `-wal` and `-shm`
+        // sidecars; we restrict those too once they're materialised.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            for ext in ["-wal", "-shm"] {
+                let mut sidecar = path.to_path_buf().into_os_string();
+                sidecar.push(ext);
+                let sidecar = std::path::PathBuf::from(sidecar);
+                if sidecar.exists() {
+                    let _ = std::fs::set_permissions(
+                        &sidecar,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+            }
+        }
         let store = Self {
             conn: Mutex::new(conn),
         };

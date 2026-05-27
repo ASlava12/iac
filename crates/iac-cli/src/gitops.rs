@@ -81,7 +81,22 @@ pub fn fetch_revision(
     // Always fetch — operator may have pushed since the cache was
     // populated. `--depth 1` keeps it cheap; rev-parse below verifies
     // the ref actually exists locally after the fetch.
-    let fetch_args = ["fetch", "--depth=1", "--quiet", "origin", ref_spec];
+    //
+    // `--no-recurse-submodules` is explicit: if the operator has
+    // `submodule.recurse = true` in their global git config, a
+    // malicious manifest repo with a submodule pointing at a private
+    // internal repo could silently pull credentials via the operator's
+    // git credential helper. Manifests don't need submodules; if a
+    // future workflow does, we'll surface it as an explicit
+    // `--git-recurse-submodules` flag.
+    let fetch_args = [
+        "fetch",
+        "--depth=1",
+        "--no-recurse-submodules",
+        "--quiet",
+        "origin",
+        ref_spec,
+    ];
     run_git(&repo_dir, &fetch_args)
         .with_context(|| format!("git fetch {repo_url} ref={ref_spec} (does the ref exist?)"))?;
 
@@ -99,8 +114,17 @@ pub fn fetch_revision(
     // `git checkout <sha>` puts the working tree in detached-HEAD
     // mode at the resolved commit. Idempotent on re-run with the
     // same SHA.
-    run_git(&repo_dir, &["checkout", "--quiet", "--detach", &sha])
-        .with_context(|| format!("checkout {sha}"))?;
+    run_git(
+        &repo_dir,
+        &[
+            "checkout",
+            "--quiet",
+            "--detach",
+            "--no-recurse-submodules",
+            &sha,
+        ],
+    )
+    .with_context(|| format!("checkout {sha}"))?;
 
     let root = match path {
         Some(p) if !p.is_empty() && p != "." => repo_dir.join(p),

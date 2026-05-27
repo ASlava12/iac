@@ -1671,10 +1671,14 @@ impl Store {
     ) -> ApiResult<()> {
         let mut tx = self.pool.begin().await?;
         // Verify the assignment belongs to this agent and is in a fetchable state.
-        let op_id: Option<String> = sqlx::query_scalar(
+        // sqlx's `Any` driver runtime-translates `?` to `$N` for
+        // Postgres only when the SQL goes through `sql()`; the raw
+        // literal here would silently break Postgres deployments. Use
+        // the same wrapper every other call site in this file uses.
+        let op_id: Option<String> = sqlx::query_scalar(&sql(
             "SELECT operation_id FROM assignments
              WHERE id = ? AND agent_id = ? AND status IN ('pending', 'fetched')",
-        )
+        ))
         .bind(assignment_id)
         .bind(agent_id)
         .fetch_optional(&mut *tx)
