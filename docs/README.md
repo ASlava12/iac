@@ -1,8 +1,8 @@
 # iac documentation / документация iac
 
-Two languages, three documents each. Pick by what you need.
+Two languages, four documents each. Pick by what you need.
 
-Два языка, три документа в каждом. Выбирай по потребности.
+Два языка, четыре документа в каждом. Выбирай по потребности.
 
 ## English
 

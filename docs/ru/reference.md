@@ -1,19 +1,22 @@
 # Справочник оператора
 
-Production-руководство по `iac`. Предполагает что ты прочёл
-[туториал](tutorial.md).
+Руководство по эксплуатации `iac` в продакшене. Предполагает, что
+ты прочёл [туториал](tutorial.md).
 
 ## Архитектура одним абзацем
 
-Control plane (`iac-controlplane`) — один процесс с бэкендом
-SQLite или Postgres. Принимает desired-state от операторов
-(`iac` CLI), маршрутизирует per-environment агентам (`iac-agent`),
-ведёт audit log, гейтит рискованные изменения через RBAC + approval +
-canary. Агент — long-running daemon на каждом managed хосте,
-пуллит assignments, применяет через provider catalog, рапортует
-обратно. Весь wire-трафик через HTTP[S]; агент верифицирует
-Ed25519 подпись на каждом assignment, чтобы хостайл сеть не могла
-впрыснуть работу.
+Control plane (управляющий узел, `iac-controlplane`) — один процесс
+с бэкендом SQLite или Postgres. Принимает желаемое состояние
+(desired state) от операторов (`iac` CLI), маршрутизирует задания
+агентам в нужном окружении (per-environment), ведёт журнал аудита
+(audit log), допускает или блокирует рискованные изменения через
+RBAC (управление правами) + approval (согласование) + canary
+(пробный выкат). Агент — долгоживущий демон (long-running daemon)
+на каждом управляемом хосте, забирает задания (pulls assignments),
+применяет их через каталог провайдеров (provider catalog) и
+рапортует обратно. Весь трафик идёт по HTTP[S]; агент верифицирует
+подпись Ed25519 на каждом задании (assignment), чтобы враждебная
+(hostile) сеть не могла впрыснуть работу.
 
 ```
    оператор              control plane             агенты
@@ -865,19 +868,20 @@ Output уже компонент (`wasm-tools component new` шаг не нуж�
 Дубликаты `kind` между тремя источниками отклоняются на стадии
 загрузки конфига.
 
-## RBAC
+## RBAC (управление правами по ролям)
 
-Три identity-класса:
+Три класса личности (identity):
 
-* **`LegacyAdmin`** — static `admin_token` из server.toml. Эквивалент
-  Admin role. Полезен для bootstrap; ротировать на real users в prod.
-* **`User`** — создаётся через `iac users create`, хранится Argon2id-
-  хеш. Roles прикручены при создании.
-* **`Agent`** — programmatic identity, регистрируется через
-  `POST /v1/agents/register`. Не может делать operator-level
-  действия.
+* **`LegacyAdmin`** — статичный `admin_token` из server.toml.
+  Эквивалент роли Admin. Полезен для первичного запуска (bootstrap);
+  в проде стоит ротировать на реальных пользователей.
+* **`User`** — создаётся через `iac users create`, хранится хеш
+  Argon2id. Роли прикреплены при создании.
+* **`Agent`** — программная личность, регистрируется через
+  `POST /v1/agents/register`. Не может выполнять действия уровня
+  оператора.
 
-Роли в lattice: `Viewer < Operator < Approver < Admin`.
+Роли в решётке (lattice): `Viewer < Operator < Approver < Admin`.
 
 ```bash
 iac users create --server <url> --user alice --role operator
@@ -885,7 +889,7 @@ iac users create --server <url> --user bob   --role approver
 iac users create --server <url> --user root  --role admin
 ```
 
-## Policies + approval gates
+## Политики и шлюзы согласования (policies + approval gates)
 
 ```toml
 [[policies]]
@@ -901,11 +905,12 @@ match.environment = "prod"
 rate_limit_per_minute = 5
 ```
 
-`requires_approval` operation садится в `pending_approval`. Approver
-смотрит через `iac plan --server <url> --operation <id>`, ревьюит
-diff, потом `iac approve <op-id> --server <url>`.
+Операция с `requires_approval` садится в статус `pending_approval`.
+Согласующий (approver) смотрит через `iac plan --server <url>
+--operation <id>`, ревьюит разницу (diff), потом
+`iac approve <op-id> --server <url>`.
 
-## Canary rollouts
+## Canary-выкатывания (canary rollouts)
 
 ```bash
 iac apply manifests/ --server <url> --environment prod \
@@ -933,33 +938,36 @@ canary, и весь baseline.
     retry_interval_secs: 2
 ```
 
-## GitOps
+## GitOps (управление инфраструктурой через Git)
 
 ```bash
-# CI gate на каждый PR
+# Проверка (gate) в CI на каждый pull request
 iac plan --git-repo $REPO --git-ref $PR_SHA \
          --git-path manifests/ --server $URL
 
-# После merge
+# После merge (слияния)
 iac apply --git-repo $REPO --git-ref main \
           --git-path manifests/ --server $URL \
           --canary-pct 25 --yes
 ```
 
-CLI клонит (`git fetch --depth=1`), резолвит ref в 40-char SHA через
-`git rev-parse FETCH_HEAD`, делает detached checkout, записывает SHA
-как `source_commit`. Per-repo cache в `$XDG_CACHE_HOME/iac-cli/git/`.
-Auth — из системного git config.
+CLI клонирует репозиторий (`git fetch --depth=1`), разрешает ссылку
+(ref) в 40-символьный SHA через `git rev-parse FETCH_HEAD`, делает
+detached checkout (выгрузку коммита без ветки), записывает SHA как
+`source_commit`. Per-repo cache (кеш по репозиторию) в
+`$XDG_CACHE_HOME/iac-cli/git/`. Аутентификация — из системного
+конфига `git`.
 
-## SSH push (target'ы без агента)
+## SSH push (хосты без агента)
 
-Для хостов где нельзя поднять long-running `iac-agent` daemon —
-встроенное сетевое железо, vendor appliance'ы, контракторские
-окружения с запретом демонов — объяви их как `[[ssh_targets]]` в
-`server.toml`. Control plane относится к ним как к виртуальным
-агентам (routing, canary, rollback всё работает так же), но вместо
-ожидания их poll'а — push-воркер сам идёт SSH'ом на каждый когда
-прилетают assignments.
+Для хостов, где нельзя поднять долгоживущий демон `iac-agent` —
+встроенное сетевое железо, вендорские appliance'ы (готовые
+аппаратно-программные коробки), контракторские окружения с
+запретом демонов — объяви их как `[[ssh_targets]]` в `server.toml`.
+Control plane относится к ним как к виртуальным агентам
+(маршрутизация, canary, откат — всё работает так же), но вместо
+ожидания их опроса (poll) — push-воркер сам идёт по SSH на каждый,
+когда прилетают задания (assignments).
 
 ```toml
 [[ssh_targets]]
@@ -973,44 +981,47 @@ capabilities   = ["file", "sysctl.setting"] # allowlist; пустой = любо
 connect_timeout_secs = 10
 ```
 
-Prerequisites на каждом target:
+Предварительные требования (prerequisites) на каждом хосте:
 1. SSH-ключ в `~admin/.ssh/authorized_keys` (публичная пара
    `identity_file`).
-2. Бинарь `iac` в `remote_iac_path`. На Ubuntu:
+2. Бинарь `iac` лежит по `remote_iac_path`. На Ubuntu:
    `curl -L https://example.com/iac-aarch64 > /usr/local/bin/iac && chmod +x ...`
-3. У пользователя есть нужные привилегии (root для `file` записей в
-   `/etc` и т.п.). `sudo` не вызывается автоматически.
+3. У пользователя есть нужные привилегии (root для записи `file`
+   в `/etc` и т. п.). `sudo` не вызывается автоматически.
 
-Operator-side использование идентично pull-mode агенту — тот же
-`iac apply` с `hostSelector.name: edge-router-01`. SSH worker pool
-диспатчит прозрачно.
+Использование со стороны оператора идентично pull-mode-агенту —
+тот же `iac apply` с `hostSelector.name: edge-router-01`. SSH
+worker pool (пул рабочих процессов) диспатчит прозрачно.
 
-Audit log entries: `ssh.push_succeeded`, `ssh.push_partial`,
-`ssh.push_failed`. Actor — `ssh-push:<target_name>`.
+Записи в журнале аудита: `ssh.push_succeeded`, `ssh.push_partial`,
+`ssh.push_failed`. Actor (актор события) — `ssh-push:<target_name>`.
 
-Trade-offs vs pull-mode агентов:
-* Нет NAT traversal — control plane должен достичь target.
-* Credentials в control plane (SSH key) — шире blast radius при
-  компрометации.
-* Нет agent-side capability enforcement — работает только server-
-  side `capabilities = [...]` allowlist.
+Компромиссы по сравнению с pull-mode-агентами:
+* Нет обхода NAT (NAT traversal) — control plane должен дотянуться
+  до хоста.
+* Учётные данные (SSH-ключ) в control plane — больше радиус
+  поражения (blast radius) при компрометации.
+* Нет ограничений на стороне агента (agent-side capability
+  enforcement) — работает только серверный allowlist
+  `capabilities = [...]`.
 
 Используй pull-mode для основной массы флота; SSH push — для
-хостов где нет выбора.
+хостов, где нет выбора.
 
-## Direct CLI SSH apply (Phase 7cl)
+## Прямой SSH-apply из CLI (direct CLI SSH apply, Phase 7cl)
 
-Для one-off деплоя без сервера — `iac apply --ssh`:
+Для одноразового (one-off) деплоя без сервера — `iac apply --ssh`:
 
 ```bash
 iac apply manifest.yaml --ssh admin@host.example --ssh-key ~/.ssh/key
 ```
 
-CLI открывает SSH, пайпит payload в remote `iac apply
---assignment-stdin`, парсит результат. Требуется `iac` бинарь на
-target'е (инструмент подскажет curl one-liner если его нет).
+CLI открывает SSH, передаёт payload в удалённый `iac apply
+--assignment-stdin`, разбирает результат. Требуется бинарь `iac` на
+целевом хосте (инструмент подскажет команду `curl` для установки,
+если его нет).
 
-## Rollback
+## Откат (rollback)
 
 ```bash
 iac rollback <operation-id> --server <url> \
@@ -1018,18 +1029,21 @@ iac rollback <operation-id> --server <url> \
              --canary-pct 50
 ```
 
-Строит новую operation с most-recent-prior-succeeded specs для каждого
-ресурса. Идёт через нормальный pipeline (policy + approval + canary).
-Resources без prior state — listed как `orphaned`, удаляешь вручную.
+Строит новую операцию из последних успешных спецификаций
+(most-recent-prior-succeeded) для каждого ресурса. Идёт через
+нормальный конвейер (policy + approval + canary). Ресурсы без
+предыдущего состояния попадают в список `orphaned` (осиротевшие) —
+их удаляют вручную.
 
-## Observability
+## Наблюдаемость (observability)
 
-### Prometheus метрики
+### Метрики Prometheus
 
-`GET /metrics` (без auth). Operation counters, agent fleet size,
-drift counts, rate-limit rejections, signing-key info.
+`GET /metrics` (без аутентификации). Счётчики операций (operation
+counters), размер флота агентов, число событий drift, отказы по
+rate-limit, информация о ключах подписи.
 
-### Audit log
+### Журнал аудита (audit log)
 
 ```bash
 iac audit --server <url> --kind operation.submitted --limit 50
@@ -1038,12 +1052,13 @@ iac audit --server <url> --operation-id <id>
 iac audit --server <url> --agent-id <id>
 ```
 
-Фильтры — exact-match per field; server-side time-window narrow'а нет.
-Тяните последний batch через `--limit`, потом сужайте client-side
-через `jq`, если нужен `since`-style фильтр; endpoint возвращает строки
-newest-first.
+Фильтры — точное совпадение по полю; серверного сужения по
+временному окну нет. Запрашивайте последний батч через `--limit`,
+потом сужайте на стороне клиента через `jq`, если нужен фильтр в
+стиле `since`; эндпоинт возвращает строки от свежих к старым
+(newest-first).
 
-## Maintenance windows
+## Окна обслуживания (maintenance windows)
 
 Пауза non-emergency apply в change-freeze:
 
@@ -1064,21 +1079,22 @@ reason     = "weekend freeze"
 Submit в окне → 503 + `Retry-After`. Override через
 `X-IAC-Maintenance-Bypass: yes` (admin only).
 
-## Drift workflows
+## Рабочие сценарии с дрифтом (drift workflows)
 
 ```bash
-iac drift --server <url> list                          # открытые drifts
-iac drift --server <url> accept <drift-id> --reason X  # принять как known
+iac drift --server <url> list                          # открытые drifts (расхождения)
+iac drift --server <url> accept <drift-id> --reason X  # принять как известный
 iac drift --server <url> ignore <drift-id> --until 1h  # заглушить на N {s|m|h|d}
-iac drift --server <url> revert <drift-id> --reason X  # re-apply prior state
+iac drift --server <url> revert <drift-id> --reason X  # переприменить предыдущее состояние
 iac drift --server <url> accept-bulk --agent-id <id> --reason X
 iac drift --server <url> ignore-bulk --agent-id <id> --until 24h --reason X
 ```
 
-Агенты пушат drift на каждом observe. Drift не в свежем push'е —
-auto-close (assumed converged externally).
+Агенты пушат события drift на каждом цикле наблюдения. Drift,
+которого нет в свежем push'е, авто-закрывается (считается, что мир
+сошёлся к описанному снаружи).
 
-## Ротация signing-ключа сервера
+## Ротация ключа подписи сервера (signing-key rotation)
 
 ```bash
 # Rotate (active меняется; старый остаётся в verification set)
@@ -1091,7 +1107,7 @@ curl -X POST https://iac.example.com:8443/v1/admin/signing-keys/<old-id>/retire 
      -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-## Performance + capacity
+## Производительность и ёмкость (performance + capacity)
 
 Stress harness — [crates/iac-controlplane/tests/stress.rs](../../crates/iac-controlplane/tests/stress.rs):
 
@@ -1145,39 +1161,42 @@ ceiling двигается с "single-host SQLite write-throughput" на
 `Phase 9-F1-fix-1` через `Phase 9-F1-fix-5` для полного forensic
 write-up каждой находки.
 
-## Postgres deployment
+## Развёртывание на Postgres
 
 ```toml
 database_url = "postgres://iac:secret@db.internal:5432/iac?sslmode=require"
 ```
 
-Migrations применяются автоматически на первом коннекте
-(`migrations-postgres/`). DB user должен иметь `CREATE TABLE`
-сначала; можно урезать до read/write после первого старта.
+Миграции применяются автоматически на первом подключении
+(`migrations-postgres/`). Пользователь БД должен сначала иметь
+право `CREATE TABLE`; после первого старта можно урезать до
+read/write.
 
-## Backups
+## Резервные копии (backups)
 
 * SQLite: `sqlite3 server.db .dump > backup.sql`. `state_dir` также
-  держит signing keys (`signing-keys/`) — backup'и весь state_dir.
-* Postgres: стандартный `pg_dump`. State dir signing keys всё ещё
-  нуждаются в отдельном backup'е.
+  держит ключи подписи (`signing-keys/`) — копируйте весь `state_dir`.
+* Postgres: стандартный `pg_dump`. Ключи подписи в `state_dir` всё
+  равно нужно бэкапить отдельно.
 
-Restore = restore DB + state_dir на свежем сервере. Агенты
-переподключатся автоматически; re-registration не требуется.
+Восстановление = восстановить БД + `state_dir` на свежем сервере.
+Агенты переподключатся автоматически; перерегистрация не требуется.
 
-## Troubleshooting
+## Диагностика проблем (troubleshooting)
 
-* **Агент стуck в "fetched" assignments после crash'а** — Phase 7cj
-  добавил 60s lease. Подожди минуту; следующий GET re-claim'нет.
-  Override через `IAC_ASSIGNMENT_LEASE_SECS` для shorter recovery.
-* **"server signing bundle has no overlap with pinned keys"** —
-  Phase 7cf safety rail. Server signing key set rotated past того
-  что агент запиннил. Очисти `server_pubkeys` в агентском
+* **Агент застрял с "fetched" assignments после краша** — Phase 7cj
+  добавил аренду (lease) на 60 секунд. Подожди минуту; следующий
+  GET переклеймит. Переопределение через `IAC_ASSIGNMENT_LEASE_SECS`
+  для более короткого recovery (восстановления).
+* **"server signing bundle has no overlap with pinned keys"
+  (нет пересечения с закреплёнными ключами)** — предохранитель из
+  Phase 7cf. Набор ключей подписи сервера ушёл по ротации дальше,
+  чем то, что агент запиннил. Очисти `server_pubkeys` в агентском
   `state_dir/identity.json`, перезапусти.
-* **Operation стрюк в `pending_canary`** — canary batch не
+* **Операция застряла в `pending_canary`** — canary-батч не
   завершился. `iac plan --server <url> --operation <id>` покажет
-  per-assignment status.
-* **`iac plan --git-repo` падает на auth** — git CLI берёт твоё
+  статус по каждому assignment.
+* **`iac plan --git-repo` падает на аутентификации** — git CLI берёт твоё
   shell environment. Поставь `GIT_SSH_COMMAND` или
   `GH_TOKEN`/`GITHUB_TOKEN`.
 

@@ -46,6 +46,22 @@ script), external-process (long-running NDJSON-RPC daemon), WASM (sandboxed
 module). See [docs/en/reference.md](docs/en/reference.md) for the field
 reference.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ASlava12/iac/master/install.sh | sh
+```
+
+The installer detects host OS + CPU architecture, downloads the matching
+release tarball, verifies the SHA-256 checksum, and drops binaries into
+`~/.iac/bin/`. Pin a version with `... | sh -s -- --version v0.0.4`; install
+system-wide with `... | sudo sh -s -- --prefix /usr/local`.
+
+Prebuilt binaries are published for: Linux x86_64 / aarch64, macOS aarch64,
+FreeBSD x86_64, and Windows x86_64 / aarch64 (Windows users: grab the `.zip`
+from the [releases page](https://github.com/ASlava12/iac/releases)).
+Build from source on anything else: `cargo install --path crates/iac-cli`.
+
 ## Status
 
 Pre-production. Functionally complete; static-audit-clean across six rounds

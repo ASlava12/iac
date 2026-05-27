@@ -5,26 +5,35 @@
 
 ## Краткое описание
 
-`iac` — single-binary, agent-based IaC инструмент на Rust. Оператор
-описывает desired state в YAML манифестах; per-host агенты (или
-SSH-pushed remote applier) приводят хост к нужному состоянию.
-Центральный control plane хранит audit trail, гейтит рискованные
-операции через approval + canary, диспатчит работу агентам.
+`iac` — single-binary (один исполняемый файл), agent-based
+(построенный вокруг агентов на хостах) IaC-инструмент
+(Infrastructure as Code, инфраструктура как код) на Rust. Оператор
+описывает desired state (желаемое состояние) в YAML-манифестах;
+per-host агенты (агент на каждом хосте) или SSH-pushed remote
+applier (удалённый applier, которого центральный сервер запускает
+по SSH) приводят хост к нужному состоянию. Центральный control
+plane хранит audit trail (журнал аудита всех операций), гейтит
+(допускает или блокирует) рискованные операции через approval
+(согласование человеком) + canary (выкатывание на пробный
+процент хостов), и диспатчит работу агентам.
 
 Три режима деплоя сосуществуют:
-* **Pull-mode agent** (как Puppet/Chef): агент на хосте сам пуллит
-  изменения с сервера.
+* **Pull-mode agent** (как Puppet/Chef): агент на хосте сам
+  забирает (pull) изменения с сервера.
 * **SSH push с центрального сервера** (как Ansible): control plane
   сам SSH'ится на хосты.
-* **Direct CLI SSH**: одна команда оператора → SSH apply на конкретный
-  хост, без сервера и агента.
+* **Direct CLI SSH** (прямой SSH из CLI): одна команда оператора
+  → SSH apply на конкретный хост, без сервера и агента.
 
-Wire format одинаковый для всех трёх.
+Wire format (формат данных на проводе, при обмене по сети)
+одинаковый для всех трёх режимов.
 
-## Структура crates
+## Структура крейтов
 
-Repo — Cargo workspace. Каждый crate имеет фокусную ответственность
-и стабильный internal API.
+Репозиторий — это Cargo workspace (общий проект из нескольких
+крейтов). Каждый крейт (crate, в терминологии Rust — единица
+компиляции, пакет) имеет фокусную ответственность и стабильный
+внутренний API.
 
 ```
 crates/
@@ -35,44 +44,48 @@ crates/
 ├── iac-cli          # операторский `iac` бинарь
 ```
 
-Почему такой split:
-* **iac-core** — protocol surface. Wire-типы здесь чтобы агент и
-  control plane не могли разойтись в форме `AssignmentEnvelope` или
-  `OperationView`.
-* **iac-providers** — самый большой crate (~430 unit тестов). Каждый
-  провайдер (`file`, `docker.container`, и т.д.) следует одному
-  lifecycle: `observe → diff → apply → rollback`. Добавление нового
-  провайдера не трогает core или controlplane. Phase 7di.1 объединил
-  три JSON-envelope-based динамических runtime'а (shellout,
-  external-process, wasm-core) на единый `PluginProvider<R:
-  PluginRuntime>` impl в `iac-providers/src/plugin/`; типизированный
-  WIT-based wasm-component runtime сохраняет собственный Provider
-  impl by design.
+Почему такой раздел:
+* **iac-core** — поверхность протокола. Wire-типы (типы данных,
+  которые ходят по сети) живут здесь, чтобы агент и control plane
+  не могли разойтись в форме `AssignmentEnvelope` или `OperationView`.
+* **iac-providers** — самый большой крейт (~430 модульных тестов).
+  Каждый провайдер (`file`, `docker.container`, и т.д.) следует
+  одному жизненному циклу (lifecycle): `observe → diff → apply →
+  rollback` (наблюдение → расчёт разницы → применение → откат).
+  Добавление нового провайдера не трогает core или controlplane.
+  Phase 7di.1 объединил три динамических runtime'а с JSON-envelope
+  обменом (shellout, external-process, wasm-core) на единый
+  `PluginProvider<R: PluginRuntime>` impl в `iac-providers/src/plugin/`;
+  типизированный WIT-based wasm-component runtime сохраняет
+  собственный Provider impl by design (специально, по дизайну).
 * **iac-agent** и **iac-controlplane** зависят от core + providers,
-  но никогда друг от друга напрямую — встречаются только на wire.
-* **iac-cli** — операторский UX. Парсинг CLI (clap), рендер вывода,
-  credential management. Никакой бизнес-логики — только вызовы в
-  core / providers / HTTP.
+  но никогда друг от друга напрямую — встречаются только на проводе
+  (через wire-протокол).
+* **iac-cli** — операторский UX (пользовательский опыт). Разбор
+  аргументов CLI (через crate `clap`), рендер вывода, управление
+  учётными данными (credential management). Никакой бизнес-логики —
+  только вызовы в core / providers / HTTP.
 
-## Three-state model
+## Модель трёх состояний (three-state model)
 
 Всё в `iac` построено вокруг трёх состояний на ресурс:
 
 | Состояние | Где живёт | Кто пишет |
 |---|---|---|
-| **Desired** | YAML манифест оператора | Оператор |
-| **Observed** | Что `observe()` читает с хоста (running container, file contents, sysctl, ...) | `observe()` провайдера |
-| **Applied** | То что мы последний раз записали (checkpoint для rollback) | `apply()` провайдера сохраняет checkpoint |
+| **Desired** (желаемое) | YAML-манифест оператора | Оператор |
+| **Observed** (наблюдаемое) | Что `observe()` читает с хоста (запущенный контейнер, содержимое файла, sysctl, ...) | `observe()` провайдера |
+| **Applied** (применённое) | То что мы последний раз записали (checkpoint — контрольная точка для отката) | `apply()` провайдера сохраняет checkpoint |
 
-`diff(desired, observed)` выдаёт список `Change`'ей. `apply()`
-применяет их. `rollback()` реверсит то что в checkpoint chain.
+`diff(desired, observed)` выдаёт список изменений (`Change`'ей).
+`apply()` применяет их. `rollback()` обращает то, что записано в
+цепочке контрольных точек (checkpoint chain).
 
-Каждый провайдер имплементирует этот lifecycle. Канонический пример —
+Каждый провайдер реализует этот жизненный цикл. Канонический пример —
 `iac-providers/src/file/ops.rs`.
 
-## Dispatch модель
+## Модель диспетчеризации (dispatch)
 
-Когда оператор submit'ит манифест:
+Когда оператор отправляет (submit) манифест:
 
 ```
 ┌────────────┐  POST /v1/operations           ┌──────────────────┐
@@ -98,68 +111,77 @@ crates/
 ```
 
 Control plane:
-1. Валидирует операцию (RBAC, policies, manifest schema).
+1. Валидирует операцию (RBAC — управление правами, policies —
+   политики, manifest schema — схема манифеста).
 2. Маршрутизирует ресурсы агентам по `metadata.spec.hostSelector.name`.
-3. Считает layers по `dependsOn` (Phase 7by phased apply).
-4. Если задан canary — разбивает каждый layer на batch 0 (canary) и
-   batch 1 (baseline).
-5. Сохраняет assignment строки в store, отсортированные по layer + batch.
+3. Считает слои (layers) по `dependsOn` (Phase 7by — поэтапное
+   применение, phased apply).
+4. Если задан canary — разбивает каждый слой на batch 0 (canary,
+   пробный) и batch 1 (baseline, основной).
+5. Сохраняет строки заданий (assignments) в хранилище (store),
+   отсортированные по слою и батчу.
 
-Pull-mode агенты поллят `GET /v1/agents/{id}/assignments` периодически.
-SSH push targets диспатчатся проактивно per-target Tokio worker
-тасками. Оба зовут `complete_assignment` когда закончили; результат
-прокидывается в operation status.
+Pull-mode агенты (агенты, забирающие задания) периодически опрашивают
+`GET /v1/agents/{id}/assignments`. SSH push targets (хосты, к которым
+сервер сам ходит по SSH) диспатчатся проактивно: один Tokio worker
+(задача в асинхронном рантайме) на каждый target. Оба зовут
+`complete_assignment` когда закончили; результат прокидывается в
+статус операции.
 
-## Layered apply с canary
+## Послойное применение с canary (layered apply)
 
-Две ортогональные оси гейтят dispatch:
+Две ортогональные оси гейтят диспетчеризацию:
 
-* **Layers** (Phase 7by) приходят из `metadata.dependsOn`. Layer-N+1
-  не может стартовать пока каждое layer-N задание не достигнет
-  terminal state (succeeded). Failure в любом layer отменяет все
-  последующие.
-* **Canary batches** (Phase 7cg) внутри одного layer'а разбивают
-  агентов на `batch=0` (диспатчится первым, canary) и `batch=1`
-  (ждёт в `pending_canary`). Failure в canary отменяет остаток
-  rollout'а.
+* **Слои (layers)** (Phase 7by) приходят из `metadata.dependsOn`.
+  Layer-N+1 не может стартовать, пока каждое задание layer-N не
+  достигнет финального состояния (succeeded — успех). Сбой
+  (failure) в любом слое отменяет все последующие.
+* **Canary-батчи** (Phase 7cg) внутри одного слоя разбивают агентов
+  на `batch=0` (диспатчится первым, canary) и `batch=1` (ждёт в
+  `pending_canary` — отложенный канарейкой). Сбой в canary отменяет
+  остаток выкатывания (rollout).
 
-Композиция: layer-N canary → layer-N baseline → layer-N+1 canary →
+Композиция: canary слоя N → baseline слоя N → canary слоя N+1 →
 и так далее.
 
-State machine — `iac-controlplane/src/store.rs::advance_phased_apply`
+Конечный автомат — `iac-controlplane/src/store.rs::advance_phased_apply`
 + `advance_canary`.
 
 ## Подпись и верификация
 
-Каждое задание, диспатченное агенту, подписывается Ed25519 со стороны
-control plane. Агенты верифицируют перед apply. Phase 7ce ввёл
-multi-key rotation: сервер хранит активный ключ + recently-rotated в
-verification set; агенты пуллят bundle с `GET /v1/signing-keys` и
-принимают подписи от любого пиннатого ключа.
+Каждое задание, отправленное агенту, подписывается алгоритмом Ed25519
+со стороны control plane. Агенты верифицируют подпись перед apply.
+Phase 7ce ввёл ротацию нескольких ключей (multi-key rotation): сервер
+хранит активный ключ плюс недавно отозванные в наборе для верификации
+(verification set); агенты забирают (pull) пакет (bundle) с
+`GET /v1/signing-keys` и принимают подписи от любого закреплённого
+(пиннатого) ключа.
 
-Signing module — `iac-controlplane/src/signing.rs`; agent verification
-— `iac-agent/src/remote.rs::verify_envelope`.
+Модуль подписи — `iac-controlplane/src/signing.rs`; проверка на
+стороне агента — `iac-agent/src/remote.rs::verify_envelope`.
 
-## Аутентификация и RBAC
+## Аутентификация и RBAC (управление ролями)
 
-Три identity-класса делят один bearer-token surface:
+Три класса личностей (identity) делят один интерфейс bearer-токенов
+(токен в HTTP-заголовке `Authorization: Bearer ...`):
 
 | Класс | Источник | Phase |
 |---|---|---|
-| `LegacyAdmin` | Static `admin_token` в server.toml | bootstrap |
-| `User` | `iac users create`, Argon2id hash в DB | 6e |
+| `LegacyAdmin` | Статичный `admin_token` в server.toml | bootstrap |
+| `User` | `iac users create`, хеш Argon2id в БД | 6e |
 | `Agent` | `POST /v1/agents/register`, sha256-хешированный токен | 2a |
 
-Роли формируют lattice: `Viewer < Operator < Approver < Admin`.
-RBAC checks — `iac-controlplane/src/identity.rs::require_role`.
+Роли образуют решётку (lattice): `Viewer < Operator < Approver <
+Admin`. Проверки RBAC — `iac-controlplane/src/identity.rs::require_role`.
 
-Token TTL + rotation (Phase 7cc-7cd) — opt-in через
-`agent_token_ttl_secs` в server.toml.
+TTL и ротация токенов (Phase 7cc-7cd) — включаются по желанию
+(opt-in) через `agent_token_ttl_secs` в server.toml.
 
-## Audit log
+## Журнал аудита (audit log)
 
-Каждый state-changing вызов append'ит строку в `audit_events`. Schema
-— migration `20260429000004_audit.sql`. Events:
+Каждый вызов, меняющий состояние, добавляет (append) строку в
+`audit_events`. Схема — миграция `20260429000004_audit.sql`. Типы
+событий:
 `operation.{submitted,approved,rejected,failed,succeeded}`,
 `agent.{registered,token_rotated,heartbeat_lost}`,
 `drift.{detected,accepted,reverted}`,
@@ -168,62 +190,70 @@ Token TTL + rotation (Phase 7cc-7cd) — opt-in через
 `maintenance.window_{entered,exited}`.
 
 Операторы запрашивают через `iac audit --server <url> --kind ... --limit ...`
-(фильтры — точное совпадение по полю; серверного `since`-фильтра по
+(фильтры — точное совпадение по полю; серверного фильтра `since` по
 времени нет, при необходимости делайте сужение через `jq` на клиенте).
 
-## Storage
+## Хранилище (storage)
 
-Два бэкенда, идентичный wire format:
-* **SQLite** — single binary, single file. Прогнан на Raspberry Pi 4
+Два бэкенда, идентичный wire-формат:
+* **SQLite** — один бинарь, один файл. Прогнан на Raspberry Pi 4
   (Phase 8.7) при 10 агентов × 1000 операций × 50 RPS с 0 ошибок.
-  WAL mode + 30s `busy_timeout` (Phase 8.7 поднял с 5s после того,
-  как bare-metal flash storage обнажил contention). Default для
-  homelab. SQLITE_BUSY всплывает как HTTP 503 с `Retry-After: 1`,
-  не 500, чтобы well-behaved клиенты делали back off.
-* **Postgres** — production scale-out. Wire identical, меняется
-  только `database_url`. Migrations в `migrations-postgres/`
-  параллельно `migrations/` — поддерживаются вручную, чтобы не
-  зависеть от sqlx-cli + SQLite/PG специфичных divergence.
+  Режим WAL (write-ahead log, журнал упреждающей записи) + 30 с
+  `busy_timeout` (Phase 8.7 поднял с 5 с после того, как bare-metal
+  flash-хранилище обнажило contention — конкурентную борьбу за
+  блокировки). Дефолт для домашних лабораторий (homelab). SQLITE_BUSY
+  всплывает как HTTP 503 с `Retry-After: 1` (не 500), чтобы
+  well-behaved (вежливые) клиенты делали back off — отступали и
+  повторяли запрос позже.
+* **Postgres** — масштабирование под продакшен. Wire-формат
+  идентичен, меняется только `database_url`. Миграции лежат в
+  `migrations-postgres/` параллельно `migrations/` — поддерживаются
+  вручную, чтобы не зависеть от `sqlx-cli` и SQLite/PG-специфичных
+  расхождений (divergence).
 
-## SIGHUP hot reload
+## Горячая перезагрузка по SIGHUP (hot reload)
 
-Подмножество конфига (policies, modules, retention, maintenance
-windows) перезагружается без рестарта на `SIGHUP`. Реализация — через
-`arc_swap::ArcSwap` с `ReloadableState`. Hard-fields (bind, db_url,
-tls, webhooks, rate_limit) владеют long-lived runtime state и
-требуют рестарта by design.
+Подмножество конфига (policies — политики, modules — модули,
+retention — настройки удержания данных, maintenance windows — окна
+обслуживания) перезагружается без рестарта по сигналу `SIGHUP`.
+Реализация — через `arc_swap::ArcSwap` с `ReloadableState`. Жёсткие
+поля (bind, db_url, tls, webhooks, rate_limit) владеют долгоживущим
+рантайм-состоянием и требуют рестарта by design (специально).
 
 ## Соглашения в коде
 
-* `forbid(unsafe_code)` workspace-wide.
+* `forbid(unsafe_code)` на весь workspace.
 * `edition = "2024"`, `rust-version = "1.95"`, `resolver = "3"`.
-* sqlx 0.8 с `Any` driver — `?` placeholders runtime-translated для Postgres.
-* No-comment-by-default policy: комментарии объясняют *почему*, не
-  *что*. Provider lifecycle docs — module-level `//!` rustdoc.
+* sqlx 0.8 с драйвером `Any` — placeholder'ы `?` переводятся в
+  рантайме для Postgres.
+* Политика "no-comment-by-default" (без лишних комментариев):
+  комментарии объясняют *почему*, не *что*. Документация жизненного
+  цикла провайдера — `//!` rustdoc на уровне модуля.
 * Тесты — канонические примеры. Чтение
-  `crates/iac-controlplane/tests/e2e_*.rs` — fastest path к
+  `crates/iac-controlplane/tests/e2e_*.rs` — самый быстрый путь к
   пониманию любой фичи.
 
 ## История фаз
 
 История разработки записана в [`TASKS.md`](../../TASKS.md) (текущий
-roadmap + последняя shipped фаза) и [`TASKS_ARCHIVE.md`](../../TASKS_ARCHIVE.md)
-(закрытые фазы). Phase numbers (`7ck`, `7cj`, и т.д.) стабильны —
-ссылаются из комментариев кода как anchor "почему это выглядит так?".
+roadmap — дорожная карта — и последняя выпущенная фаза) и
+[`TASKS_ARCHIVE.md`](../../TASKS_ARCHIVE.md) (закрытые фазы).
+Номера фаз (`7ck`, `7cj`, и т.д.) стабильны — на них ссылаются
+комментарии в коде как на якорь "почему это выглядит так?".
 
 ## Где смотреть код для X
 
 | Если хочешь понять... | Читай |
 |---|---|
-| Wire format | `crates/iac-core/src/protocol.rs` |
-| Как один ресурс flow'ится через apply | `crates/iac-core/src/executor.rs` + любой `iac-providers/src/<kind>/ops.rs` |
+| Wire-формат (структуры обмена по сети) | `crates/iac-core/src/protocol.rs` |
+| Как один ресурс проходит через apply | `crates/iac-core/src/executor.rs` + любой `iac-providers/src/<kind>/ops.rs` |
 | Как операции диспатчатся | `crates/iac-controlplane/src/store.rs::create_operation` |
-| Как layers + canary каскадятся при failure | `crates/iac-controlplane/src/store.rs::{advance_phased_apply, advance_canary}` |
-| Как agent loop поллит и применяет | `crates/iac-agent/src/agent.rs` |
+| Как слои и canary каскадятся при сбое | `crates/iac-controlplane/src/store.rs::{advance_phased_apply, advance_canary}` |
+| Как главный цикл агента (agent loop) опрашивает и применяет | `crates/iac-agent/src/agent.rs` |
 | Как SSH push диспатчит | `crates/iac-controlplane/src/ssh_push.rs` |
-| Как RBAC + auth резолвится | `crates/iac-controlplane/src/identity.rs` |
-| Как signing + rotation работает | `crates/iac-controlplane/src/signing.rs` |
+| Как RBAC и аутентификация резолвится | `crates/iac-controlplane/src/identity.rs` |
+| Как подпись и ротация ключей работают | `crates/iac-controlplane/src/signing.rs` |
 
-E2e тест рядом с каждой фичей — обычно самый чистый способ понять
-как она реально работает end-to-end:
-`crates/iac-controlplane/tests/e2e_<feature>.rs`.
+E2e-тест (end-to-end, сквозной) рядом с каждой фичей — обычно
+самый чистый способ понять, как она реально работает от начала до
+конца: `crates/iac-controlplane/tests/e2e_<feature>.rs`.

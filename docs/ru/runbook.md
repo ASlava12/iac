@@ -1,28 +1,31 @@
-# Operations runbook
+# Эксплуатационный справочник (operations runbook)
 
 Полевой гайд по эксплуатации этого IaC-инструмента "по-боевому":
-incident triage, rollback процедуры, on-call playbook для типичных
-failure modes. В пару идут [`reference.md`](reference.md) (config
-schema + feature surface) и [`architecture.md`](architecture.md)
-(почему всё устроено именно так).
+триаж инцидентов (incident triage — первичная сортировка по
+приоритету), процедуры отката (rollback), справочник дежурного
+инженера (on-call playbook) для типичных сценариев отказа (failure
+modes). В пару идут [`reference.md`](reference.md) (схема конфига +
+поверхность фич) и [`architecture.md`](architecture.md) (почему
+всё устроено именно так).
 
-Runbook для v0 инструмента. По мере того как код взрослеет, item'ы
-здесь должны устаревать (фикс в коде > фикс в runbook'е). Помечайте
-такие записи на post-incident review.
+Runbook для версии v0 инструмента. По мере того как код взрослеет,
+записи здесь должны устаревать (фикс в коде ценнее фикса в runbook'е).
+Помечайте такие записи в post-incident review (разборе после
+инцидента).
 
 ---
 
 ## Содержание
 
-1. [Базовый набор on-call](#базовый-набор-on-call)
-2. [Уровни severity](#уровни-severity)
-3. [Triage decision tree](#triage-decision-tree)
-4. [Rollback процедуры](#rollback-процедуры)
-5. [Типичные failure modes](#типичные-failure-modes)
-6. [Cross-compile под MIPS / OpenWrt](#cross-compile-под-mips--openwrt)
-7. [Diagnostic команды](#diagnostic-команды)
+1. [Базовый набор для дежурного (on-call)](#базовый-набор-on-call)
+2. [Уровни серьёзности (severity)](#уровни-severity)
+3. [Дерево триажа (triage decision tree)](#дерево-триажа-triage-decision-tree)
+4. [Процедуры отката (rollback)](#процедуры-отката-rollback)
+5. [Типичные сценарии отказов (failure modes)](#типичные-сценарии-отказов-failure-modes)
+6. [Кросс-компиляция под MIPS / OpenWrt](#кросс-компиляция-под-mips--openwrt)
+7. [Диагностические команды](#диагностические-команды)
 8. [Когда будить людей](#когда-будить-людей)
-9. [Post-incident](#post-incident)
+9. [После инцидента (post-incident)](#после-инцидента-post-incident)
 
 ---
 
@@ -31,29 +34,35 @@ Runbook для v0 инструмента. По мере того как код �
 **До первой смены:**
 
 - У вас есть `ssh` на control-plane хост, читается `/var/lib/iac-controlplane/`.
-- Ваш аккаунт имеет admin-token в RBAC-таблицах control-plane (см. [reference.md#RBAC](reference.md#rbac)).
-- У вас read-доступ к hosts inventory флота.
-- На ноуте установлен `iac` CLI той же версии что и флот.
-- Знаете куда публикуется audit-chain anchor (out-of-band log: syslog, S3, signed-witness — что выбрала команда).
+- Ваш аккаунт имеет admin-token в RBAC-таблицах control-plane
+  (см. [reference.md#RBAC](reference.md#rbac)).
+- У вас доступ на чтение к инвентарю хостов парка (hosts inventory).
+- На ноуте установлен `iac` CLI той же версии, что и флот.
+- Знаете, куда публикуется якорь цепочки аудита (audit-chain anchor):
+  out-of-band log (вынесенный за пределы основной системы лог) —
+  syslog, S3, signed-witness — что выбрала команда.
 
 **Во время смены держите открытыми:**
 
-- Prometheus-дэш control-plane (метрики `iac_*`).
-- Audit feed. CLI сегодня не имеет follow-style tail; либо
-  поллите интересующий kind через `watch -n 5 'iac audit --server <url>
-  --kind drift.detected --limit 20'`, либо стримьте напрямую с API:
-  `curl -sS -H "Authorization: Bearer $TOKEN" "$URL/v1/audit?limit=50&kind=drift.detected" | jq`.
-- On-call канал для пейджинга.
+- Prometheus-дашборд control-plane (метрики `iac_*`).
+- Поток аудита (audit feed). CLI сегодня не имеет follow-style tail
+  (хвоста, который дописывает новые строки на ходу); либо поллите
+  интересующий тип события через `watch -n 5 'iac audit --server <url>
+  --kind drift.detected --limit 20'`, либо стримьте (передавайте
+  потоком) напрямую с API: `curl -sS -H "Authorization: Bearer $TOKEN"
+  "$URL/v1/audit?limit=50&kind=drift.detected" | jq`.
+- On-call канал для пейджинга (вызова дежурного на инцидент).
 
 **Правила большого пальца:**
 
-- **Притормозите перед destructive action'ом.** Любой rollback path
-  обратим; `iac apply --force` от спешки — нет. Если сомневаетесь —
-  зовите вторую пару глаз.
-- **Сначала audit-log, потом действие.** Перед `iac apply` прочитайте
-  recent audit для затрагиваемых ресурсов. Кто-то может уже работать.
-- **Maintenance windows не просто так.** Если вы вне окна, подумайте:
-  может, изменение подождёт?
+- **Притормозите перед разрушительным действием.** Любой путь отката
+  (rollback path) обратим; `iac apply --force` от спешки — нет. Если
+  сомневаетесь — зовите вторую пару глаз.
+- **Сначала журнал аудита (audit log), потом действие.** Перед
+  `iac apply` прочитайте недавний аудит по затрагиваемым ресурсам.
+  Кто-то может уже работать.
+- **Окна обслуживания (maintenance windows) — не просто так.** Если
+  вы вне окна, подумайте: может, изменение подождёт?
 
 ---
 
@@ -72,16 +81,16 @@ post-incident review зависит от этого.
 
 ---
 
-## Triage decision tree
+## Дерево триажа (triage decision tree)
 
-Когда пейдж пришёл и вы не знаете в каком измерении сломалось —
-проходите этот список сверху вниз. Каждый шаг исключает класс
-проблем за < 60 секунд.
+Когда пейдж (вызов на инцидент) пришёл и вы не знаете, в каком
+измерении сломалось — проходите этот список сверху вниз. Каждый
+шаг исключает класс проблем за менее 60 секунд.
 
 1. **Достижим ли control-plane?**
    `curl -sS https://control-plane.example/v1/health` — ждём HTTP
    200 с `{"status":"ok"}`. Не 200 → fault domain — control-plane;
-   переходите к [Control-plane down](#control-plane-down).
+   переходите к [Control-plane упал (down)](#control-plane-упал-down).
 
 2. **Агенты репортят?**
    ```sh
@@ -90,38 +99,39 @@ post-incident review зависит от этого.
    ```
    Агенты с `last_heartbeat_at` старше 2× их observe-interval'а —
    молчат. > 5% молчат → fleet connectivity issue; переходите к
-   [Fleet partition](#fleet-partition).
+   [Разрыв связи с парком (fleet partition)](#разрыв-связи-с-парком-fleet-partition).
 
 3. **Drift копится?**
    `iac drift --server $URL list` — резкий скачок открытых drift
    event'ов означает что-то на хосте либо не применилось, либо
-   откатывает изменения. К [Drift surge](#drift-surge).
+   откатывает изменения. К [Всплеск дрифта (drift surge)](#всплеск-дрифта-drift-surge).
 
 4. **Recent operation провалилась?**
    ```sh
    curl -sS -H "Authorization: Bearer $TOKEN" "$URL/v1/operations?status=failed&limit=50" | jq
    ```
    Failed apply мог оставить мир в half-changed состоянии. К
-   [Failed apply](#failed-apply-half-applied-state).
+   [Провалившийся apply (half-applied state)](#провалившийся-apply-half-applied-state-частичное-применение).
 
-5. **Audit-chain integrity probe?**
+5. **Проба целостности цепочки аудита (audit-chain integrity probe)?**
    `curl -sS -H "Authorization: Bearer $TOKEN" $URL/v1/audit/verify` —
-   `{"ok": false}` означает что хеш одной из строк не сходится.
-   **Это sev 1.** Прекратите triage других путей и идите в
-   [Audit-chain mismatch](#audit-chain-mismatch).
+   `{"ok": false}` означает, что хеш одной из строк не сходится.
+   **Это sev 1.** Прекратите триаж других путей и идите в
+   [Расхождение цепочки аудита (audit-chain mismatch)](#расхождение-цепочки-аудита-audit-chain-mismatch).
 
-Если ничего из вышеперечисленного — откройте audit feed, просканируйте
-последние 30 минут на out-of-band действия, которые вы не ожидали.
-Всё ещё ничего → эскалируйте.
+Если ничего из вышеперечисленного — откройте поток аудита,
+просканируйте последние 30 минут на out-of-band действия (действия
+в обход системы), которые вы не ожидали. Всё ещё ничего →
+эскалируйте.
 
 ---
 
-## Rollback процедуры
+## Процедуры отката (rollback)
 
 ### Откатить один ресурс
 
-Агент хранит checkpoint на каждый applied step. Чтобы восстановить
-pre-apply состояние одного ресурса:
+Агент хранит checkpoint (контрольную точку) на каждый применённый шаг.
+Чтобы восстановить состояние одного ресурса до apply:
 
 ```sh
 # 1. Найдите operation, которая последней трогала ресурс.
@@ -141,24 +151,24 @@ Rollback пишет audit-event с `kind=operation.rolled_back`. Проверь�
 
 ### Откатить целый apply
 
-Если apply провалился на полпути (часть steps succeeded, часть
-failed) — operation в статусе `partially_applied`. Control-plane
-авто-откатывает успешные steps когда operation переходит в `failed`,
-но можно forced manually:
+Если apply провалился на полпути (часть шагов succeeded — успешно,
+часть failed — провалена) — операция в статусе `partially_applied`
+(частично применена). Control-plane авто-откатывает успешные шаги
+когда operation переходит в `failed`, но можно форсировать вручную:
 
 ```sh
 iac rollback --operation <op-id> --include-succeeded
 ```
 
-Это пройдёт по каждому step отрепорченному `succeeded` и запустит
-provider's `rollback` для каждого. Steps без recorded checkpoint
-скипаются с warning'ом.
+Это пройдёт по каждому шагу с отчётом `succeeded` и запустит
+`rollback` соответствующего провайдера. Шаги без записанной
+контрольной точки (checkpoint) пропускаются с предупреждением.
 
-### Откатить к known-good git commit
+### Откатить к заведомо рабочему git-коммиту (known-good)
 
 Когда манифесты в git ушли в плохое состояние и вы хотите быстро
 вернуть флот, делается тем же путём, каким исходно катили вперёд —
-повторным submit'ом из known-good ref:
+повторной отправкой (submit) из заведомо рабочей ссылки (known-good ref):
 
 ```sh
 # Apply манифестов на <good-sha>. Резолвленный SHA автоматически
@@ -172,12 +182,14 @@ iac apply --git-repo https://git.example.com/infra.git \
           --canary-pct 25 --yes
 ```
 
-Агенты подхватывают новый desired state на следующем observe;
-drift авто-резолвится по мере конвергенции мира. **Это НЕ то же
-самое что per-resource rollback** — оно полагается на то что
-новый манифест объявляет что вы хотите. Если ресурс удалён из git
-между плохим и хорошим ref, агент его снесёт (см. семантику
-удаления манифеста в [reference.md#GitOps](reference.md#gitops)).
+Агенты подхватывают новый desired state на следующем цикле
+наблюдения (observe); drift авто-разрешается по мере того, как мир
+сходится к описанному. **Это НЕ то же самое, что per-resource
+rollback (откат отдельного ресурса)** — этот способ полагается на
+то, что новый манифест объявляет то, что вы хотите. Если ресурс
+удалён из git между плохой и хорошей ссылкой, агент его снесёт
+(см. семантику удаления манифеста в
+[reference.md#GitOps](reference.md#gitops)).
 
 ### Восстановить из бэкапа
 
@@ -218,14 +230,15 @@ sqlite3 /var/lib/iac-controlplane/server.db 'PRAGMA wal_checkpoint(TRUNCATE);'
 
 ---
 
-## Типичные failure modes
+## Типичные сценарии отказов (failure modes)
 
-### Control-plane down
+### Control-plane упал (down)
 
-**Симптом:** `/v1/health` возвращает 5xx или connection-refused.
-Агенты продолжают observe локально, но не могут запостить
-результаты пока control-plane не встанет; локальный audit log на
-каждом агенте закрывает gap.
+**Симптом:** `/v1/health` возвращает 5xx или connection-refused
+(отказ соединения). Агенты продолжают наблюдать (observe) локально,
+но не могут запостить результаты, пока control-plane не встанет;
+локальный журнал аудита (audit log) на каждом агенте закрывает
+gap (разрыв времени).
 
 **Quick check:**
 ```sh
@@ -264,32 +277,34 @@ sudo journalctl -u iac-controlplane -n 200 --no-pager
 5. Verify audit-chain integrity *перед* serving новых operations
    (corrupted tail может скрыть tampering): `GET /v1/audit/verify`.
 
-### Fleet partition
+### Разрыв связи с парком (fleet partition)
 
-**Симптом:** Много агентов с `last_seen` старше observe interval'а,
-но каждый отдельный хост отвечает на TCP probe.
+**Симптом:** Много агентов с `last_seen` старше интервала наблюдения
+(observe interval), но каждый отдельный хост отвечает на TCP-проверку.
 
 **Типичные причины:**
 
-- Сетевой firewall change блокирует control-plane port.
-- DNS на control-plane hostname поменялся, агенты закешировали
+- Изменение сетевого firewall блокирует порт control-plane.
+- DNS на хостовое имя control-plane поменялся, агенты закешировали
   старую резолюцию.
-- mTLS cert rotation, который не доехал до всех агентов.
+- Ротация mTLS-сертификата, которая не доехала до всех агентов.
 
-**Quick check с одного агента:**
+**Быстрая проверка с одного агента:**
 ```sh
 ssh affected-agent
 journalctl -u iac-agent -n 100 --no-pager
-sudo -u iac-agent /usr/local/bin/iac-agent status     # local snapshot
+sudo -u iac-agent /usr/local/bin/iac-agent status     # локальный снимок
 ```
 
-**Recovery:** фикс почти всегда на network/credential границе, не в
-самом агенте. Агенты авто-реконнектятся с exponential backoff —
-рестартить их не надо после фикса underlying issue.
+**Восстановление (recovery):** фикс почти всегда на границе сеть/учётные
+данные, не в самом агенте. Агенты авто-переподключаются с экспоненциальной
+задержкой (exponential backoff) — рестартить их не надо после фикса
+основной (underlying) проблемы.
 
-### Drift surge
+### Всплеск дрифта (drift surge)
 
-**Симптом:** Open drift count резко вырос за последний observe cycle.
+**Симптом:** Количество открытых drift-событий резко выросло за
+последний цикл наблюдения.
 
 **Самые вероятные причины (по убыванию):**
 
@@ -308,11 +323,11 @@ sudo -u iac-agent /usr/local/bin/iac-agent status     # local snapshot
 "<text>"` (записывает reason + actor в audit log). Если spec прав —
 применяйте.
 
-### Failed apply (half-applied state)
+### Провалившийся apply (half-applied state, частичное применение)
 
 **Симптом:** GET `/v1/operations` возвращает строки со статусом
-`failed`. (`iac operations` — лишь local-state-dir lister; серверная
-история требует API или audit feed.)
+`failed`. (`iac operations` — лишь листер локального state-dir; за
+серверной историей надо ходить в API или поток аудита.)
 
 **Шаги:**
 
@@ -339,26 +354,29 @@ iac apply --server "$URL" --environment <env> manifests/
 `pre_apply` записал checkpoint) — придётся откатывать руками,
 применив prior spec из git.
 
-### Audit-chain mismatch
+### Расхождение цепочки аудита (audit-chain mismatch)
 
 **Симптом:** `GET /v1/audit/verify` возвращает `{"ok":false,
 "broken_id":N}`.
 
-**Это sev 1.** Означает либо:
+**Это sev 1.** Означает одно из трёх:
 
-- Database corruption (редко, ловится integrity check'ами SQLite/PG).
-- Кто-то с DB write-доступом отредактировал audit-row out-of-band.
-  *Это security incident.*
-- Bug в audit chain implementation. Bug-shaped: исключить нельзя,
-  но обращайтесь как с security case пока не доказано обратное.
+- Повреждение базы (редко, ловится встроенными проверками
+  целостности SQLite/PG).
+- Кто-то с правом записи в БД отредактировал строку аудита
+  out-of-band (в обход системы). *Это инцидент безопасности.*
+- Баг в реализации цепочки аудита. По форме — баг, исключить нельзя,
+  но обращайтесь как с инцидентом безопасности, пока не доказано
+  обратное.
 
 **Шаги:**
 
-1. **Прекратить принимать новые operations.** Maintenance windows —
-   config-driven (`maintenance_windows` / `recurring_maintenance_windows`
-   в `server.toml`); добавьте запись, покрывающую `now → now+2h`, и
-   пошлите SIGHUP controlplane'у, чтобы загейтить non-admin submissions
-   пока разбираетесь. Admin-CLI ярлыка для этого сегодня нет; правьте
+1. **Прекратить принимать новые операции.** Окна обслуживания
+   управляются через конфиг (`maintenance_windows` /
+   `recurring_maintenance_windows` в `server.toml`); добавьте запись,
+   покрывающую `now → now+2h`, и пошлите SIGHUP control-plane'у,
+   чтобы заблокировать отправку (submissions) от не-админов, пока
+   разбираетесь. Сегодня нет ярлыка в admin-CLI для этого; правьте
    конфиг-файл.
 2. **Достать broken row** и row сразу до неё:
    ```sh
@@ -378,7 +396,7 @@ iac apply --server "$URL" --environment <env> manifests/
    key (`POST /v1/admin/signing-keys/rotate`).
 5. Документируйте IRC для post-incident review.
 
-### Capacity exhaustion под устойчивой нагрузкой
+### Исчерпание ёмкости (capacity exhaustion) под устойчивой нагрузкой
 
 **Симптом:** держится 1+ час 5xx rate с `database is locked` /
 `disk is full` / latency INSERT'а 4–6 с. SQLite write-path
@@ -402,7 +420,7 @@ re-emerge.
 | iac-trial unique-path observations bloat | `make_file_manifest` использовал `Ulid::new()` → неограниченный resource pool | Ограниченный `AtomicU64 % POOL` (default 200/host); fleet-wide cap N_hosts × POOL |
 | Таблица `desired_states` пересекает 150 k строк, assignment-fetch SELECT slow | Per-(operation, resource) row без upsert, не было per-resource cap | `desired_state_max_per_resource = 10` retention (зеркалит observations cap shape, chunked DELETE) |
 
-### Backend choice — SQLite knee при устойчивом ~3 RPS
+### Выбор бэкенда — точка перегиба SQLite (knee) при устойчивом ~3 RPS
 
 **Phase 9 F1 stress matrix finding (gap-#11, 2026-05-16).**
 24-часовой F1 baseline на 1 RPS проходит чисто на SQLite (попытка
@@ -446,7 +464,7 @@ database_url = "postgres://iac:secret@db.internal:5432/iac"
 остаётся правильным default'ом — knee важен только при бёрсте
 от CI или периодическом re-apply большого флота.
 
-### Control-plane RSS scaling — page cache от размера таблиц
+### Масштабирование RSS control-plane — page cache от размера таблиц
 
 **Phase 9 finding (2026-05-27, fix-12 validation).** Долгое время
 наблюдался рост CP resident-set-size (RSS, рабочая память
@@ -497,7 +515,7 @@ SELECT держал их pages hot. С cap'ом working set уменьшаетс
   дополнительная инфраструктурная сложность (см. выше про
   3-RPS knee — тот же путь).
 
-### Tuning beyond defaults
+### Тонкая настройка сверх дефолтов (tuning beyond defaults)
 
 Если флот перерастает defaults (симптом: WAL hits cap + 5xx rate
 растёт по часам без изменений config), tunables в
@@ -535,7 +553,7 @@ journalctl -u iac-controlplane --since '5 minutes ago' \
 
 ---
 
-## Cross-compile под MIPS / OpenWrt
+## Кросс-компиляция под MIPS / OpenWrt
 
 Репозиторий содержит готовую cross-compile конфигурацию для двух
 Tier-3 MIPS-таргетов, используемых OpenWrt и MikroTik-железом:
@@ -550,7 +568,7 @@ Tier-3 MIPS-таргетов, используемых OpenWrt и MikroTik-же�
 `.cargo/config.toml` уже включает это для любого explicit
 `--target mipsel-...` / `--target mips64el-...`.
 
-### Prerequisites
+### Предварительные требования (prerequisites)
 
 - Docker (или podman) — `cross` запускает контейнер с C-toolchain
   внутри (`mipsel-linux-muslsf-gcc` и т. п.).
@@ -561,7 +579,7 @@ Tier-3 MIPS-таргетов, используемых OpenWrt и MikroTik-же�
 - `qemu-user-static` если хочешь смок-тестнуть бинарь на
   build-хосте: `apt install qemu-user-static`.
 
-### Recipe сборки (iac-agent для OpenWrt mipsel)
+### Рецепт сборки (iac-agent для OpenWrt mipsel)
 
 ```bash
 # WASM на cranelift поддерживает только x86/aarch64 — на MIPS
@@ -596,7 +614,7 @@ ls -l target/mipsel-unknown-linux-musl/release-mini/iac-agent
   `opt-level=z` + `lto=fat` + `strip=true` + `panic=abort`).
 - Аудит свежедобавленных зависимостей с прошлого зелёного билда.
 
-### Smoke-тест через qemu-user-static
+### Smoke-тест (быстрая проверка работоспособности) через qemu-user-static
 
 Sanity-check что бинарь хотя бы стартует на build-хосте:
 
@@ -623,7 +641,7 @@ Production-валидация Phase 10 на реальном железе hardwa
 
 ---
 
-## Diagnostic команды
+## Диагностические команды
 
 В пару идёт `iac --help`. Сегодня controlplane CLI намеренно узкий
 (apply / plan / rollback / drift / audit / users / approve / reject /
@@ -695,7 +713,7 @@ engineer, знающего control-plane. Sev 2 — primary only. Sev 3
 
 ---
 
-## Post-incident
+## После инцидента (post-incident)
 
 Пишите after-action report в течение 24h пока детали свежие.
 Включайте:
