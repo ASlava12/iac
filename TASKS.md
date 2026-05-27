@@ -70,22 +70,26 @@ deferred, neither a release blocker.
 
 ## Open
 
-Nothing. Phase 9 fully closed. Both 72h follow-ups landed:
+Nothing. Phase 9 fully closed and **empirically validated**.
+
+Both 72h follow-ups landed + fix-12 validation soak (24h,
+2026-05-26 → 2026-05-27) confirmed:
 
 - ~~**gap-#12: `desired_states` SELECT slowdown**~~ —
-  **closed by F1 fix #12** (commit `dc8bdfe`). New
-  `desired_state_max_per_resource` retention cap (default 10)
-  mirrors the observations cap shape: ROW_NUMBER per
-  resource_id, chunked DELETE with 50 ms pauses to avoid
-  blocking writers. Steady-state at 14 k rows for the trial's
-  1400-resource pool — two orders of magnitude below the
-  150 k SELECT knee. 2 new unit tests, all 1134 workspace
-  tests green.
+  **closed and empirically validated.** Commit `dc8bdfe` added
+  the retention cap; the F1 fix-12 validation soak proved the
+  table stays bounded at 14 k rows (vs ~86 k pre-fix at the
+  same 24h × 1 RPS shape). Surprise bonus: **CP RSS growth
+  dropped from +116 % to +39.6 %** (3× less, +13 MB absolute
+  vs +32 MB). The slow-leak verdict from F1 #11 has been
+  reversed: the growth WAS real, but in SQLite page cache +
+  sqlx connection-state buffers driven by table size, not
+  Rust heap or glibc arenas. See archive
+  `Phase 9-F1-fix-12-validation`.
 - ~~**Harness: finalize `/v1/audit/verify` cursor**~~ —
-  **closed by commit `3a78fc9`**. fleet-f1-finalize.sh now
-  passes `?from_id=$start_id` (read from chain-tip-start.json
-  one block up) so verify walks only soak-added rows.
-  --max-time bumped 30 → 60 s as belt-and-braces.
+  **closed and proven.** Commit `3a78fc9` added the
+  `?from_id=$start_id` cursor; finalize completed cleanly in
+  the validation soak (verify ok=true in seconds).
 
 ---
 

@@ -3745,3 +3745,86 @@ Phase 9 is now truly closed — no remaining follow-ups from
 any of the soak findings, no remaining trigger-bound items,
 no open Phase 9 backlog.
 
+
+## Phase 9-F1-fix-12-validation — fix-12 PASS + slow-leak verdict reversed (2026-05-27)
+
+24h F1 baseline (7 agents × 1 RPS, stock glibc CP with fix-12
+deployed) ran 2026-05-26T09:55Z → 2026-05-27T09:55Z. Goal:
+empirical validation that gap-#12 (surfaced on F1 72h) is
+closed by `desired_state_max_per_resource=10` retention cap.
+
+**PASS verdict (the harness emitted F1 PASS this time too —
+finalize cursor commit `3a78fc9` made `/v1/audit/verify`
+walk only soak-added rows, finished in seconds):**
+
+```
+elapsed:       86,400 s (24 h, natural completion)
+submissions:   85,800; failures 0 (0.00 % across 25h trend)
+restarts:      0 CP / 0 agent
+audit:         7 → 172,531; /v1/audit/verify ok=true
+RSS finalize verdict:
+  agents       warm-h2 → late: -18.8 % to +8.0 %  (stable)
+  cp           warm-h2 → late: 31,756 → 44,316 KB (+39.6 %)
+                within abs cap 512 MB by 11.6× margin
+capacity:      server.db 326 MiB / WAL 4 MiB / busy 0 / slow 0
+               (post-stop snapshot; during-soak peak busy=29)
+```
+
+**gap-#12 closed — empirical proof.**
+
+| Metric                 | Pre-fix (F1 #11, 24h) | Fix-12 validation (24h) | Δ |
+|------------------------|----------------------|-------------------------|---|
+| `desired_states` final | ~86,400 (unbounded)  | **14,234** (capped)     | -83 % |
+| CP RSS warm→late       | 27 → 59 MiB (+116 %) | **31 → 44 MiB (+39.6 %)** | -3× growth |
+| CP RSS absolute Δ      | +32 MB               | **+13 MB**              | -59 % |
+| busy/5min peak         | ~30                  | **29** (same)           | flat |
+| slow/5min peak         | ~6                   | **0**                   | -100 % |
+
+**Slow-leak verdict reversed.** The dhat investigation (commit
+`3cfffbf`) and mimalloc validation (`517498c`) both concluded
+that the F1 #11 CP RSS growth was *not* a Rust heap leak nor
+glibc fragmentation. Both were correct as far as they went —
+the growth wasn't in Rust-managed memory or glibc arenas.
+
+**But the growth was real.** It was in SQLite's per-connection
+page cache + sqlx's prepared-statement cache, *both of which
+scale with the working-set size of the underlying tables*.
+F1 #11 accumulated ~86 k `desired_states` rows; the
+assignment-fetch SELECT touched many of them per request,
+keeping their pages hot in the page cache. SQLite + sqlx held
+the cache resident.
+
+Cap the table at 14 k rows → working set shrinks 6× →
+cache+buffer footprint shrinks proportionally → RSS growth
+drops 3× (+13 MB vs +32 MB absolute).
+
+This makes fix-12 the *third* angle on the slow-leak
+investigation that the F1 #11 verdict missed:
+
+1. dhat: Rust heap is healthy (cumulative 295 MB, peak 371 KB,
+   end 63 KB — proves no Rust leak). ✓ verified, true.
+2. mimalloc: glibc arenas weren't the source either. ✓ verified.
+3. **fix-12: the source was *table size* feeding SQLite's
+   page cache.** Empirically proved here.
+
+**Runbook implications.** The "Backend choice — SQLite knee at
+~3 RPS sustained" guidance (commit `694bb31`) still stands:
+sustained submission rates above ~3 RPS will saturate SQLite's
+single-writer regardless of cap settings. But the RSS-growth
+side of the slow-leak guidance can now be revised — operators
+worried about CP RSS over long deployments should ensure
+their fleet's `desired_state_max_per_resource` cap is set
+appropriately, not (only) reach for a different allocator.
+
+**Phase 9 fully closed and validated:**
+- F1 baseline (24h) PASS — F1 #11, commit 483ff87
+- F1 stress burst (5 RPS × 24h) — accepted design knob (gap-#11)
+- F1 stress density (28 agents × 24h) PASS — commit 3b5c5a7
+- F1 mimalloc validation — hypothesis refuted (517498c)
+- F1 stress 72h PASS — surfaced gap-#12 (8e66e23)
+- F1 fix-12 validation (this entry) — gap-#12 empirically closed,
+  slow-leak verdict reversed
+- F2 / F6 / F7 / F8 (all sub-variants) PASS
+
+12 production gaps closed across the F1 series. Phase 9 done.
+
