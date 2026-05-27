@@ -30,10 +30,14 @@ use tower_http::trace::TraceLayer;
 /// Fields that DON'T live here (and need a server restart to change):
 ///   - `bind`, `database_url`, `state_dir`, `max_body_bytes` — wire
 ///     into the listener / store / body limit at startup.
-///   - `webhooks`, `rate_limit` — those drive their own background
-///     state (dispatcher cursors, limiter buckets) that can't be
-///     trivially rebuilt without losing accumulated state.
+///   - `webhooks` — drives the background dispatcher's in-memory
+///     cursors, which can't be rebuilt without losing position.
 ///   - `tls`, `admin_token`, `secrets` — change with care, restart.
+///
+/// Note: `rate_limit` IS hot-reloaded despite owning background state.
+/// `reload_config` calls `RateLimiter::apply_config` so the caps
+/// (held in `AtomicU32`s) swap in place while per-bucket history
+/// survives — see `reload_config` below.
 ///
 /// Soft-reloadable:
 ///   - `policies`, `maintenance_windows`, `recurring_maintenance_windows`,

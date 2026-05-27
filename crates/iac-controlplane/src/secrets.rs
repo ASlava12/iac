@@ -1,10 +1,14 @@
 //! Phase 7am: secret-reference resolution for desired-state submissions.
 //!
 //! Operators write `${secret://<resolver>/<path>[#field]}` inside resource
-//! spec strings; the control-plane substitutes the value at submission time
-//! by dispatching to a configured resolver. The agent never sees the
-//! plaintext until the resolved assignment hits its inbox, and the registry
-//! is the only piece that holds credentials.
+//! spec strings; the control-plane substitutes the value by dispatching to
+//! a configured resolver. Phase 7co moved that substitution to
+//! agent-fetch time (see `api/agents.rs::list_assignments`): the DB stores
+//! the `${secret://...}` reference verbatim and the plaintext is folded
+//! into the signed envelope only as it's handed to the agent, so rotated
+//! secrets propagate without resubmitting the manifest and the stored
+//! manifest never holds plaintext. The registry is the only piece that
+//! holds credentials.
 //!
 //! The resolver set is closed (env, file, vault, …) so we avoid `dyn` and
 //! `async_trait` and use enum dispatch instead. Adding a backend is one

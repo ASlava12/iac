@@ -134,8 +134,8 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SshTargetConfig {
-    /// Logical name. Routed to via `metadata.spec.hostSelector.name`
-    /// in manifests, exactly like a pull-mode agent.
+    /// Logical name. Routed to via `spec.hostSelector.name` in
+    /// manifests, exactly like a pull-mode agent.
     pub name: String,
     pub environment: String,
     /// Hostname or IP. SSH `User@Host` semantics — should resolve.
