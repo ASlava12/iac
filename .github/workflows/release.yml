@@ -32,10 +32,23 @@ permissions:
 jobs:
   # --------------------------------------------------------------
   # Linux — the canonical target. Builds the full workspace.
+  # Both x86_64 (canonical server VPS) and aarch64 (Pi 4, AWS
+  # Graviton, Ampere) are required: agent already runs on ARM
+  # in production today, so a broken ARM build is a real regression.
+  # GitHub provides native ARM runners (ubuntu-24.04-arm) since
+  # Jan 2025 — no QEMU cross-compile needed.
   # --------------------------------------------------------------
   linux:
-    name: linux-x86_64
-    runs-on: ubuntu-latest
+    name: linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -46,7 +59,7 @@ jobs:
       - name: Package binaries
         run: |
           set -eu
-          ARTDIR="iac-${GITHUB_REF_NAME}-linux-x86_64"
+          ARTDIR="iac-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
           mkdir -p "$ARTDIR"
           for bin in iac iac-controlplane iac-agent iac-trial; do
             if [ -x "target/release/$bin" ]; then
@@ -59,8 +72,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            iac-*-linux-x86_64.tar.gz
-            iac-*-linux-x86_64.tar.gz.sha256
+            iac-*-linux-${{ matrix.arch }}.tar.gz
+            iac-*-linux-${{ matrix.arch }}.tar.gz.sha256
 
   # --------------------------------------------------------------
   # macOS — admin CLI + control-plane. The agent has Linux-only
@@ -113,11 +126,23 @@ jobs:
   # Linux-shaped provider catalog mean the control-plane and
   # agent don't build cleanly here yet; that's tracked under
   # v2 in TASKS.md. The CLI is mostly portable HTTP-against-API.
+  #
+  # Both x86_64 and aarch64 are built: native windows-11-arm
+  # runners shipped in 2025, covering Surface Pro 9 / Pro X / new
+  # Snapdragon X laptops. Best-effort across the matrix.
   # --------------------------------------------------------------
   windows:
-    name: windows-x86_64
-    runs-on: windows-latest
+    name: windows-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+          - arch: aarch64
+            runner: windows-11-arm
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -130,7 +155,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          ARTDIR="iac-${GITHUB_REF_NAME}-windows-x86_64"
+          ARTDIR="iac-${GITHUB_REF_NAME}-windows-${{ matrix.arch }}"
           mkdir -p "$ARTDIR"
           if [ -f "target/release/iac.exe" ]; then
             cp "target/release/iac.exe" "$ARTDIR/"
@@ -142,8 +167,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            iac-*-windows-x86_64.zip
-            iac-*-windows-x86_64.zip.sha256
+            iac-*-windows-${{ matrix.arch }}.zip
+            iac-*-windows-${{ matrix.arch }}.zip.sha256
 
   # --------------------------------------------------------------
   # FreeBSD — no native GitHub Actions runner exists, so we drive
