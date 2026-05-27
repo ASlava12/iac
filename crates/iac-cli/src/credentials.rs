@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -81,6 +82,10 @@ impl CredentialStore {
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, &bytes)
             .with_context(|| format!("writing temp credentials {}", tmp.display()))?;
+        // 0o600 is a POSIX mode; on Windows the file inherits the
+        // parent directory's ACL — typically the user's profile dir,
+        // which is already private by default.
+        #[cfg(unix)]
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
             .with_context(|| format!("chmod 0600 {}", tmp.display()))?;
         fs::rename(&tmp, path)

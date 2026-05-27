@@ -123,9 +123,15 @@ impl SecretFile {
         std::fs::write(&path, secret)
             .map_err(|e| Error::provider("acme.certificate", format!("write secret: {e}")))?;
         // Tighten perms (Unix only — providers crate is *nix-targeted).
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| Error::provider("acme.certificate", format!("chmod 0600: {e}")))?;
+        // Windows builds keep the temp file at default ACLs; the agent
+        // never runs on Windows, and the CLI ships on Windows just to
+        // submit specs to the remote server.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| Error::provider("acme.certificate", format!("chmod 0600: {e}")))?;
+        }
         Ok(Self { _dir: dir, path })
     }
 }

@@ -16,10 +16,62 @@ use indexmap::IndexMap;
 use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const BACKUP_FILENAME: &str = "backup.bin";
+
+// Windows-portability shims: the `file` provider is *nix-targeted
+// (chmod/chown/mode/uid/gid are POSIX concepts), but the crate must
+// compile on Windows so the CLI ships there. On Windows, ownership
+// and mode info is reported as 0 and chown/chmod become no-ops; the
+// agent never runs on Windows, so this only affects validate-time
+// paths in the CLI.
+#[cfg(unix)]
+fn file_mode(meta: &fs::Metadata) -> u32 {
+    meta.permissions().mode() & 0o7777
+}
+#[cfg(not(unix))]
+fn file_mode(_meta: &fs::Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn file_uid(meta: &fs::Metadata) -> u32 {
+    meta.uid()
+}
+#[cfg(not(unix))]
+fn file_uid(_meta: &fs::Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn file_gid(meta: &fs::Metadata) -> u32 {
+    meta.gid()
+}
+#[cfg(not(unix))]
+fn file_gid(_meta: &fs::Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_owner(path: &Path, uid: Option<u32>, gid: Option<u32>) -> std::io::Result<()> {
+    std::os::unix::fs::chown(path, uid, gid)
+}
+#[cfg(not(unix))]
+fn set_owner(_path: &Path, _uid: Option<u32>, _gid: Option<u32>) -> std::io::Result<()> {
+    Ok(())
+}
 
 pub fn observe(spec: &FileSpec) -> Result<ObservedState> {
     let path = &spec.path;
@@ -56,7 +108,10 @@ pub fn observe(spec: &FileSpec) -> Result<ObservedState> {
         source: e,
     })?;
     let sha = sha256_hex(&content);
-    let mode = meta.permissions().mode() & 0o7777;
+    let mode = file_mode(&meta);
+    let uid = file_uid(&meta);
+    let gid = file_gid(&meta);
+    let size = meta.len();
 
     let mut spec_value = serde_yaml_ng::Mapping::new();
     spec_value.insert("path".into(), YamlValue::String(path.display().to_string()));
@@ -64,31 +119,31 @@ pub fn observe(spec: &FileSpec) -> Result<ObservedState> {
     spec_value.insert("mode".into(), YamlValue::String(format!("0{mode:o}")));
     spec_value.insert(
         "owner_uid".into(),
-        YamlValue::Number(serde_yaml_ng::Number::from(meta.uid())),
+        YamlValue::Number(serde_yaml_ng::Number::from(uid)),
     );
     spec_value.insert(
         "group_gid".into(),
-        YamlValue::Number(serde_yaml_ng::Number::from(meta.gid())),
+        YamlValue::Number(serde_yaml_ng::Number::from(gid)),
     );
     spec_value.insert("content_sha256".into(), YamlValue::String(sha.clone()));
     spec_value.insert(
         "size".into(),
-        YamlValue::Number(serde_yaml_ng::Number::from(meta.size())),
+        YamlValue::Number(serde_yaml_ng::Number::from(size)),
     );
 
     facts.insert("content_sha256".into(), YamlValue::String(sha));
     facts.insert(
         "size".into(),
-        YamlValue::Number(serde_yaml_ng::Number::from(meta.size())),
+        YamlValue::Number(serde_yaml_ng::Number::from(size)),
     );
     facts.insert("mode".into(), YamlValue::String(format!("0{mode:o}")));
     facts.insert(
         "uid".into(),
-        YamlValue::Number(serde_yaml_ng::Number::from(meta.uid())),
+        YamlValue::Number(serde_yaml_ng::Number::from(uid)),
     );
     facts.insert(
         "gid".into(),
-        YamlValue::Number(serde_yaml_ng::Number::from(meta.gid())),
+        YamlValue::Number(serde_yaml_ng::Number::from(gid)),
     );
 
     Ok(ObservedState {
@@ -302,8 +357,7 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
     })?;
 
     if let Some(mode) = spec.parsed_mode() {
-        let perms = fs::Permissions::from_mode(mode);
-        fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
+        set_mode(&tmp, mode).map_err(|e| Error::Io {
             path: tmp.clone(),
             source: e,
         })?;
@@ -322,7 +376,7 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
         .transpose()
         .map_err(|e| Error::provider("file", format!("group resolution failed: {e}")))?;
     if uid.is_some() || gid.is_some() {
-        std::os::unix::fs::chown(&tmp, uid, gid).map_err(|e| Error::Io {
+        set_owner(&tmp, uid, gid).map_err(|e| Error::Io {
             path: tmp.clone(),
             source: e,
         })?;
@@ -391,10 +445,10 @@ pub fn backup(path: &Path, workspace: &Path) -> Result<Json> {
         "existed": true,
         "path": path,
         "backup": BACKUP_FILENAME,
-        "mode": format!("0{:o}", meta.permissions().mode() & 0o7777),
-        "uid": meta.uid(),
-        "gid": meta.gid(),
-        "size": meta.size(),
+        "mode": format!("0{:o}", file_mode(&meta)),
+        "uid": file_uid(&meta),
+        "gid": file_gid(&meta),
+        "size": meta.len(),
     }))
 }
 
@@ -483,7 +537,7 @@ pub fn restore(target_path: &Path, checkpoint_data: &Json, workspace: &Path) -> 
         if let Some(mode_str) = checkpoint_data.get("mode").and_then(Json::as_str)
             && let Ok(mode) = parse_mode(mode_str.trim_start_matches('0'))
         {
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode));
+            let _ = set_mode(&tmp, mode);
         }
         let uid = checkpoint_data
             .get("uid")
@@ -494,7 +548,7 @@ pub fn restore(target_path: &Path, checkpoint_data: &Json, workspace: &Path) -> 
             .and_then(Json::as_u64)
             .and_then(|n| u32::try_from(n).ok());
         if uid.is_some() || gid.is_some() {
-            let _ = std::os::unix::fs::chown(&tmp, uid, gid);
+            let _ = set_owner(&tmp, uid, gid);
         }
 
         fs::rename(&tmp, target_path).map_err(|e| Error::Io {

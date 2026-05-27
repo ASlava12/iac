@@ -16,6 +16,7 @@ use indexmap::IndexMap;
 use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -206,11 +207,18 @@ fn atomic_write(path: &Path, content: &str, mode: u32) -> Result<()> {
         path: tmp.clone(),
         source: e,
     })?;
-    let perms = fs::Permissions::from_mode(mode);
-    fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
+    // mode is a POSIX concept; on Windows the temp file inherits
+    // default ACLs and the cron provider never executes there.
+    #[cfg(unix)]
+    {
+        let perms = fs::Permissions::from_mode(mode);
+        fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
     fs::rename(&tmp, path).map_err(|e| Error::Io {
         path: path.into(),
         source: e,

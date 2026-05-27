@@ -15,6 +15,7 @@ use crate::subprocess::run_check_status;
 use iac_core::{Error, Result};
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -90,11 +91,16 @@ impl NginxBackend for NginxCli {
             path: tmp.clone(),
             source: e,
         })?;
-        let perms = fs::Permissions::from_mode(0o644);
-        fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
+        // 0o644 is a POSIX mode; on Windows nginx isn't a target
+        // platform for this provider, but the crate must still compile.
+        #[cfg(unix)]
+        {
+            let perms = fs::Permissions::from_mode(0o644);
+            fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
+                path: tmp.clone(),
+                source: e,
+            })?;
+        }
         fs::rename(&tmp, path).map_err(|e| Error::Io {
             path: path.into(),
             source: e,
