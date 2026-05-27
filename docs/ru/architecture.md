@@ -222,10 +222,11 @@ TTL и ротация токенов (Phase 7cc-7cd) — включаются п
 
 Подмножество конфига (policies — политики, modules — модули,
 retention — настройки удержания данных, maintenance windows — окна
-обслуживания) перезагружается без рестарта по сигналу `SIGHUP`.
-Реализация — через `arc_swap::ArcSwap` с `ReloadableState`. Жёсткие
-поля (bind, db_url, tls, webhooks, rate_limit) владеют долгоживущим
-рантайм-состоянием и требуют рестарта by design (специально).
+обслуживания, retry-after format и rate limiting) перезагружается без
+рестарта по сигналу `SIGHUP`. Реализация — через `arc_swap::ArcSwap` с
+`ReloadableState`. Жёсткие поля (bind, db_url, tls, webhooks) владеют
+долгоживущим рантайм-состоянием и требуют рестарта by design
+(специально).
 
 ## Соглашения в коде
 

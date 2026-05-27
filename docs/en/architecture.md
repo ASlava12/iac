@@ -188,10 +188,11 @@ Two backends, identical wire format:
 
 ## SIGHUP hot reload
 
-A subset of config (policies, modules, retention, maintenance windows)
-reloads without a restart on `SIGHUP`. Implemented via `arc_swap::ArcSwap`
-holding a `ReloadableState`. Hard fields (bind, db_url, tls, webhooks,
-rate_limit) own long-lived runtime state and need a restart by design.
+A subset of config (policies, modules, retention, maintenance windows,
+retry-after format, and rate limiting) reloads without a restart on `SIGHUP`.
+Implemented via `arc_swap::ArcSwap` holding a `ReloadableState`. Hard fields
+(bind, db_url, tls, webhooks) own long-lived runtime state and need a restart
+by design.
 
 ## Code conventions
 
