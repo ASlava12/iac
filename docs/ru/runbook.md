@@ -19,9 +19,10 @@ Runbook для v0 инструмента. По мере того как код �
 3. [Triage decision tree](#triage-decision-tree)
 4. [Rollback процедуры](#rollback-процедуры)
 5. [Типичные failure modes](#типичные-failure-modes)
-6. [Diagnostic команды](#diagnostic-команды)
-7. [Когда будить людей](#когда-будить-людей)
-8. [Post-incident](#post-incident)
+6. [Cross-compile под MIPS / OpenWrt](#cross-compile-под-mips--openwrt)
+7. [Diagnostic команды](#diagnostic-команды)
+8. [Когда будить людей](#когда-будить-людей)
+9. [Post-incident](#post-incident)
 
 ---
 
@@ -397,27 +398,133 @@ re-emerge.
 | Фризы 30 с каждую минуту | `wal_checkpoint(TRUNCATE)` blocking при contention | PASSIVE на большинстве tick'ов, TRUNCATE каждый 10-й (default cadence 60 с → TRUNCATE раз в 10 мин) |
 | Agent local DB unbounded | `record_observation` INSERT'ит без cap | `AGENT_OBSERVATION_HISTORY_CAP = 10` per `resource_id`, inline DELETE после INSERT |
 | Agent застрял в 413 retry-loop | Push body > CP `max_body_bytes`, agent retry'ит ту же oversized batch | Adaptive chunked push (chunk = 500 obs, halve on 413, drop singleton) |
+| Каталог `executor/operations/` агента раздулся до 1.6 GB за 24 ч | Per-apply ULID-директория, GC не было | const `EXECUTOR_OPERATIONS_KEEP = 200` + GC после каждого apply |
+| iac-trial unique-path observations bloat | `make_file_manifest` использовал `Ulid::new()` → неограниченный resource pool | Ограниченный `AtomicU64 % POOL` (default 200/host); fleet-wide cap N_hosts × POOL |
+| Таблица `desired_states` пересекает 150 k строк, assignment-fetch SELECT slow | Per-(operation, resource) row без upsert, не было per-resource cap | `desired_state_max_per_resource = 10` retention (зеркалит observations cap shape, chunked DELETE) |
 
-**Tuning beyond defaults.** Если флот перерастёт defaults
-(симптом: WAL hits cap + 5xx rate растёт по часам без изменений
-config), tunables в
+### Backend choice — SQLite knee при устойчивом ~3 RPS
+
+**Phase 9 F1 stress matrix finding (gap-#11, 2026-05-16).**
+24-часовой F1 baseline на 1 RPS проходит чисто на SQLite (попытка
+#11: 0 failures на 86 400 ops). На 5 RPS sustained тот же стек
+пересекает SQLite single-writer knee:
+
+- Реальный throughput **3.6 ops/s** при цели 5 — server-side
+  latency throttle'ит iac-trial token bucket.
+- Cumulative failure rate **0.21 %** (всё ещё под 1 % cap'ом),
+  но per-hour rate пиковал на **3.73 %** в h+18, sustained
+  ≥ 1 % в течение 5 ч.
+- `busy/5min` уперлось в **1846** (37× cap 50); slope-детектор
+  фаерил оба триггера (deteriorating + sustained).
+- p99 latency **> 2.5 с** на **0.67 %** запросов (длинный tail —
+  глубина connection queue, не реальная работа).
+- 0 CP / 0 agent unaccounted restarts. Audit chain intact.
+  Per-resource cap держался (1400 distinct `resource_id`, 70 k
+  observation-строк).
+
+**Решение: принято как design knob.** Single-writer в SQLite
+сериализует каждый INSERT — на 5 RPS sustained WAL frame queue
+заполняется быстрее чем `wal_checkpoint(TRUNCATE)` успевает
+дренировать. Tuning `synchronous=NORMAL` купил бы throughput
+ценой durability, чего для audit-chain backend'а делать нельзя.
+sqlx Any driver уже поддерживает Postgres end-to-end (схема в
+`migrations-postgres/` идентична с заменой AUTOINCREMENT на
+BIGSERIAL).
+
+**Гайд оператору.** При sustained submit rate > 3 RPS — переведи
+CP на Postgres:
+
+```toml
+# /etc/iac/server.toml
+database_url = "postgres://iac:secret@db.internal:5432/iac"
+```
+
+…и накатывай миграции из
+`crates/iac-controlplane/migrations-postgres/` (runtime применяет
+их при старте так же как SQLite-миграции). Production-флоты
+обычно держат submit-нагрузку гораздо ниже 1 RPS, так что SQLite
+остаётся правильным default'ом — knee важен только при бёрсте
+от CI или периодическом re-apply большого флота.
+
+### Control-plane RSS scaling — page cache от размера таблиц
+
+**Phase 9 finding (2026-05-27, fix-12 validation).** Долгое время
+наблюдался рост CP resident-set-size (RSS, рабочая память
+процесса в виде, который видит ОС) на длинных soak'ах: F1 #11
+(24 ч, 1 RPS) дал 27 → 59 MiB (+116 %). Три расследования
+последовательно подтвердили что это **не Rust heap leak** и
+**не glibc arena fragmentation**:
+
+1. **dhat heap profiler** (commit `3cfffbf`): cumulative
+   295 MB allocations при peak alive 371 KB и end 63 KB — Rust
+   сторона чистая, 99.996 % аллокаций освобождены.
+2. **mimalloc validation** (commit `517498c`): swap allocator'а
+   не уменьшил absolute growth (+40 MB vs +32 MB на стоке) —
+   glibc арены тоже не источник.
+3. **fix-12 validation** (commit `f570376`): cap'нули
+   `desired_states` через retention (`desired_state_max_per_resource`,
+   default 10) → таблица плато'ит на 14 k строк вместо
+   неограниченного роста → **CP RSS growth упал с +116 % до
+   +39.6 %** (3× меньше).
+
+**Корень:** рост был реальным, но в **SQLite per-connection
+page cache + sqlx prepared-statement cache** — оба масштабируются
+с working-set size таблиц. Без cap'а `desired_states` росла на
+1 row/submission (24 ч × 1 RPS ≈ 86 k строк); assignment-fetch
+SELECT держал их pages hot. С cap'ом working set уменьшается в
+~6 раз — кеши и буферы соответственно сжимаются.
+
+**Что делать если RSS всё равно жмёт.** По убыванию ROI:
+
+- **Принять как есть.** При 1 RPS × 24 ч с fix-12 рост +13 MB
+  абсолютно; production-projection с 10 k resources × cap=10 =
+  100 k DS-строк дала бы ~50-100 MB CP RSS bounded. Для
+  большинства deployment'ов это норм.
+- **Подкрутить per-resource caps.** Снижение
+  `observation_max_per_resource` / `desired_state_max_per_resource`
+  с 10 до 3-5 пропорционально уменьшает working set и page-cache
+  footprint. Trade-off: меньше debug-истории.
+- **Уменьшить sqlx connection pool.** Дефолт ~10 connection'ов
+  × 2 MB page cache на каждое = до 20 MB только на pages. SQLite
+  однопоточный по write'ам, так что больше 4-5 connection'ов
+  редко даёт реальный read-concurrency.
+- **`PRAGMA cache_size`.** По умолчанию `-2000` = 2 MB / conn.
+  Можно опустить до `-1000` (1 MB) или `-256` (256 KB) для
+  RSS-constrained deployment'ов. Trade-off: медленнее cold-page
+  reads, hotter pages всё равно осядут.
+- **Postgres backend.** Page cache в `shared_buffers` отдельного
+  процесса — CP RSS перестаёт расти с размером БД. Стоимость:
+  дополнительная инфраструктурная сложность (см. выше про
+  3-RPS knee — тот же путь).
+
+### Tuning beyond defaults
+
+Если флот перерастает defaults (симптом: WAL hits cap + 5xx rate
+растёт по часам без изменений config), tunables в
 [`crates/iac-controlplane/src/config.rs`](../../crates/iac-controlplane/src/config.rs):
 
 - `[retention] observation_max_per_resource` — снизить чтобы
   shrink steady-state DB. 10–20 ОК для большинства observability-needs.
-- `[retention] interval_secs` — снизить чтобы держать working set
-  маленьким. 60 с агрессивно, но норм на SSD-class storage.
+- `[retention] desired_state_max_per_resource` — то же для
+  desired_states (Phase 9-F1-fix-12 default = 10).
+- `[retention] interval_secs` — снизить чтобы держать working
+  set маленьким. 60 с агрессивно, но норм на SSD-class storage.
 - `wal_checkpoint_interval_secs` — снизить чтобы reclaim WAL
   быстрее.
-- TODO post-Phase 11: `journal_size_limit` пока hard-coded; вынести
-  в config когда первый оператор упрётся в 256 MiB на бóльшем флоте.
+- `shutdown_timeout_secs` — поднять если service unit
+  имеет высокий TimeoutStopSec и нужен дополнительный grace
+  на drain.
+- TODO post-Phase 11: `journal_size_limit` пока hard-coded в
+  store.rs; вынести в config когда первый оператор упрётся в
+  256 MiB на бóльшем флоте.
 
 **Live triage.** При развёрнутом
 [Phase 9 observability stack'е](../../trial/observability/README.md)
 (Prometheus + Grafana на cp-spare-01) смотри **RSS by host** для
 CP — устойчивый линейный рост за 200 MB на маленьком флоте — это
-ранний сигнал. Disk-free panel ловит WAL-unbounded class до того
-как он становится service-impacting.
+ранний сигнал (после fix-12 ожидаемо < +50 MB за 24 ч). Disk-free
+panel ловит WAL-unbounded class до того как он становится
+service-impacting.
 
 Без Grafana — поллите напрямую:
 ```sh
@@ -425,6 +532,94 @@ ssh root@<cp> "ls -lh /var/lib/iac-controlplane/server.db*; df -h /"
 journalctl -u iac-controlplane --since '5 minutes ago' \
     | grep -c 'database is locked'  # > 50/min ≈ saturation imminent
 ```
+
+---
+
+## Cross-compile под MIPS / OpenWrt
+
+Репозиторий содержит готовую cross-compile конфигурацию для двух
+Tier-3 MIPS-таргетов, используемых OpenWrt и MikroTik-железом:
+
+- `mipsel-unknown-linux-musl` — 32-bit little-endian, рабочая
+  лошадка OpenWrt (ar71xx, ramips, ath79).
+- `mips64el-unknown-linux-musl` — 64-bit вариант для свежих
+  MikroTik CCR/CHR.
+
+Обе цели Tier-3, поэтому `rustc` не поставляет prebuilt `std` —
+собираем из исходников через `-Z build-std` (cargo nightly).
+`.cargo/config.toml` уже включает это для любого explicit
+`--target mipsel-...` / `--target mips64el-...`.
+
+### Prerequisites
+
+- Docker (или podman) — `cross` запускает контейнер с C-toolchain
+  внутри (`mipsel-linux-muslsf-gcc` и т. п.).
+- Nightly Rust — нужен для `-Z build-std`. Поставь через
+  `rustup install nightly && rustup default nightly` или передавай
+  `+nightly` per-command.
+- Crate `cross` — `cargo install cross --version 0.2.5`.
+- `qemu-user-static` если хочешь смок-тестнуть бинарь на
+  build-хосте: `apt install qemu-user-static`.
+
+### Recipe сборки (iac-agent для OpenWrt mipsel)
+
+```bash
+# WASM на cranelift поддерживает только x86/aarch64 — на MIPS
+# нет, так что у агента есть cargo-фича `wasm` (default-on), и
+# для MIPS мы её отключаем.
+CARGO_UNSTABLE_BUILD_STD=1 \
+    cross +nightly build \
+        --profile release-mini \
+        --target mipsel-unknown-linux-musl \
+        -p iac-agent \
+        --no-default-features
+```
+
+Результат: `target/mipsel-unknown-linux-musl/release-mini/iac-agent`.
+
+### Бюджет на размер бинаря
+
+OpenWrt firmware-образы обычно выделяют 16 MiB rootfs, из которых
+у `/usr/local/bin` свободно < 8 MiB. Наш бюджет — **< 10 MiB
+stripped**.
+
+```bash
+ls -l target/mipsel-unknown-linux-musl/release-mini/iac-agent
+# Текущее значение: ~7.0 MiB stripped (commit f3f0a21).
+```
+
+Если бинарь начинает выползать за 10 MiB:
+- Убедись что `--no-default-features` (включённый WASM-фичей
+  даёт +6 MiB).
+- Проверь что профиль `release-mini` (`--release` оставляет
+  `opt-level=3` + `lto=thin`; `release-mini` переключает на
+  `opt-level=z` + `lto=fat` + `strip=true` + `panic=abort`).
+- Аудит свежедобавленных зависимостей с прошлого зелёного билда.
+
+### Smoke-тест через qemu-user-static
+
+Sanity-check что бинарь хотя бы стартует на build-хосте:
+
+```bash
+qemu-mipsel-static target/mipsel-unknown-linux-musl/release-mini/iac-agent --help
+```
+
+Реальное упражнение провайдеров (`file` + `firewall.rule`)
+требует настоящего MIPS-устройства; qemu-user ловит только
+старт + clap-парсинг.
+
+### Деплой на OpenWrt / MikroTik
+
+`scp` бинарь в `/usr/local/bin/iac-agent` на железку, поставь
+`+x`, напиши `/etc/iac/agent.toml`, и либо запускай через procd
+init-скрипт (OpenWrt), либо через `/system scheduler` (RouterOS).
+Capability-allowlist живёт в `/var/lib/iac-agent/capabilities.yaml`
+(см. [справочник](reference.md#capabilities)).
+
+Production-валидация Phase 10 на реальном железе hardware-gated
+($30–80 single device, полдня cross-build setup, день на bring-up).
+Пока это не сделано — относись к MIPS-поддержке как "компилируется
+и smoke-тест проходит", а не "validated end-to-end".
 
 ---
 

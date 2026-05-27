@@ -19,9 +19,10 @@ code level — flag stale entries during incident reviews.
 3. [Triage decision tree](#triage-decision-tree)
 4. [Rollback procedures](#rollback-procedures)
 5. [Common failure modes](#common-failure-modes)
-6. [Diagnostic commands](#diagnostic-commands)
-7. [When to page humans](#when-to-page-humans)
-8. [Post-incident](#post-incident)
+6. [Cross-compile for MIPS / OpenWrt](#cross-compile-for-mips--openwrt)
+7. [Diagnostic commands](#diagnostic-commands)
+8. [When to page humans](#when-to-page-humans)
+9. [Post-incident](#post-incident)
 
 ---
 
@@ -404,6 +405,7 @@ re-emerge at higher scale.
 | Agent stuck in 413 retry-loop | Push body > CP `max_body_bytes`, agent retries the same oversized batch | Adaptive chunked push (chunk = 500 obs, halve on 413, drop singleton) |
 | Agent `executor/operations/` dir 1.6 GB after 24 h | Per-apply ULID dir, never GC'd | `EXECUTOR_OPERATIONS_KEEP = 200` const + GC after each apply |
 | iac-trial unique-path observations bloat | `make_file_manifest` used `Ulid::new()` → unbounded resource pool | Bounded `AtomicU64 % POOL` (default 200/host); fleet-wide cap N_hosts × POOL |
+| `desired_states` table crosses 150 k rows, assignment-fetch SELECT slow | Per-(operation, resource) row without upsert; no per-resource cap | `desired_state_max_per_resource = 10` retention (mirrors observations cap shape, chunked DELETE with inter-chunk pauses) |
 
 ### Backend choice — SQLite knee at ~3 RPS sustained
 
@@ -449,16 +451,77 @@ load, so SQLite remains the right default — the knee only
 matters under bursty CI-driven submission patterns or large-fleet
 periodic re-applies.
 
-**Tuning beyond defaults.** If the fleet outgrows defaults
-(symptom: WAL hits cap + 5xx rate climbs over hours despite no
-config changes), the tunables are in
+### Control-plane RSS scaling — page cache from table size
+
+**Phase 9 finding (2026-05-27, fix-12 validation).** Long soaks
+consistently showed CP resident-set-size (RSS) climbing: F1 #11
+(24 h × 1 RPS) grew 27 → 59 MiB (+116 %). Three investigations
+in sequence proved this is **not a Rust heap leak** and **not
+glibc malloc arena fragmentation**:
+
+1. **dhat heap profiler** (commit `3cfffbf`): cumulative 295 MB
+   of allocations against a peak alive 371 KB and 63 KB at clean
+   shutdown — the Rust side is healthy, 99.996 % of allocations
+   were freed.
+2. **mimalloc validation** (commit `517498c`): swapping the
+   global allocator did not reduce absolute growth (+40 MB vs
+   +32 MB on stock glibc); glibc arenas weren't the source.
+3. **fix-12 validation** (commit `f570376`): capping
+   `desired_states` via `desired_state_max_per_resource`
+   retention (default 10) plateaued the table at 14 k rows
+   instead of growing unbounded → **CP RSS growth dropped from
+   +116 % to +39.6 %** (~3× less, +13 MB absolute vs +32 MB).
+
+**Root cause:** the growth was real, but in **SQLite's
+per-connection page cache + sqlx's prepared-statement cache**,
+both of which scale with the working-set size of the underlying
+tables. Without the cap, `desired_states` grew at one row per
+submission (24 h × 1 RPS ≈ 86 k rows); the assignment-fetch
+SELECT projected across them, keeping their database pages hot
+in cache. Cap the table → working set shrinks ~6× → cache and
+buffer footprints shrink proportionally.
+
+**Mitigations, by ROI:**
+
+- **Accept it.** At 1 RPS × 24 h with fix-12 the absolute growth
+  is +13 MB. A production projection at 10 k resources × cap=10
+  = 100 k `desired_states` rows would give ~50–100 MB CP RSS
+  bounded. Fine for most deployments.
+- **Lower per-resource caps.** Reducing
+  `observation_max_per_resource` and `desired_state_max_per_resource`
+  from 10 to 3–5 shrinks the working set proportionally,
+  trimming page-cache footprint. Trade-off: less debugging
+  history.
+- **Shrink the sqlx connection pool.** Default ~10 connections
+  × 2 MB page cache each ≈ 20 MB just from pages. SQLite is
+  single-writer, so going beyond 4–5 connections rarely yields
+  meaningful read concurrency.
+- **`PRAGMA cache_size`.** Default is `-2000` (2 MB per
+  connection). Operators with strict RSS budgets can lower it
+  to `-1000` (1 MB) or `-256` (256 KB). Trade-off: cold-page
+  reads get slower; hot pages still stay resident.
+- **Postgres backend.** The page cache lives in `shared_buffers`
+  of a separate process, so CP RSS no longer scales with DB
+  size. Cost: infrastructure complexity (same path as the
+  3-RPS knee discussion above).
+
+### Tuning beyond defaults
+
+If the fleet outgrows defaults (symptom: WAL hits cap + 5xx
+rate climbs over hours despite no config changes), the tunables
+are in
 [`crates/iac-controlplane/src/config.rs`](../../crates/iac-controlplane/src/config.rs):
 
 - `[retention] observation_max_per_resource` — lower to shrink
   steady-state DB. 10–20 acceptable for most observability needs.
+- `[retention] desired_state_max_per_resource` — same for the
+  desired-state table (Phase 9-F1-fix-12 default = 10).
 - `[retention] interval_secs` — lower to keep working set small.
   60 s aggressive but fine on SSD-class storage.
 - `wal_checkpoint_interval_secs` — lower to reclaim WAL faster.
+- `shutdown_timeout_secs` — raise if your service unit's
+  `TimeoutStopSec` is higher and you want more drain headroom
+  on graceful shutdown.
 - TODO post-Phase 11: `journal_size_limit` is hard-coded; promote
   to config when first operator hits the 256 MiB ceiling on a
   larger fleet.
@@ -467,8 +530,10 @@ config changes), the tunables are in
 [Phase 9 observability stack](../../trial/observability/README.md)
 deployed (Prometheus + Grafana on cp-spare-01), watch the **RSS by
 host** panel for the CP — sustained linear growth past 200 MB on
-a small fleet is the early signal. The disk-free panel catches
-the WAL-unbounded class before it becomes service-impacting.
+a small fleet is the early signal (post-fix-12 expect < +50 MB
+per 24 h on a baseline-shaped workload). The disk-free panel
+catches the WAL-unbounded class before it becomes
+service-impacting.
 
 Without Grafana, poll directly:
 ```sh
