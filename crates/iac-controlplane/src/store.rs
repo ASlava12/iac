@@ -3185,14 +3185,30 @@ async fn record_audit_on(tx: &mut sqlx::AnyConnection, rec: AuditRecord<'_>) -> 
     let payload_json = serde_json::to_string(&rec.payload)?;
     let now = Timestamp::now().to_string();
     // Read the current chain tip. Default to "" if the table is fresh
-    // (first-ever audit row). Inside the same tx as the insert, this
-    // read sees committed state through the start of the tx — the
-    // SQLite write serialisation guarantees no torn read here.
-    let tip_row = sqlx::query(&sql(
-        "SELECT last_id, last_hash FROM audit_chain_tip WHERE id = 1",
-    ))
-    .fetch_optional(&mut *tx)
-    .await?;
+    // (first-ever audit row).
+    //
+    // Phase 9 follow-up — concurrency: on SQLite the database-wide
+    // write serialisation (WAL snapshot promotion fails with
+    // SQLITE_BUSY rather than allowing two writers to interleave)
+    // means two concurrent tx can't both read the same tip and both
+    // commit — the loser errors and retries. On Postgres (READ
+    // COMMITTED) there is NO such guard: two tx could each read tip
+    // hash H0, each INSERT a row with prev_hash=H0, and each UPDATE
+    // the tip — last write wins, forking the Merkle chain so
+    // `audit_verify_chain` later finds two rows claiming the same
+    // predecessor. We close that by taking a row lock on the tip
+    // (`FOR UPDATE`) so the second tx blocks until the first commits
+    // and then reads the *updated* tip. SQLite doesn't support
+    // `FOR UPDATE` syntax, so we only append it on Postgres.
+    let tip_select = match ACTIVE_DIALECT.get().copied().unwrap_or(Dialect::Sqlite) {
+        Dialect::Postgres => {
+            "SELECT last_id, last_hash FROM audit_chain_tip WHERE id = 1 FOR UPDATE"
+        }
+        Dialect::Sqlite => "SELECT last_id, last_hash FROM audit_chain_tip WHERE id = 1",
+    };
+    let tip_row = sqlx::query(&sql(tip_select))
+        .fetch_optional(&mut *tx)
+        .await?;
     let prev_hash: String = tip_row
         .as_ref()
         .and_then(|r| r.try_get::<String, _>("last_hash").ok())
@@ -3217,11 +3233,20 @@ async fn record_audit_on(tx: &mut sqlx::AnyConnection, rec: AuditRecord<'_>) -> 
     // row's id while preserving every other field is easy to spot
     // (id no longer monotonically increases).
     let row_hash = compute_audit_row_hash(&prev_hash, 0, &inputs);
-    sqlx::query(&sql("INSERT INTO audit_events
+    // `INSERT ... RETURNING id` gives us the actual autoincrement id
+    // the row took, rather than assuming `prev_last_id + 1`. The
+    // assumption was wrong whenever a prior tx consumed an id and
+    // rolled back (SQLite + Postgres both burn the id), which left the
+    // tip's `last_id` drifting below the real max audit id and made
+    // the operator-facing "chain progressed to id N" signal lie.
+    // RETURNING is already used by the assignment-claim path, so the
+    // Any driver supports it on both backends (SQLite >= 3.35).
+    let inserted = sqlx::query(&sql("INSERT INTO audit_events
             (timestamp, actor, kind, severity,
              operation_id, agent_id, resource_id, drift_id, payload_json,
              prev_hash, row_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING id"))
     .bind(&now)
     .bind(rec.actor)
     .bind(rec.kind)
@@ -3233,21 +3258,16 @@ async fn record_audit_on(tx: &mut sqlx::AnyConnection, rec: AuditRecord<'_>) -> 
     .bind(&payload_json)
     .bind(&prev_hash)
     .bind(&row_hash)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
-    // Update the tip — the new row's id is the autoincrement value
-    // we just consumed. SQLite's `last_insert_rowid()` (Postgres:
-    // `lastval()`) would let us read it back, but we don't need
-    // it for the hash itself; just update timestamp + hash for
-    // operator-visible "chain has progressed" signal.
-    let prev_last_id: i64 = tip_row
-        .as_ref()
-        .and_then(|r| r.try_get::<i64, _>("last_id").ok())
-        .unwrap_or(0);
+    let new_id: i64 = inserted.try_get("id")?;
+    // Update the tip with the real inserted id + new hash. On Postgres
+    // the `FOR UPDATE` above held this row exclusively for the tx, so
+    // this UPDATE can't race a sibling audit insert.
     sqlx::query(&sql("UPDATE audit_chain_tip
          SET last_id = ?, last_hash = ?, updated_at = ?
          WHERE id = 1"))
-    .bind(prev_last_id + 1)
+    .bind(new_id)
     .bind(&row_hash)
     .bind(&now)
     .execute(&mut *tx)
