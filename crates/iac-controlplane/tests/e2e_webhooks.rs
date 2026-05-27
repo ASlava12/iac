@@ -8,12 +8,12 @@
 //! a few audit rows directly through the store, and tick the
 //! dispatcher to verify the right events get delivered.
 
+use iac_controlplane::Store;
 use iac_controlplane::store::AuditRecord;
 use iac_controlplane::webhook::{
-    parse_signature_header, parse_signature_header_versioned, verify_signed_payload,
-    verify_signed_payload_v2, WebhookConfig, WebhookDispatcher, WebhooksConfig,
+    WebhookConfig, WebhookDispatcher, WebhooksConfig, parse_signature_header,
+    parse_signature_header_versioned, verify_signed_payload, verify_signed_payload_v2,
 };
-use iac_controlplane::Store;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -52,8 +52,7 @@ impl MockReceiver {
                             .map(str::to_string);
                         let body_vec = body.to_vec();
                         let body_json: serde_json::Value =
-                            serde_json::from_slice(&body_vec)
-                                .unwrap_or(serde_json::Value::Null);
+                            serde_json::from_slice(&body_vec).unwrap_or(serde_json::Value::Null);
                         received.lock().await.push(CapturedPost {
                             body: body_vec,
                             body_json,
@@ -69,12 +68,20 @@ impl MockReceiver {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, received, shutdown, handle }
+        Self {
+            addr,
+            received,
+            shutdown,
+            handle,
+        }
     }
 
     fn url(&self) -> String {
@@ -135,10 +142,10 @@ async fn dispatches_warning_event_to_configured_receiver() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("test", &receiver.url(), "warning", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -180,23 +187,19 @@ async fn info_severity_below_warning_floor_is_skipped() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("test", &receiver.url(), "warning", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("system", "operation.submitted").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "operation.submitted").severity("info"))
         .await
         .unwrap();
     store
-        .record_audit(
-            AuditRecord::new("user:bob", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:bob", "operation.rejected").severity("warning"))
         .await
         .unwrap();
 
@@ -223,24 +226,21 @@ async fn kind_filter_excludes_other_kinds() {
             vec!["operation.maintenance_bypass"],
         )],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
         .record_audit(
-            AuditRecord::new("user:alice", "operation.maintenance_bypass")
-                .severity("warning"),
+            AuditRecord::new("user:alice", "operation.maintenance_bypass").severity("warning"),
         )
         .await
         .unwrap();
     store
-        .record_audit(
-            AuditRecord::new("user:bob", "user.disabled").severity("info"),
-        )
+        .record_audit(AuditRecord::new("user:bob", "user.disabled").severity("info"))
         .await
         .unwrap();
 
@@ -265,17 +265,15 @@ async fn multiple_receivers_each_get_event() {
             webhook_to("b", &r2.url(), "warning", vec![]),
         ],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("user:alice", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:alice", "operation.rejected").severity("warning"))
         .await
         .unwrap();
 
@@ -295,15 +293,11 @@ async fn initialize_skips_pre_existing_events() {
     let dir = TempDir::new().unwrap();
     let store = open_store(&dir).await;
     store
-        .record_audit(
-            AuditRecord::new("system", "agent.registered").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "agent.registered").severity("info"))
         .await
         .unwrap();
     store
-        .record_audit(
-            AuditRecord::new("user:alice", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:alice", "operation.rejected").severity("warning"))
         .await
         .unwrap();
 
@@ -311,10 +305,10 @@ async fn initialize_skips_pre_existing_events() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("test", &receiver.url(), "warning", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -324,8 +318,7 @@ async fn initialize_skips_pre_existing_events() {
     // Adding a new event after init does dispatch.
     store
         .record_audit(
-            AuditRecord::new("user:bob", "operation.maintenance_bypass")
-                .severity("warning"),
+            AuditRecord::new("user:bob", "operation.maintenance_bypass").severity("warning"),
         )
         .await
         .unwrap();
@@ -361,17 +354,15 @@ async fn dead_receiver_doesnt_block_subsequent_events() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("dead", &dead_url, "warning", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("user:alice", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:alice", "operation.rejected").severity("warning"))
         .await
         .unwrap();
     // Dispatch is fire-and-forget: the call counts as "dispatched"
@@ -381,9 +372,7 @@ async fn dead_receiver_doesnt_block_subsequent_events() {
     // Cursor advanced — second event arrives at the same broken
     // receiver but doesn't get re-dispatched for the first one.
     store
-        .record_audit(
-            AuditRecord::new("user:bob", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:bob", "operation.rejected").severity("warning"))
         .await
         .unwrap();
     assert_eq!(dispatcher.tick_once(&store).await, 1);
@@ -400,9 +389,7 @@ async fn empty_webhook_list_is_no_op() {
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("user:alice", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:alice", "operation.rejected").severity("warning"))
         .await
         .unwrap();
 
@@ -418,17 +405,15 @@ async fn unsigned_webhook_does_not_emit_signature_header() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("plain", &receiver.url(), "info", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("system", "operation.submitted").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "operation.submitted").severity("info"))
         .await
         .unwrap();
     dispatcher.tick_once(&store).await;
@@ -454,10 +439,10 @@ async fn signed_webhook_emits_verifiable_signature() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_signed("signed", &receiver.url(), secret)],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -479,8 +464,7 @@ async fn signed_webhook_emits_verifiable_signature() {
         .expect("signed webhook must emit X-Iac-Signature");
 
     // Phase 7x: header is Stripe-style `t=<unix>,v1=<hex>`.
-    let (t, v1) = parse_signature_header(header)
-        .expect("header must parse as t=...,v1=...");
+    let (t, v1) = parse_signature_header(header).expect("header must parse as t=...,v1=...");
     // Timestamp should be recent.
     let now = jiff::Timestamp::now().as_second();
     assert!(
@@ -530,16 +514,14 @@ async fn inter_event_dispatch_runs_in_parallel() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     for i in 0..5 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("event.{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("event.{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -596,10 +578,13 @@ async fn semaphore_caps_in_flight_requests() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -615,9 +600,7 @@ async fn semaphore_caps_in_flight_requests() {
 
     for i in 0..8 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("event.{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("event.{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -674,17 +657,15 @@ async fn slow_receiver_does_not_block_fast_one() {
             webhook_to("fast", &fast.url(), "info", vec![]),
         ],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("system", "test.event").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "test.event").severity("info"))
         .await
         .unwrap();
 
@@ -725,22 +706,18 @@ async fn cursor_survives_dispatcher_recreation() {
         let dispatcher = WebhookDispatcher::new(WebhooksConfig {
             webhooks: vec![webhook_to("d1", &r1.url(), "info", vec![])],
             poll_interval_secs: 1,
-        max_concurrent_requests: 16,
-        backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+            max_concurrent_requests: 16,
+            backfill_batch_size: 200,
+            allow_insecure_urls: true,
+            allow_private_urls: true,
         });
         dispatcher.initialize(&store).await;
         store
-            .record_audit(
-                AuditRecord::new("system", "kind.one").severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", "kind.one").severity("info"))
             .await
             .unwrap();
         store
-            .record_audit(
-                AuditRecord::new("system", "kind.two").severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", "kind.two").severity("info"))
             .await
             .unwrap();
         assert_eq!(dispatcher.tick_once(&store).await, 2);
@@ -754,16 +731,14 @@ async fn cursor_survives_dispatcher_recreation() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("d2", &r2.url(), "info", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
     store
-        .record_audit(
-            AuditRecord::new("system", "kind.three").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "kind.three").severity("info"))
         .await
         .unwrap();
     assert_eq!(dispatcher.tick_once(&store).await, 1);
@@ -791,24 +766,20 @@ async fn pre_persistence_events_within_window_are_delivered_after_restart() {
         let dispatcher = WebhookDispatcher::new(WebhooksConfig {
             webhooks: vec![webhook_to("alerts", &url, "info", vec![])],
             poll_interval_secs: 1,
-        max_concurrent_requests: 16,
-        backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+            max_concurrent_requests: 16,
+            backfill_batch_size: 200,
+            allow_insecure_urls: true,
+            allow_private_urls: true,
         });
         dispatcher.initialize(&store).await;
         store
-            .record_audit(
-                AuditRecord::new("system", "early").severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", "early").severity("info"))
             .await
             .unwrap();
         dispatcher.tick_once(&store).await;
         // Now an event arrives that the dispatcher never gets to see.
         store
-            .record_audit(
-                AuditRecord::new("system", "missed-by-old-process").severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", "missed-by-old-process").severity("info"))
             .await
             .unwrap();
         r0.shutdown().await;
@@ -823,10 +794,10 @@ async fn pre_persistence_events_within_window_are_delivered_after_restart() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("alerts", &r.url(), "info", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
     assert_eq!(dispatcher.tick_once(&store).await, 1);
@@ -847,9 +818,7 @@ async fn backfill_true_delivers_all_history() {
     let store = open_store(&dir).await;
     for i in 0..3 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("history.{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("history.{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -860,10 +829,10 @@ async fn backfill_true_delivers_all_history() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -887,9 +856,7 @@ async fn per_webhook_cursors_are_isolated() {
     let store = open_store(&dir).await;
     for i in 0..2 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("old.{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("old.{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -903,10 +870,10 @@ async fn per_webhook_cursors_are_isolated() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![backfiller, fresh],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -922,9 +889,7 @@ async fn per_webhook_cursors_are_isolated() {
     // first tick AND the fresh webhook's cursor finally has
     // something past it.
     store
-        .record_audit(
-            AuditRecord::new("system", "shared.new").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "shared.new").severity("info"))
         .await
         .unwrap();
     assert_eq!(dispatcher.tick_once(&store).await, 2);
@@ -972,10 +937,13 @@ async fn metrics_count_each_response_class() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -984,8 +952,8 @@ async fn metrics_count_each_response_class() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -1052,10 +1020,13 @@ async fn metrics_track_in_flight_peak_against_semaphore_cap() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -1071,9 +1042,7 @@ async fn metrics_track_in_flight_peak_against_semaphore_cap() {
 
     for i in 0..6 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("e{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("e{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -1115,10 +1084,13 @@ async fn metrics_semaphore_wait_micros_increases_under_contention() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -1134,9 +1106,7 @@ async fn metrics_semaphore_wait_micros_increases_under_contention() {
 
     for i in 0..2 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("e{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("e{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -1174,8 +1144,7 @@ async fn receiver_429_with_retry_after_pauses_subsequent_ticks() {
             let count = count_for_route.clone();
             async move {
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let mut resp =
-                    axum::http::Response::new(axum::body::Body::empty());
+                let mut resp = axum::http::Response::new(axum::body::Body::empty());
                 *resp.status_mut() = axum::http::StatusCode::TOO_MANY_REQUESTS;
                 resp.headers_mut()
                     .insert("retry-after", "60".parse().unwrap());
@@ -1188,10 +1157,13 @@ async fn receiver_429_with_retry_after_pauses_subsequent_ticks() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -1200,15 +1172,13 @@ async fn receiver_429_with_retry_after_pauses_subsequent_ticks() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("system", "first").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "first").severity("info"))
         .await
         .unwrap();
     // First tick fires the request; receiver returns 429 + Retry-After.
@@ -1221,9 +1191,7 @@ async fn receiver_429_with_retry_after_pauses_subsequent_ticks() {
 
     // Second event arrives during the backoff.
     store
-        .record_audit(
-            AuditRecord::new("system", "second").severity("info"),
-        )
+        .record_audit(AuditRecord::new("system", "second").severity("info"))
         .await
         .unwrap();
     // Second tick must skip the webhook entirely — receiver count
@@ -1265,10 +1233,13 @@ async fn receiver_429_without_retry_after_does_not_back_off() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -1277,25 +1248,20 @@ async fn receiver_429_without_retry_after_does_not_back_off() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     for i in 0..3 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("e{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("e{i}")).severity("info"))
             .await
             .unwrap();
         dispatcher.tick_once(&store).await;
     }
     // No Retry-After ⇒ no backoff ⇒ each tick still hits the receiver.
-    assert_eq!(
-        request_count.load(std::sync::atomic::Ordering::SeqCst),
-        3
-    );
+    assert_eq!(request_count.load(std::sync::atomic::Ordering::SeqCst), 3);
 
     shutdown.notify_waiters();
     let _ = handle.await;
@@ -1332,18 +1298,16 @@ async fn initialize_prunes_orphan_cursors() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     // After init, only "audit:active" + "audit" should remain.
-    let remaining: Vec<(String,)> = sqlx::query_as(
-        "SELECT key FROM webhook_cursor ORDER BY key",
-    )
-    .fetch_all(store.pool())
-    .await
-    .unwrap();
+    let remaining: Vec<(String,)> = sqlx::query_as("SELECT key FROM webhook_cursor ORDER BY key")
+        .fetch_all(store.pool())
+        .await
+        .unwrap();
     let keys: Vec<&str> = remaining.iter().map(|(k,)| k.as_str()).collect();
     assert_eq!(keys, vec!["audit", "audit:active"]);
 
@@ -1360,9 +1324,7 @@ async fn legacy_shared_cursor_inherited_when_per_webhook_row_missing() {
     // Pre-write 3 events so MAX(id) > 0.
     for i in 0..3 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("pre.{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("pre.{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -1388,10 +1350,10 @@ async fn legacy_shared_cursor_inherited_when_per_webhook_row_missing() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("upgraded", &receiver.url(), "info", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
     // 2 events past the legacy cursor should be delivered.
@@ -1412,9 +1374,7 @@ async fn fresh_install_with_pre_existing_audit_rows_does_not_replay() {
     // Pre-existing rows.
     for i in 0..5 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("history.{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("history.{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -1423,10 +1383,10 @@ async fn fresh_install_with_pre_existing_audit_rows_does_not_replay() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_to("first-boot", &receiver.url(), "info", vec![])],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -1453,17 +1413,15 @@ async fn wrong_secret_produces_different_signature() {
             webhook_signed("b", &r2.url(), "secret-B"),
         ],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("user:alice", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:alice", "operation.rejected").severity("warning"))
         .await
         .unwrap();
     dispatcher.tick_once(&store).await;
@@ -1504,17 +1462,15 @@ async fn replay_with_stale_timestamp_rejected_by_verifier() {
     let dispatcher = WebhookDispatcher::new(WebhooksConfig {
         webhooks: vec![webhook_signed("freshness", &receiver.url(), secret)],
         poll_interval_secs: 1,
-    max_concurrent_requests: 16,
-    backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        max_concurrent_requests: 16,
+        backfill_batch_size: 200,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     store
-        .record_audit(
-            AuditRecord::new("user:alice", "operation.rejected").severity("warning"),
-        )
+        .record_audit(AuditRecord::new("user:alice", "operation.rejected").severity("warning"))
         .await
         .unwrap();
     dispatcher.tick_once(&store).await;
@@ -1526,14 +1482,8 @@ async fn replay_with_stale_timestamp_rejected_by_verifier() {
     // against `now + 2h` with the default 5min tolerance.
     let captured_t = parse_signature_header(header).unwrap().0;
     let now = captured_t + 2 * 60 * 60;
-    let err = verify_signed_payload(
-        secret.as_bytes(),
-        &events[0].body,
-        header,
-        now,
-        300,
-    )
-    .unwrap_err();
+    let err =
+        verify_signed_payload(secret.as_bytes(), &events[0].body, header, now, 300).unwrap_err();
     assert!(err.contains("tolerance"), "got: {err}");
 
     receiver.shutdown().await;
@@ -1583,10 +1533,13 @@ async fn backoff_survives_dispatcher_restart() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{addr}/sink");
 
@@ -1597,8 +1550,8 @@ async fn backoff_survives_dispatcher_restart() {
             poll_interval_secs: 1,
             max_concurrent_requests: 16,
             backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+            allow_insecure_urls: true,
+            allow_private_urls: true,
         });
         dispatcher.initialize(&store).await;
         store
@@ -1620,8 +1573,8 @@ async fn backoff_survives_dispatcher_restart() {
             poll_interval_secs: 1,
             max_concurrent_requests: 16,
             backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+            allow_insecure_urls: true,
+            allow_private_urls: true,
         });
         dispatcher.initialize(&store).await;
         store
@@ -1645,8 +1598,8 @@ async fn backoff_survives_dispatcher_restart() {
             poll_interval_secs: 1,
             max_concurrent_requests: 16,
             backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+            allow_insecure_urls: true,
+            allow_private_urls: true,
         });
         dispatcher.initialize(&store).await;
         store
@@ -1690,8 +1643,8 @@ async fn expired_backoff_rows_are_ignored_on_restart() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
     store
@@ -1732,10 +1685,13 @@ async fn per_webhook_metrics_attribute_outcomes_to_each_receiver() {
     let bad_shutdown = Arc::new(Notify::new());
     let bad_signal = bad_shutdown.clone();
     let bad_handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { bad_signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { bad_signal.notified().await })
+        .await
+        .unwrap();
     });
     let bad_url = format!("http://{bad_addr}/sink");
 
@@ -1747,17 +1703,15 @@ async fn per_webhook_metrics_attribute_outcomes_to_each_receiver() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
     // Both receivers see two events each.
     for i in 0..2 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("event-{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("event-{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -1770,8 +1724,7 @@ async fn per_webhook_metrics_attribute_outcomes_to_each_receiver() {
 
     // Per-receiver breakdown: alerts has 2 ok, audit-archive has 2
     // non_success, neither cross-contaminates.
-    let by_name: std::collections::HashMap<String, _> =
-        m.per_webhook.iter().cloned().collect();
+    let by_name: std::collections::HashMap<String, _> = m.per_webhook.iter().cloned().collect();
     let alerts = by_name.get("alerts").expect("alerts entry");
     assert_eq!(alerts.dispatched_ok, 2);
     assert_eq!(alerts.dispatched_non_success, 0);
@@ -1820,8 +1773,7 @@ async fn http_date_retry_after_triggers_backoff() {
                 let mut resp = axum::http::Response::new(axum::body::Body::empty());
                 if i == 0 {
                     *resp.status_mut() = axum::http::StatusCode::TOO_MANY_REQUESTS;
-                    resp.headers_mut()
-                        .insert("retry-after", d.parse().unwrap());
+                    resp.headers_mut().insert("retry-after", d.parse().unwrap());
                 } else {
                     *resp.status_mut() = axum::http::StatusCode::OK;
                 }
@@ -1834,10 +1786,13 @@ async fn http_date_retry_after_triggers_backoff() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{addr}/sink");
 
@@ -1846,8 +1801,8 @@ async fn http_date_retry_after_triggers_backoff() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -1892,15 +1847,13 @@ async fn backfill_batch_size_caps_per_tick_and_resumes_next_tick() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 2,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
     for i in 0..5 {
         store
-            .record_audit(
-                AuditRecord::new("system", &format!("event-{i}")).severity("info"),
-            )
+            .record_audit(AuditRecord::new("system", &format!("event-{i}")).severity("info"))
             .await
             .unwrap();
     }
@@ -1980,10 +1933,13 @@ async fn per_receiver_cap_limits_concurrent_requests() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -1995,8 +1951,8 @@ async fn per_receiver_cap_limits_concurrent_requests() {
         // Global cap deliberately wide — only the per-receiver cap should bite.
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2063,8 +2019,8 @@ async fn per_receiver_cap_does_not_throttle_other_receivers() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2124,8 +2080,8 @@ async fn default_signing_versions_emits_v1_only() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2158,8 +2114,8 @@ async fn signing_versions_v2_only_emits_v2_no_v1() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2188,9 +2144,11 @@ async fn signing_versions_v2_only_emits_v2_no_v1() {
 
     // The v1 verifier requires v1 to be present in the header; with
     // v2-only it errors cleanly.
-    let v1_attempt =
-        verify_signed_payload(secret.as_bytes(), &events[0].body, header, now, 300);
-    assert!(v1_attempt.is_err(), "v1 verifier must fail when only v2 is present");
+    let v1_attempt = verify_signed_payload(secret.as_bytes(), &events[0].body, header, now, 300);
+    assert!(
+        v1_attempt.is_err(),
+        "v1 verifier must fail when only v2 is present"
+    );
 
     receiver.shutdown().await;
 }
@@ -2209,8 +2167,8 @@ async fn signing_versions_both_emits_both_signatures() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2261,8 +2219,8 @@ async fn v2_signature_differs_when_url_differs() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2319,8 +2277,8 @@ async fn unknown_signing_version_falls_back_to_default() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2361,10 +2319,13 @@ async fn per_receiver_semaphore_wait_counter_increases_under_contention() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -2375,8 +2336,8 @@ async fn per_receiver_semaphore_wait_counter_increases_under_contention() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2423,8 +2384,8 @@ async fn per_receiver_semaphore_wait_histogram_records_observations() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2479,10 +2440,13 @@ async fn dispatch_duration_records_round_trip_time_per_receiver() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{}/sink", addr);
 
@@ -2491,8 +2455,8 @@ async fn dispatch_duration_records_round_trip_time_per_receiver() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2546,8 +2510,8 @@ async fn dispatch_duration_histogram_records_observations() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2577,7 +2541,10 @@ async fn dispatch_duration_histogram_records_observations() {
         "per-receiver dispatch_duration_hist count must equal dispatch count"
     );
     let per_bucket_sum: u64 = entry.1.dispatch_duration_hist.buckets.iter().sum();
-    assert_eq!(per_bucket_sum, 3, "per-receiver bucket sum must equal count");
+    assert_eq!(
+        per_bucket_sum, 3,
+        "per-receiver bucket sum must equal count"
+    );
 
     receiver.shutdown().await;
 }
@@ -2598,8 +2565,8 @@ async fn duplicate_signing_versions_deduped() {
         poll_interval_secs: 1,
         max_concurrent_requests: 16,
         backfill_batch_size: 200,
-    allow_insecure_urls: true,
-    allow_private_urls: true,
+        allow_insecure_urls: true,
+        allow_private_urls: true,
     });
     dispatcher.initialize(&store).await;
 
@@ -2613,7 +2580,10 @@ async fn duplicate_signing_versions_deduped() {
     let header = events[0].signature.as_deref().unwrap();
     // Header should have one `v1=` token, not two.
     let v1_count = header.matches("v1=").count();
-    assert_eq!(v1_count, 1, "duplicate v1 should be deduped; header: {header}");
+    assert_eq!(
+        v1_count, 1,
+        "duplicate v1 should be deduped; header: {header}"
+    );
 
     receiver.shutdown().await;
 }

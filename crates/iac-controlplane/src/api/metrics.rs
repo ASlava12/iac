@@ -5,22 +5,22 @@
 //! text exposition format so scrapers can wire in directly. Default
 //! (no query) returns JSON.
 
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::error::ApiResult;
 use crate::identity::Role;
 use crate::maintenance::MaintenanceMetricsSnapshot;
 use crate::rate_limit::RateLimitMetricsSnapshot;
 use crate::server::AppState;
 use crate::webhook::{
-    PerWebhookSnapshot, SemaphoreWaitHistogramSnapshot, WebhookMetricsSnapshot,
-    SEMAPHORE_WAIT_BUCKETS_MICROS,
+    PerWebhookSnapshot, SEMAPHORE_WAIT_BUCKETS_MICROS, SemaphoreWaitHistogramSnapshot,
+    WebhookMetricsSnapshot,
 };
 use axum::{
+    Json, Router,
     extract::{Query, State},
     http::header,
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -70,7 +70,12 @@ async fn get_metrics(
         )
             .into_response());
     }
-    Ok(Json(MetricsResponse { webhook, rate_limit, maintenance }).into_response())
+    Ok(Json(MetricsResponse {
+        webhook,
+        rate_limit,
+        maintenance,
+    })
+    .into_response())
 }
 
 /// Render the metrics in OpenMetrics / Prometheus text exposition
@@ -286,7 +291,10 @@ fn push_per_webhook_counters(out: &mut String, per: &[(String, PerWebhookSnapsho
         "# HELP iac_webhook_dispatched_ok_per_receiver_total \
          Successful 2xx webhook deliveries, broken out by receiver name."
     );
-    let _ = writeln!(out, "# TYPE iac_webhook_dispatched_ok_per_receiver_total counter");
+    let _ = writeln!(
+        out,
+        "# TYPE iac_webhook_dispatched_ok_per_receiver_total counter"
+    );
     for (name, p) in per {
         let _ = writeln!(
             out,
@@ -450,8 +458,15 @@ fn push_per_receiver_histogram<F>(
             "{hist_name}_bucket{{webhook=\"{escaped}\",le=\"+Inf\"}} {cumulative}"
         );
         let sum_seconds = (sum_micros as f64) / 1_000_000.0;
-        let _ = writeln!(out, "{hist_name}_sum{{webhook=\"{escaped}\"}} {sum_seconds}");
-        let _ = writeln!(out, "{hist_name}_count{{webhook=\"{escaped}\"}} {}", h.count);
+        let _ = writeln!(
+            out,
+            "{hist_name}_sum{{webhook=\"{escaped}\"}} {sum_seconds}"
+        );
+        let _ = writeln!(
+            out,
+            "{hist_name}_count{{webhook=\"{escaped}\"}} {}",
+            h.count
+        );
     }
 }
 
@@ -580,7 +595,8 @@ mod tests {
             semaphore_wait_hist: empty_hist(),
             in_flight: 3,
             in_flight_peak: 7,
-            dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+            dispatch_duration_micros: 0,
+            dispatch_duration_hist: empty_hist(),
             per_webhook: vec![],
         };
         // 2 absolute + 1 recurring = 3 total blocked.
@@ -625,8 +641,16 @@ mod tests {
         use crate::maintenance::{PerWindowBlockedEntry, WindowKind};
         let mut maint = maint(0, 0, 0, 0);
         maint.per_window_blocked = vec![
-            PerWindowBlockedEntry { kind: WindowKind::Absolute, name: "freeze-q4".into(), count: 5 },
-            PerWindowBlockedEntry { kind: WindowKind::Recurring, name: "weekend".into(), count: 2 },
+            PerWindowBlockedEntry {
+                kind: WindowKind::Absolute,
+                name: "freeze-q4".into(),
+                count: 5,
+            },
+            PerWindowBlockedEntry {
+                kind: WindowKind::Recurring,
+                name: "weekend".into(),
+                count: 2,
+            },
         ];
         let body = render_prom(None, &rl(0, 0), &maint);
         assert!(body.contains("# TYPE iac_maintenance_blocked_per_window_total counter"));
@@ -660,7 +684,8 @@ mod tests {
             semaphore_wait_hist: empty_hist(),
             in_flight: 0,
             in_flight_peak: 0,
-            dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+            dispatch_duration_micros: 0,
+            dispatch_duration_hist: empty_hist(),
             per_webhook: vec![
                 (
                     "alerts".into(),
@@ -668,8 +693,11 @@ mod tests {
                         dispatched_ok: 5,
                         dispatched_non_success: 0,
                         dispatched_ratelimited: 2,
-                        delivery_errors: 0, semaphore_wait_micros: 0, semaphore_wait_hist: empty_hist(),
-                        dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+                        delivery_errors: 0,
+                        semaphore_wait_micros: 0,
+                        semaphore_wait_hist: empty_hist(),
+                        dispatch_duration_micros: 0,
+                        dispatch_duration_hist: empty_hist(),
                     },
                 ),
                 (
@@ -678,8 +706,11 @@ mod tests {
                         dispatched_ok: 3,
                         dispatched_non_success: 1,
                         dispatched_ratelimited: 0,
-                        delivery_errors: 0, semaphore_wait_micros: 0, semaphore_wait_hist: empty_hist(),
-                        dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+                        delivery_errors: 0,
+                        semaphore_wait_micros: 0,
+                        semaphore_wait_hist: empty_hist(),
+                        dispatch_duration_micros: 0,
+                        dispatch_duration_hist: empty_hist(),
                     },
                 ),
             ],
@@ -688,9 +719,7 @@ mod tests {
         // Global totals still emitted (backward compat).
         assert!(body.contains("\niac_webhook_dispatched_ok_total 8\n"));
         // Per-receiver `# TYPE` declared once per metric.
-        assert!(body.contains(
-            "# TYPE iac_webhook_dispatched_ok_per_receiver_total counter"
-        ));
+        assert!(body.contains("# TYPE iac_webhook_dispatched_ok_per_receiver_total counter"));
         // Both receivers labeled, in name-sorted order.
         let alerts_idx = body
             .find("dispatched_ok_per_receiver_total{webhook=\"alerts\"} 5")
@@ -700,10 +729,10 @@ mod tests {
             .expect("archive row");
         assert!(alerts_idx < archive_idx, "rows must be sorted by name");
         // Other counters present per receiver.
-        assert!(body
-            .contains("dispatched_ratelimited_per_receiver_total{webhook=\"alerts\"} 2"));
-        assert!(body
-            .contains("dispatched_non_success_per_receiver_total{webhook=\"audit-archive\"} 1"));
+        assert!(body.contains("dispatched_ratelimited_per_receiver_total{webhook=\"alerts\"} 2"));
+        assert!(
+            body.contains("dispatched_non_success_per_receiver_total{webhook=\"audit-archive\"} 1")
+        );
     }
 
     #[test]
@@ -749,9 +778,7 @@ mod tests {
         let body = render_prom(Some(&webhook), &rl(0, 0), &maint(0, 0, 0, 0));
 
         // Global histogram name + cumulative buckets.
-        assert!(body.contains(
-            "# TYPE iac_webhook_dispatch_duration_seconds histogram"
-        ));
+        assert!(body.contains("# TYPE iac_webhook_dispatch_duration_seconds histogram"));
         assert!(body.contains("iac_webhook_dispatch_duration_seconds_bucket{le=\"0.1\"} 2"));
         assert!(body.contains("iac_webhook_dispatch_duration_seconds_bucket{le=\"1\"} 3"));
         assert!(body.contains("iac_webhook_dispatch_duration_seconds_bucket{le=\"+Inf\"} 3"));
@@ -759,9 +786,9 @@ mod tests {
         assert!(body.contains("iac_webhook_dispatch_duration_seconds_count 3"));
 
         // Per-receiver labeled histogram.
-        assert!(body.contains(
-            "# TYPE iac_webhook_dispatch_duration_seconds_per_receiver histogram"
-        ));
+        assert!(
+            body.contains("# TYPE iac_webhook_dispatch_duration_seconds_per_receiver histogram")
+        );
         assert!(body.contains(
             "iac_webhook_dispatch_duration_seconds_per_receiver_bucket{webhook=\"alerts\",le=\"0.1\"} 2"
         ));
@@ -784,7 +811,8 @@ mod tests {
             semaphore_wait_hist: empty_hist(),
             in_flight: 0,
             in_flight_peak: 0,
-            dispatch_duration_micros: 12_345, dispatch_duration_hist: empty_hist(),
+            dispatch_duration_micros: 12_345,
+            dispatch_duration_hist: empty_hist(),
             per_webhook: vec![(
                 "alerts".into(),
                 PerWebhookSnapshot {
@@ -794,18 +822,15 @@ mod tests {
                     delivery_errors: 0,
                     semaphore_wait_micros: 0,
                     semaphore_wait_hist: empty_hist(),
-                    dispatch_duration_micros: 12_345, dispatch_duration_hist: empty_hist(),
+                    dispatch_duration_micros: 12_345,
+                    dispatch_duration_hist: empty_hist(),
                 },
             )],
         };
         let body = render_prom(Some(&webhook), &rl(0, 0), &maint(0, 0, 0, 0));
         // Global counter exists.
-        assert!(body.contains(
-            "# TYPE iac_webhook_dispatch_duration_microseconds_total counter"
-        ));
-        assert!(body.contains(
-            "\niac_webhook_dispatch_duration_microseconds_total 12345\n"
-        ));
+        assert!(body.contains("# TYPE iac_webhook_dispatch_duration_microseconds_total counter"));
+        assert!(body.contains("\niac_webhook_dispatch_duration_microseconds_total 12345\n"));
         // Per-receiver labeled counter exists.
         assert!(body.contains(
             "# TYPE iac_webhook_dispatch_duration_microseconds_per_receiver_total counter"
@@ -840,7 +865,8 @@ mod tests {
             semaphore_wait_hist: empty_hist(),
             in_flight: 0,
             in_flight_peak: 0,
-            dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+            dispatch_duration_micros: 0,
+            dispatch_duration_hist: empty_hist(),
             per_webhook: vec![(
                 "alerts".into(),
                 PerWebhookSnapshot {
@@ -850,14 +876,13 @@ mod tests {
                     delivery_errors: 0,
                     semaphore_wait_micros: 4_500, // 4.5ms total
                     semaphore_wait_hist: hist_alerts,
-                    dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+                    dispatch_duration_micros: 0,
+                    dispatch_duration_hist: empty_hist(),
                 },
             )],
         };
         let body = render_prom(Some(&webhook), &rl(0, 0), &maint(0, 0, 0, 0));
-        assert!(body.contains(
-            "# TYPE iac_webhook_semaphore_wait_seconds_per_receiver histogram"
-        ));
+        assert!(body.contains("# TYPE iac_webhook_semaphore_wait_seconds_per_receiver histogram"));
         // Cumulative buckets (3 + 1 = 4 below ≤10ms; 0 below ≤100µs).
         assert!(body.contains(
             "iac_webhook_semaphore_wait_seconds_per_receiver_bucket{webhook=\"alerts\",le=\"0.0001\"} 0"
@@ -874,7 +899,9 @@ mod tests {
         ));
         // _sum is microseconds-as-seconds (4500µs = 0.0045s).
         assert!(
-            body.contains("iac_webhook_semaphore_wait_seconds_per_receiver_sum{webhook=\"alerts\"} 0.0045"),
+            body.contains(
+                "iac_webhook_semaphore_wait_seconds_per_receiver_sum{webhook=\"alerts\"} 0.0045"
+            ),
             "body did not contain expected _sum line:\n{body}"
         );
         // _count = total observations.
@@ -898,7 +925,8 @@ mod tests {
             semaphore_wait_hist: empty_hist(),
             in_flight: 0,
             in_flight_peak: 0,
-            dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+            dispatch_duration_micros: 0,
+            dispatch_duration_hist: empty_hist(),
             per_webhook: vec![
                 (
                     "fast".into(),
@@ -907,8 +935,10 @@ mod tests {
                         dispatched_non_success: 0,
                         dispatched_ratelimited: 0,
                         delivery_errors: 0,
-                        semaphore_wait_micros: 250, semaphore_wait_hist: empty_hist(),
-                        dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+                        semaphore_wait_micros: 250,
+                        semaphore_wait_hist: empty_hist(),
+                        dispatch_duration_micros: 0,
+                        dispatch_duration_hist: empty_hist(),
                     },
                 ),
                 (
@@ -920,15 +950,18 @@ mod tests {
                         delivery_errors: 0,
                         semaphore_wait_micros: 1_500_000,
                         semaphore_wait_hist: empty_hist(),
-                        dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+                        dispatch_duration_micros: 0,
+                        dispatch_duration_hist: empty_hist(),
                     },
                 ),
             ],
         };
         let body = render_prom(Some(&webhook), &rl(0, 0), &maint(0, 0, 0, 0));
-        assert!(body.contains(
-            "# TYPE iac_webhook_semaphore_wait_microseconds_per_receiver_total counter"
-        ));
+        assert!(
+            body.contains(
+                "# TYPE iac_webhook_semaphore_wait_microseconds_per_receiver_total counter"
+            )
+        );
         assert!(body.contains(
             "iac_webhook_semaphore_wait_microseconds_per_receiver_total{webhook=\"fast\"} 250"
         ));
@@ -950,22 +983,24 @@ mod tests {
             semaphore_wait_hist: empty_hist(),
             in_flight: 0,
             in_flight_peak: 0,
-            dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+            dispatch_duration_micros: 0,
+            dispatch_duration_hist: empty_hist(),
             per_webhook: vec![(
                 "weird\"name\\with\nnewline".into(),
                 PerWebhookSnapshot {
                     dispatched_ok: 1,
                     dispatched_non_success: 0,
                     dispatched_ratelimited: 0,
-                    delivery_errors: 0, semaphore_wait_micros: 0, semaphore_wait_hist: empty_hist(),
-                        dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+                    delivery_errors: 0,
+                    semaphore_wait_micros: 0,
+                    semaphore_wait_hist: empty_hist(),
+                    dispatch_duration_micros: 0,
+                    dispatch_duration_hist: empty_hist(),
                 },
             )],
         };
         let body = render_prom(Some(&webhook), &rl(0, 0), &maint(0, 0, 0, 0));
-        assert!(body.contains(
-            "{webhook=\"weird\\\"name\\\\with\\nnewline\"} 1"
-        ));
+        assert!(body.contains("{webhook=\"weird\\\"name\\\\with\\nnewline\"} 1"));
     }
 
     #[test]
@@ -986,7 +1021,8 @@ mod tests {
             semaphore_wait_hist: hist,
             in_flight: 0,
             in_flight_peak: 0,
-            dispatch_duration_micros: 0, dispatch_duration_hist: empty_hist(),
+            dispatch_duration_micros: 0,
+            dispatch_duration_hist: empty_hist(),
             per_webhook: vec![],
         };
         let body = render_prom(Some(&webhook), &rl(0, 0), &maint(0, 0, 0, 0));

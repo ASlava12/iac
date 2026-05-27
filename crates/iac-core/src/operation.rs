@@ -62,16 +62,31 @@ pub struct StepResult {
 
 impl StepResult {
     pub fn ok(message: impl Into<String>) -> Self {
-        Self { status: StepStatus::Succeeded, message: message.into(), data: Json::Null, error: None }
+        Self {
+            status: StepStatus::Succeeded,
+            message: message.into(),
+            data: Json::Null,
+            error: None,
+        }
     }
 
     pub fn skipped(message: impl Into<String>) -> Self {
-        Self { status: StepStatus::Skipped, message: message.into(), data: Json::Null, error: None }
+        Self {
+            status: StepStatus::Skipped,
+            message: message.into(),
+            data: Json::Null,
+            error: None,
+        }
     }
 
     pub fn failed(error: impl Into<String>) -> Self {
         let err = error.into();
-        Self { status: StepStatus::Failed, message: err.clone(), data: Json::Null, error: Some(err) }
+        Self {
+            status: StepStatus::Failed,
+            message: err.clone(),
+            data: Json::Null,
+            error: Some(err),
+        }
     }
 }
 
@@ -133,6 +148,12 @@ pub struct Checkpoint {
 
 impl Checkpoint {
     pub fn new(resource_id: ResourceId, operation_id: Ulid, data: Json) -> Self {
-        Self { id: Ulid::new(), resource_id, operation_id, created_at: Timestamp::now(), data }
+        Self {
+            id: Ulid::new(),
+            resource_id,
+            operation_id,
+            created_at: Timestamp::now(),
+            data,
+        }
     }
 }

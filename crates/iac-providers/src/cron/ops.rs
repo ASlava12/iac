@@ -6,14 +6,14 @@
 use super::render;
 use super::spec::{CronJobSpec, CronState};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     hash::sha256_hex,
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -160,21 +160,23 @@ pub fn apply(spec: &CronJobSpec, step: &Step) -> Result<StepResult> {
                 error: None,
             })
         }
-        super::CronAction::Remove => {
-            match fs::remove_file(&path) {
-                Ok(()) => Ok(StepResult::ok(format!("removed {}", path.display()))),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(StepResult::skipped(format!("{} already absent", path.display())))
-                }
-                Err(e) => Err(Error::Io { path, source: e }),
-            }
-        }
+        super::CronAction::Remove => match fs::remove_file(&path) {
+            Ok(()) => Ok(StepResult::ok(format!("removed {}", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StepResult::skipped(format!(
+                "{} already absent",
+                path.display()
+            ))),
+            Err(e) => Err(Error::Io { path, source: e }),
+        },
     }
 }
 
 pub fn rollback(spec: &CronJobSpec, checkpoint: &Json) -> Result<()> {
     let path = spec.config_path();
-    let existed = checkpoint.get("existed").and_then(Json::as_bool).unwrap_or(false);
+    let existed = checkpoint
+        .get("existed")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
     if existed {
         if let Some(content) = checkpoint.get("content").and_then(Json::as_str) {
             atomic_write(&path, content, 0o644)?;
@@ -194,13 +196,25 @@ fn atomic_write(path: &Path, content: &str, mode: u32) -> Result<()> {
         Error::provider("cron", format!("path has no parent: {}", path.display()))
     })?;
     if !parent.exists() {
-        fs::create_dir_all(parent).map_err(|e| Error::Io { path: parent.into(), source: e })?;
+        fs::create_dir_all(parent).map_err(|e| Error::Io {
+            path: parent.into(),
+            source: e,
+        })?;
     }
     let tmp = temp_path_in(parent, path);
-    fs::write(&tmp, content).map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
+    fs::write(&tmp, content).map_err(|e| Error::Io {
+        path: tmp.clone(),
+        source: e,
+    })?;
     let perms = fs::Permissions::from_mode(mode);
-    fs::set_permissions(&tmp, perms).map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
-    fs::rename(&tmp, path).map_err(|e| Error::Io { path: path.into(), source: e })?;
+    fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
+        path: tmp.clone(),
+        source: e,
+    })?;
+    fs::rename(&tmp, path).map_err(|e| Error::Io {
+        path: path.into(),
+        source: e,
+    })?;
     Ok(())
 }
 
@@ -290,7 +304,11 @@ mod tests {
 
         let spec = base(&dir);
         let cp = pre_apply(&spec).unwrap();
-        apply(&spec, &plan(&spec, &diff(&spec, &observe(&spec).unwrap()))[0]).unwrap();
+        apply(
+            &spec,
+            &plan(&spec, &diff(&spec, &observe(&spec).unwrap()))[0],
+        )
+        .unwrap();
         // After apply the file changed.
         let after_apply = std::fs::read_to_string(&path).unwrap();
         assert_ne!(after_apply, prev);

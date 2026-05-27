@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_controlplane::identity::Role;
 use iac_controlplane::store::CreateUser;
@@ -18,7 +18,6 @@ use iac_core::protocol::v1::{
 };
 use reqwest::StatusCode;
 use serde_json::json;
-
 
 #[tokio::test]
 async fn admin_creates_lists_and_disables_users() {
@@ -107,7 +106,10 @@ async fn admin_creates_lists_and_disables_users() {
     let resp = client
         .patch(format!("{}/v1/users/{}", server.url(), created.user_id))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&UpdateUserRequest { disabled: Some(false), ..Default::default() })
+        .json(&UpdateUserRequest {
+            disabled: Some(false),
+            ..Default::default()
+        })
         .send()
         .await
         .unwrap();
@@ -203,7 +205,10 @@ async fn admin_resets_password_revokes_existing_tokens() {
     // Carol logs in with old password.
     let login: LoginResponse = client
         .post(format!("{}/v1/auth/login", server.url()))
-        .json(&LoginRequest { username: "carol".into(), password: "old-p".into() })
+        .json(&LoginRequest {
+            username: "carol".into(),
+            password: "old-p".into(),
+        })
         .send()
         .await
         .unwrap()
@@ -216,7 +221,10 @@ async fn admin_resets_password_revokes_existing_tokens() {
     let resp = client
         .patch(format!("{}/v1/users/{id}", server.url()))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&UpdateUserRequest { password: Some("new-p".into()), ..Default::default() })
+        .json(&UpdateUserRequest {
+            password: Some("new-p".into()),
+            ..Default::default()
+        })
         .send()
         .await
         .unwrap();
@@ -236,7 +244,10 @@ async fn admin_resets_password_revokes_existing_tokens() {
     // Old password fails.
     let resp = client
         .post(format!("{}/v1/auth/login", server.url()))
-        .json(&LoginRequest { username: "carol".into(), password: "old-p".into() })
+        .json(&LoginRequest {
+            username: "carol".into(),
+            password: "old-p".into(),
+        })
         .send()
         .await
         .unwrap();
@@ -245,7 +256,10 @@ async fn admin_resets_password_revokes_existing_tokens() {
     // New password works.
     let resp = client
         .post(format!("{}/v1/auth/login", server.url()))
-        .json(&LoginRequest { username: "carol".into(), password: "new-p".into() })
+        .json(&LoginRequest {
+            username: "carol".into(),
+            password: "new-p".into(),
+        })
         .send()
         .await
         .unwrap();
@@ -280,7 +294,10 @@ async fn non_admin_cannot_use_user_endpoints() {
     for username in ["viewer", "approver"] {
         let login: LoginResponse = client
             .post(format!("{}/v1/auth/login", server.url()))
-            .json(&LoginRequest { username: username.into(), password: "p".into() })
+            .json(&LoginRequest {
+                username: username.into(),
+                password: "p".into(),
+            })
             .send()
             .await
             .unwrap()

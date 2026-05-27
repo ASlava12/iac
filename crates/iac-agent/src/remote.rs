@@ -9,16 +9,15 @@
 //! client with the configured CA bundle + client cert/key.
 
 use anyhow::{Context, Result};
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use iac_core::protocol::v1::{
-    canonical_assignment_message, AgentHealth, AssignmentEnvelope, AssignmentList,
-    AssignmentResultRequest, DesiredStateBatch, DesiredStateItem, DriftBatch, DriftItem,
-    HeartbeatRequest, ObservationBatch, ObservationItem, RegisterRequest, RegisterResponse,
-    SigningPubkeyBundle,
-};
 use iac_core::ResourceId;
+use iac_core::protocol::v1::{
+    AgentHealth, AssignmentEnvelope, AssignmentList, AssignmentResultRequest, DesiredStateBatch,
+    DesiredStateItem, DriftBatch, DriftItem, HeartbeatRequest, ObservationBatch, ObservationItem,
+    RegisterRequest, RegisterResponse, SigningPubkeyBundle, canonical_assignment_message,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -87,15 +86,14 @@ impl Identity {
     /// them as a roll-back safety net for the active key).
     fn migrate_legacy_pubkey(&mut self) {
         if self.server_pubkeys.is_empty()
-            && let (Some(id), Some(pk)) = (
-                self.server_key_id.as_ref(),
-                self.server_public_key.as_ref(),
-            ) {
-                self.server_pubkeys.push(ServerPubkey {
-                    key_id: id.clone(),
-                    public_key: pk.clone(),
-                });
-            }
+            && let (Some(id), Some(pk)) =
+                (self.server_key_id.as_ref(), self.server_public_key.as_ref())
+        {
+            self.server_pubkeys.push(ServerPubkey {
+                key_id: id.clone(),
+                public_key: pk.clone(),
+            });
+        }
     }
 }
 
@@ -164,7 +162,8 @@ impl Client {
                 let body = resp.text().await.unwrap_or_default();
                 anyhow::bail!("register failed: {status}: {body}");
             }
-            let creds: RegisterResponse = resp.json().await.context("decoding register response")?;
+            let creds: RegisterResponse =
+                resp.json().await.context("decoding register response")?;
             let id = Identity {
                 agent_id: creds.agent_id,
                 token: creds.token,
@@ -240,12 +239,13 @@ impl Client {
                 .collect();
             for pinned in &identity.server_pubkeys {
                 if let Some(srv_pk) = by_id.get(pinned.key_id.as_str())
-                    && *srv_pk != pinned.public_key.as_str() {
-                        anyhow::bail!(
-                            "pinned key {} pubkey diverged from server — refusing",
-                            pinned.key_id
-                        );
-                    }
+                    && *srv_pk != pinned.public_key.as_str()
+                {
+                    anyhow::bail!(
+                        "pinned key {} pubkey diverged from server — refusing",
+                        pinned.key_id
+                    );
+                }
             }
             // Replace pinned set with the server's authoritative view.
             identity.server_pubkeys = bundle
@@ -266,7 +266,12 @@ impl Client {
         }
 
         let verifiers = build_verifier_set(&identity)?;
-        Ok(Self { http, base_url, identity, verifiers })
+        Ok(Self {
+            http,
+            base_url,
+            identity,
+            verifiers,
+        })
     }
 
     pub fn identity(&self) -> &Identity {
@@ -308,8 +313,7 @@ impl Client {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("rotate-token failed: {status}: {body}");
         }
-        let creds: RegisterResponse =
-            resp.json().await.context("decoding rotate response")?;
+        let creds: RegisterResponse = resp.json().await.context("decoding rotate response")?;
         // Build a candidate identity, persist it, then swap in. Order
         // matters: if persist fails (disk full, permissions changed),
         // we keep the old token in memory and on disk.
@@ -391,7 +395,9 @@ impl Client {
                 .http
                 .post(&url)
                 .bearer_auth(&self.identity.token)
-                .json(&ObservationBatch { items: chunk.clone() })
+                .json(&ObservationBatch {
+                    items: chunk.clone(),
+                })
                 .send()
                 .await
                 .context("pushing observations")?;
@@ -539,12 +545,13 @@ impl Client {
             .collect();
         for pinned in &self.identity.server_pubkeys {
             if let Some(srv_pk) = by_id.get(pinned.key_id.as_str())
-                && *srv_pk != pinned.public_key.as_str() {
-                    anyhow::bail!(
-                        "refresh: pinned key {} pubkey diverged from server",
-                        pinned.key_id
-                    );
-                }
+                && *srv_pk != pinned.public_key.as_str()
+            {
+                anyhow::bail!(
+                    "refresh: pinned key {} pubkey diverged from server",
+                    pinned.key_id
+                );
+            }
         }
         let mut new_identity = self.identity.clone();
         new_identity.server_pubkeys = bundle
@@ -623,7 +630,12 @@ impl Client {
             .http
             .post(url)
             .bearer_auth(&self.identity.token)
-            .json(&HeartbeatRequest { status, managed, open_drifts, last_observe_at })
+            .json(&HeartbeatRequest {
+                status,
+                managed,
+                open_drifts,
+                last_observe_at,
+            })
             .send()
             .await
             .context("sending heartbeat")?;
@@ -704,9 +716,7 @@ fn check_envelope_freshness(
     let created = match created_at.parse::<jiff::Timestamp>() {
         Ok(t) => t,
         Err(_) => {
-            anyhow::bail!(
-                "envelope created_at {created_at:?} unparseable — refusing to verify"
-            );
+            anyhow::bail!("envelope created_at {created_at:?} unparseable — refusing to verify");
         }
     };
     let age = now.as_second().saturating_sub(created.as_second());
@@ -936,8 +946,8 @@ mod tests {
         // 25 hours old — past the 24h replay window. The canonical
         // "stolen envelope from yesterday" scenario.
         let now = fixed_now();
-        let err = check_envelope_freshness(now, &ts(now, -(25 * 60 * 60)), MAX_AGE, GRACE)
-            .unwrap_err();
+        let err =
+            check_envelope_freshness(now, &ts(now, -(25 * 60 * 60)), MAX_AGE, GRACE).unwrap_err();
         assert!(err.to_string().contains("old"), "got: {err}");
         assert!(err.to_string().contains("replay rejected"));
     }
@@ -946,9 +956,8 @@ mod tests {
     fn rejects_envelope_one_second_past_max_age() {
         // Off-by-one regression test: max_age + 1 must reject.
         let now = fixed_now();
-        let err =
-            check_envelope_freshness(now, &ts(now, -(MAX_AGE as i64 + 1)), MAX_AGE, GRACE)
-                .unwrap_err();
+        let err = check_envelope_freshness(now, &ts(now, -(MAX_AGE as i64 + 1)), MAX_AGE, GRACE)
+            .unwrap_err();
         assert!(err.to_string().contains("old"));
     }
 
@@ -958,8 +967,8 @@ mod tests {
         // this passed silently (negative `age`, `if age > max_age`
         // false, `if age < -GRACE` branch absent). Must reject now.
         let now = fixed_now();
-        let err = check_envelope_freshness(now, &ts(now, 25 * 60 * 60), MAX_AGE, GRACE)
-            .unwrap_err();
+        let err =
+            check_envelope_freshness(now, &ts(now, 25 * 60 * 60), MAX_AGE, GRACE).unwrap_err();
         assert!(err.to_string().contains("future"), "got: {err}");
         assert!(err.to_string().contains("replay rejected"));
     }
@@ -968,8 +977,7 @@ mod tests {
     fn rejects_envelope_one_second_past_future_grace() {
         // Off-by-one regression test for the future-side boundary.
         let now = fixed_now();
-        let err = check_envelope_freshness(now, &ts(now, GRACE + 1), MAX_AGE, GRACE)
-            .unwrap_err();
+        let err = check_envelope_freshness(now, &ts(now, GRACE + 1), MAX_AGE, GRACE).unwrap_err();
         assert!(err.to_string().contains("future"));
     }
 
@@ -977,8 +985,8 @@ mod tests {
 
     #[test]
     fn rejects_unparseable_created_at() {
-        let err = check_envelope_freshness(fixed_now(), "not-a-timestamp", MAX_AGE, GRACE)
-            .unwrap_err();
+        let err =
+            check_envelope_freshness(fixed_now(), "not-a-timestamp", MAX_AGE, GRACE).unwrap_err();
         assert!(err.to_string().contains("unparseable"));
     }
 
@@ -1077,12 +1085,10 @@ mod tests {
         let canonical_bytes = std::fs::read(&path).unwrap();
 
         // 0o500 = read+execute, no write — `fs::write` to .tmp errors.
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500))
-            .unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
         let result = persist_identity(&path, &synthetic_identity("rotated"));
         // Restore so the TempDir drop can clean up.
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
-            .unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
 
         if result.is_ok() {
             // DAC bypass (running as root) or a filesystem that
@@ -1117,5 +1123,4 @@ mod tests {
             assert!(!tmp.exists(), "leftover .tmp after persist of {token:?}");
         }
     }
-
 }

@@ -7,7 +7,7 @@
 //! back. Server's view of the operation reaches `succeeded`.
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     OperationStatus, OperationView, SubmitOperationRequest, SubmitOperationResponse,
 };
@@ -40,11 +40,11 @@ impl TestServer {
             admin_token: Some(ADMIN_TOKEN.to_string()),
             policies: vec![],
             retention: iac_controlplane::retention::RetentionConfig::default(),
-        rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
+            rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
             maintenance_windows: vec![],
             recurring_maintenance_windows: vec![],
             webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-        tls: iac_controlplane::tls::TlsConfig::default(),
+            tls: iac_controlplane::tls::TlsConfig::default(),
             secrets: iac_controlplane::config::SecretsConfig::default(),
             retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
             modules: vec![],
@@ -56,8 +56,8 @@ impl TestServer {
         };
         let store = Store::connect(&cfg.database_url).await.unwrap();
         let signer = std::sync::Arc::new(
-    iac_controlplane::signing::ServerSigner::load_or_create(dir.path()).unwrap(),
-);
+            iac_controlplane::signing::ServerSigner::load_or_create(dir.path()).unwrap(),
+        );
         let state = AppState {
             store,
             live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -65,9 +65,13 @@ impl TestServer {
             )),
             config_path: None,
             signer,
-            rate_limiter: std::sync::Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit)),
-        webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+            rate_limiter: std::sync::Arc::new(
+                iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
+            ),
+            webhook_dispatcher: None,
+            maintenance_metrics: Arc::new(
+                iac_controlplane::maintenance::MaintenanceMetrics::default(),
+            ),
             secret_registry: None,
         };
         let app = iac_controlplane::server::router(state);
@@ -76,12 +80,20 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -153,14 +165,23 @@ async fn operator_submits_then_agent_applies_and_reports() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "submit failed: {}", resp.text().await.unwrap());
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "submit failed: {}",
+        resp.text().await.unwrap()
+    );
     let submit: SubmitOperationResponse = resp.json().await.unwrap();
     assert_eq!(submit.assignment_count, 1);
     assert!(submit.unrouted.is_empty());
 
     // Initial server status: pending or running.
     let resp = client
-        .get(format!("{}/v1/operations/{}", server.url(), submit.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            submit.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -182,7 +203,11 @@ async fn operator_submits_then_agent_applies_and_reports() {
 
     // Server view should now be succeeded with a result.
     let resp = client
-        .get(format!("{}/v1/operations/{}", server.url(), submit.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            submit.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -210,7 +235,10 @@ async fn submit_without_admin_token_unauthorized() {
         requested_by: "op".into(),
         source_commit: None,
         summary: None,
-        resources: vec![json!({"apiVersion":"iac.example/v1","kind":"file","metadata":{"name":"x"},"spec":{}})], canary: None,
+        resources: vec![
+            json!({"apiVersion":"iac.example/v1","kind":"file","metadata":{"name":"x"},"spec":{}}),
+        ],
+        canary: None,
     };
     let client = reqwest::Client::new();
     let resp = client
@@ -236,46 +264,51 @@ async fn submit_with_no_admin_configured_returns_400() {
         admin_token: None,
         policies: vec![],
         retention: iac_controlplane::retention::RetentionConfig::default(),
-    rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
-            maintenance_windows: vec![],
-            recurring_maintenance_windows: vec![],
-            webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-    tls: iac_controlplane::tls::TlsConfig::default(),
-            secrets: iac_controlplane::config::SecretsConfig::default(),
-            retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
-            modules: vec![],
-            agent_token_ttl_secs: None,
-            ssh_targets: vec![],
-            wal_checkpoint_interval_secs: 0,
-            shutdown_timeout_secs: 1,
-            trusted_proxies: vec![],
+        rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
+        maintenance_windows: vec![],
+        recurring_maintenance_windows: vec![],
+        webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
+        tls: iac_controlplane::tls::TlsConfig::default(),
+        secrets: iac_controlplane::config::SecretsConfig::default(),
+        retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
+        modules: vec![],
+        agent_token_ttl_secs: None,
+        ssh_targets: vec![],
+        wal_checkpoint_interval_secs: 0,
+        shutdown_timeout_secs: 1,
+        trusted_proxies: vec![],
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
-    iac_controlplane::signing::ServerSigner::load_or_create(dir.path()).unwrap(),
-);
-        let state = AppState {
-            store,
-            live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
-                iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
-            )),
-            config_path: None,
-            signer,
-            rate_limiter: std::sync::Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit)),
+        iac_controlplane::signing::ServerSigner::load_or_create(dir.path()).unwrap(),
+    );
+    let state = AppState {
+        store,
+        live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+            iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
+        )),
+        config_path: None,
+        signer,
+        rate_limiter: std::sync::Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+            &cfg.rate_limit,
+        )),
         webhook_dispatcher: None,
         maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
-            secret_registry: None,
-        };
+        secret_registry: None,
+    };
     let app = iac_controlplane::server::router(state);
     let listener = tokio::net::TcpListener::bind(cfg.bind).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
 
     let client = reqwest::Client::new();
@@ -337,7 +370,11 @@ async fn submit_with_unrouted_resources_lists_them() {
 
     // The op should be marked succeeded immediately (no work to do).
     let resp = client
-        .get(format!("{}/v1/operations/{}", server.url(), submit.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            submit.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -371,7 +408,8 @@ async fn host_selector_routes_to_named_agent() {
         requested_by: "op".into(),
         source_commit: None,
         summary: None,
-        resources: vec![resource], canary: None,
+        resources: vec![resource],
+        canary: None,
     };
     let client = reqwest::Client::new();
     let resp = client
@@ -394,7 +432,11 @@ async fn host_selector_routes_to_named_agent() {
     assert!(target.exists());
 
     let resp = client
-        .get(format!("{}/v1/operations/{}", server.url(), submit.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            submit.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -413,7 +455,12 @@ async fn host_selector_routes_to_named_agent() {
         .json::<Vec<iac_core::protocol::v1::AgentSummary>>()
         .await
         .unwrap();
-    let agent_a_id = agents.iter().find(|x| x.name == "host-A").unwrap().agent_id.clone();
+    let agent_a_id = agents
+        .iter()
+        .find(|x| x.name == "host-A")
+        .unwrap()
+        .agent_id
+        .clone();
     assert_eq!(a.agent_id, agent_a_id);
 
     server.shutdown().await;

@@ -24,12 +24,12 @@ pub use backend::{AptBackend, InstallStatus, MockPackageBackend, PackageBackend}
 pub use spec::{PackageSpec, PackageState};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -47,7 +47,9 @@ impl Default for PackageProvider {
 
 impl PackageProvider {
     pub fn new() -> Self {
-        Self { backend: Box::new(AptBackend) }
+        Self {
+            backend: Box::new(AptBackend),
+        }
     }
 
     pub fn with_backend(backend: Box<dyn PackageBackend>) -> Self {
@@ -56,7 +58,10 @@ impl PackageProvider {
 
     fn parse_spec(&self, resource: &Resource) -> Result<PackageSpec> {
         PackageSpec::from_value(&resource.spec).map_err(|e| {
-            Error::validation(resource.id().to_string(), format!("invalid package spec: {e}"))
+            Error::validation(
+                resource.id().to_string(),
+                format!("invalid package spec: {e}"),
+            )
         })
     }
 }

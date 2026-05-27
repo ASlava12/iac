@@ -130,9 +130,7 @@ impl InventoryFile {
         if let Some(lim) = limit
             && out.is_empty()
         {
-            anyhow::bail!(
-                "no host in group {group:?} matched --limit {lim:?}"
-            );
+            anyhow::bail!("no host in group {group:?} matched --limit {lim:?}");
         }
         Ok(out)
     }
@@ -153,8 +151,14 @@ impl InventoryFile {
             .clone()
             .or_else(|| self.defaults.identity_file.clone())
             .map(expand_tilde);
-        let remote_iac = h.remote_iac.clone().or_else(|| self.defaults.remote_iac.clone());
-        let label = h.label.clone().unwrap_or_else(|| format!("{user}@{}", h.host));
+        let remote_iac = h
+            .remote_iac
+            .clone()
+            .or_else(|| self.defaults.remote_iac.clone());
+        let label = h
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("{user}@{}", h.host));
         SshTarget {
             label,
             user,
@@ -289,9 +293,10 @@ fn glob_match_inner(pat: &[u8], text: &[u8]) -> bool {
 fn expand_tilde(path: PathBuf) -> PathBuf {
     let s = path.to_string_lossy();
     if let Some(rest) = s.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
     path
 }
 

@@ -1,11 +1,11 @@
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::error::{ApiError, ApiResult};
 use crate::identity::Role;
 use crate::server::AppState;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     routing::{get, post},
-    Json, Router,
 };
 use iac_core::protocol::v1::{
     DriftAcceptRequest, DriftBulkAcceptRequest, DriftBulkIgnoreRequest, DriftBulkResponse,
@@ -45,7 +45,10 @@ async fn list_drift(
     Query(filter): Query<DriftFilter>,
 ) -> ApiResult<Json<Vec<DriftSummary>>> {
     require_role(&state, &token, Role::Viewer).await?;
-    let rows = state.store.list_open_drift(filter.agent_id.as_deref()).await?;
+    let rows = state
+        .store
+        .list_open_drift(filter.agent_id.as_deref())
+        .await?;
     Ok(Json(rows))
 }
 

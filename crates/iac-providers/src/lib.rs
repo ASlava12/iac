@@ -2,10 +2,7 @@
 // Each provider is self-contained and registered via `register_builtins`.
 
 // Phase 7cz.16: tests-only exemption for unwrap/expect/panic.
-#![cfg_attr(
-    test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
-)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 #[macro_use]
 mod sha256_pin;

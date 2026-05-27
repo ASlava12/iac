@@ -189,13 +189,7 @@ impl FirewallBackend for NftablesBackend {
         Ok(())
     }
 
-    fn ensure_absent(
-        &self,
-        name: &str,
-        table: &str,
-        chain: &str,
-        family: Family,
-    ) -> Result<()> {
+    fn ensure_absent(&self, name: &str, table: &str, chain: &str, family: Family) -> Result<()> {
         // Find the handle by scanning `nft -a list table <fam> <table>`.
         // We could parse the structured output of `nft -j` (JSON), but
         // text-grep keeps the dep footprint small and the output is
@@ -217,7 +211,9 @@ impl FirewallBackend for NftablesBackend {
             if !line.contains(&needle) {
                 continue;
             }
-            let Some(handle) = parse_handle_annotation(line) else { continue; };
+            let Some(handle) = parse_handle_annotation(line) else {
+                continue;
+            };
             let del_argv = Self::build_delete_handle_argv(family, table, chain, handle);
             let del_argv_strs: Vec<&str> = del_argv.iter().map(String::as_str).collect();
             let (ok, _stdout, stderr) = Self::run(&del_argv_strs)?;
@@ -351,7 +347,9 @@ mod tests {
         let argv = NftablesBackend::build_delete_handle_argv(Family::Ipv4, "filter", "input", 42);
         assert_eq!(
             argv,
-            vec!["nft", "delete", "rule", "ip", "filter", "input", "handle", "42"]
+            vec![
+                "nft", "delete", "rule", "ip", "filter", "input", "handle", "42"
+            ]
         );
     }
 

@@ -10,13 +10,13 @@
 use super::backend::DnsBackend;
 use super::spec::{DnsRecordSpec, RecordState};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 
 pub fn observe(backend: &dyn DnsBackend, spec: &DnsRecordSpec) -> Result<ObservedState> {
@@ -175,30 +175,28 @@ pub fn pre_apply(backend: &dyn DnsBackend, spec: &DnsRecordSpec) -> Result<Json>
     })
 }
 
-pub fn apply(
-    backend: &dyn DnsBackend,
-    spec: &DnsRecordSpec,
-    step: &Step,
-) -> Result<StepResult> {
+pub fn apply(backend: &dyn DnsBackend, spec: &DnsRecordSpec, step: &Step) -> Result<StepResult> {
     let fqdn = spec.fqdn();
     match super::DnsAction::parse(&step.action)? {
         super::DnsAction::Create => {
-            let value = spec.value.as_deref().ok_or_else(|| {
-                Error::provider("dns.record", "dns-create requires value")
-            })?;
-            let id =
-                backend.create_record(&spec.zone, &fqdn, spec.record_type, value, spec.ttl)?;
+            let value = spec
+                .value
+                .as_deref()
+                .ok_or_else(|| Error::provider("dns.record", "dns-create requires value"))?;
+            let id = backend.create_record(&spec.zone, &fqdn, spec.record_type, value, spec.ttl)?;
             Ok(StepResult::ok(format!(
                 "created {} record {fqdn} (id={id})",
                 spec.record_type.as_str()
             )))
         }
         super::DnsAction::Update => {
-            let value = spec.value.as_deref().ok_or_else(|| {
-                Error::provider("dns.record", "dns-update requires value")
-            })?;
-            let existing =
-                backend.find_record(&spec.zone, &fqdn, spec.record_type)?.ok_or_else(|| {
+            let value = spec
+                .value
+                .as_deref()
+                .ok_or_else(|| Error::provider("dns.record", "dns-update requires value"))?;
+            let existing = backend
+                .find_record(&spec.zone, &fqdn, spec.record_type)?
+                .ok_or_else(|| {
                     Error::provider(
                         "dns.record",
                         format!("dns-update: record {fqdn} unexpectedly missing"),
@@ -218,8 +216,9 @@ pub fn apply(
             )))
         }
         super::DnsAction::Delete => {
-            let existing =
-                backend.find_record(&spec.zone, &fqdn, spec.record_type)?.ok_or_else(|| {
+            let existing = backend
+                .find_record(&spec.zone, &fqdn, spec.record_type)?
+                .ok_or_else(|| {
                     Error::provider(
                         "dns.record",
                         format!("dns-delete: record {fqdn} already gone"),
@@ -234,11 +233,7 @@ pub fn apply(
     }
 }
 
-pub fn rollback(
-    backend: &dyn DnsBackend,
-    spec: &DnsRecordSpec,
-    checkpoint: &Json,
-) -> Result<()> {
+pub fn rollback(backend: &dyn DnsBackend, spec: &DnsRecordSpec, checkpoint: &Json) -> Result<()> {
     let prior_present = checkpoint
         .get("prior_present")
         .and_then(|v| v.as_bool())
@@ -255,9 +250,7 @@ pub fn rollback(
             .unwrap_or(300) as u32;
         // The record may or may not exist now (depending on what was
         // applied). Try update; on miss, fall back to create.
-        if let Some(existing) =
-            backend.find_record(&spec.zone, &fqdn, spec.record_type)?
-        {
+        if let Some(existing) = backend.find_record(&spec.zone, &fqdn, spec.record_type)? {
             backend.update_record(
                 &spec.zone,
                 &existing.id,
@@ -273,9 +266,7 @@ pub fn rollback(
         }
     } else {
         // Prior absent; remove the record we created.
-        if let Some(existing) =
-            backend.find_record(&spec.zone, &fqdn, spec.record_type)?
-        {
+        if let Some(existing) = backend.find_record(&spec.zone, &fqdn, spec.record_type)? {
             backend.delete_record(&spec.zone, &existing.id)?;
         }
         Ok(())
@@ -301,9 +292,7 @@ provider: cloudflare
 cloudflare:
   api_token: t
 "#,
-            value_line = value
-                .map(|v| format!("value: \"{v}\""))
-                .unwrap_or_default(),
+            value_line = value.map(|v| format!("value: \"{v}\"")).unwrap_or_default(),
         );
         let v: YamlValue = serde_yaml_ng::from_str(&body).unwrap();
         DnsRecordSpec::from_value(&v).unwrap()
@@ -425,7 +414,11 @@ cloudflare:
         let step = Step::new("dns-update", "update", Json::Null);
         apply(&backend, &spec, &step).unwrap();
         let calls = backend.calls();
-        assert!(calls.iter().any(|c| c.starts_with("update zone=example.com id=id1")));
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("update zone=example.com id=id1"))
+        );
     }
 
     #[test]
@@ -445,7 +438,11 @@ cloudflare:
         let step = Step::new("dns-delete", "delete", Json::Null);
         apply(&backend, &spec, &step).unwrap();
         let calls = backend.calls();
-        assert!(calls.iter().any(|c| c.starts_with("delete zone=example.com id=id1")));
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("delete zone=example.com id=id1"))
+        );
     }
 
     #[test]
@@ -494,9 +491,11 @@ cloudflare:
         let spec = cf_spec("present", Some("9.9.9.9"), 60);
         let cp = json!({"prior_present": false});
         rollback(&backend, &spec, &cp).unwrap();
-        assert!(backend
-            .find_record("example.com", "app.example.com", RecordType::A)
-            .unwrap()
-            .is_none());
+        assert!(
+            backend
+                .find_record("example.com", "app.example.com", RecordType::A)
+                .unwrap()
+                .is_none()
+        );
     }
 }

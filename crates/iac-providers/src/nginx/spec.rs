@@ -16,7 +16,6 @@ pub enum NginxState {
     Absent,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NginxVhostSpec {
@@ -280,10 +279,15 @@ fn validate_server_name(name: &str) -> Result<(), String> {
     // Allow standard host chars + nginx wildcard '*' and regex prefix '~'.
     let bad = name.chars().any(|c| {
         !(c.is_ascii_alphanumeric()
-            || matches!(c, '-' | '.' | '_' | '*' | '~' | '^' | '$' | '/' | ':' | '+' | '?' | '|'))
+            || matches!(
+                c,
+                '-' | '.' | '_' | '*' | '~' | '^' | '$' | '/' | ':' | '+' | '?' | '|'
+            ))
     });
     if bad {
-        return Err(format!("server_name {name:?} contains disallowed characters"));
+        return Err(format!(
+            "server_name {name:?} contains disallowed characters"
+        ));
     }
     if name.contains(';') {
         return Err(format!("server_name {name:?} contains ';'"));
@@ -321,9 +325,15 @@ fn validate_size(value: &str, field: &str) -> Result<(), String> {
     if suffix.is_ascii_digit() {
         // Plain number is allowed (bytes).
     } else if !allowed_suffixes.contains(&suffix) {
-        return Err(format!("{field}: suffix must be one of {allowed_suffixes:?}"));
+        return Err(format!(
+            "{field}: suffix must be one of {allowed_suffixes:?}"
+        ));
     }
-    let digits = if suffix.is_ascii_digit() { value } else { &value[..value.len() - 1] };
+    let digits = if suffix.is_ascii_digit() {
+        value
+    } else {
+        &value[..value.len() - 1]
+    };
     if digits.parse::<u64>().is_err() {
         return Err(format!("{field}: numeric part {digits:?} is not a u64"));
     }
@@ -342,7 +352,11 @@ fn validate_duration(value: &str, field: &str) -> Result<(), String> {
     } else if !allowed.contains(&suffix) {
         return Err(format!("{field}: suffix must be one of {allowed:?}"));
     }
-    let digits = if suffix.is_ascii_digit() { value } else { &value[..value.len() - 1] };
+    let digits = if suffix.is_ascii_digit() {
+        value
+    } else {
+        &value[..value.len() - 1]
+    };
     if digits.parse::<u64>().is_err() {
         return Err(format!("{field}: numeric part {digits:?} is not a u64"));
     }
@@ -409,7 +423,8 @@ tls:
 
     #[test]
     fn rejects_relative_config_path() {
-        let err = parse("config_path: rel.conf\nserver_names: [a]\nupstream: http://x").unwrap_err();
+        let err =
+            parse("config_path: rel.conf\nserver_names: [a]\nupstream: http://x").unwrap_err();
         assert!(err.contains("absolute"));
     }
 
@@ -465,15 +480,17 @@ proxy_read_timeout: 60s
         .unwrap();
         assert_eq!(ok.client_max_body_size.as_deref(), Some("10M"));
 
-        assert!(parse(
-            r#"
+        assert!(
+            parse(
+                r#"
 config_path: /etc/nginx/conf.d/x.conf
 server_names: [a]
 upstream: http://127.0.0.1
 client_max_body_size: 10X
 "#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -653,7 +670,10 @@ extra_locations:
 "#,
         )
         .unwrap_err();
-        assert!(err.contains("http://") || err.contains("upstream"), "got: {err}");
+        assert!(
+            err.contains("http://") || err.contains("upstream"),
+            "got: {err}"
+        );
     }
 
     #[test]

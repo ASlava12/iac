@@ -9,7 +9,7 @@
 use iac_controlplane::identity::Role;
 use iac_controlplane::maintenance::MaintenanceWindow;
 use iac_controlplane::store::CreateUser;
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     AuditEvent, LoginRequest, LoginResponse, RegisterRequest, SubmitOperationRequest,
 };
@@ -46,7 +46,7 @@ impl TestServer {
             maintenance_windows: windows,
             recurring_maintenance_windows: vec![],
             webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-        tls: iac_controlplane::tls::TlsConfig::default(),
+            tls: iac_controlplane::tls::TlsConfig::default(),
             secrets: iac_controlplane::config::SecretsConfig::default(),
             retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
             modules: vec![],
@@ -67,11 +67,13 @@ impl TestServer {
             )),
             config_path: None,
             signer,
-            rate_limiter: Arc::new(
-                iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
+            rate_limiter: Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+                &cfg.rate_limit,
+            )),
+            webhook_dispatcher: None,
+            maintenance_metrics: Arc::new(
+                iac_controlplane::maintenance::MaintenanceMetrics::default(),
             ),
-        webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
             secret_registry: None,
         };
         let app = iac_controlplane::server::router(state);
@@ -80,12 +82,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, store, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            store,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -94,7 +105,11 @@ impl TestServer {
 
     async fn make_user(&self, name: &str, password: &str, roles: Vec<Role>) {
         self.store
-            .create_user(CreateUser { username: name, password, roles })
+            .create_user(CreateUser {
+                username: name,
+                password,
+                roles,
+            })
             .await
             .unwrap();
     }
@@ -102,7 +117,10 @@ impl TestServer {
     async fn login(&self, name: &str, password: &str) -> LoginResponse {
         reqwest::Client::new()
             .post(format!("{}/v1/auth/login", self.url()))
-            .json(&LoginRequest { username: name.into(), password: password.into() })
+            .json(&LoginRequest {
+                username: name.into(),
+                password: password.into(),
+            })
             .send()
             .await
             .unwrap()
@@ -152,7 +170,8 @@ impl TestServer {
                         "mode": "0644",
                         "content": "x\n",
                     }
-                })], canary: None,
+                })],
+                canary: None,
             });
         if bypass {
             req = req.header("x-iac-maintenance-bypass", "yes");
@@ -365,7 +384,8 @@ async fn empty_bypass_header_is_treated_as_not_set() {
                 "kind": "file",
                 "metadata": { "name": "x", "environment": "prod" },
                 "spec": { "path": "/tmp/x.txt", "mode": "0644", "content": "x\n" }
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -395,7 +415,8 @@ async fn maintenance_runs_after_auth() {
                 "kind": "file",
                 "metadata": { "name": "x", "environment": "prod" },
                 "spec": { "path": "/tmp/x.txt", "mode": "0644", "content": "x" }
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await

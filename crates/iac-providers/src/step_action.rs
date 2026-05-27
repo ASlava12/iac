@@ -78,8 +78,14 @@ mod tests {
     fn round_trip() {
         assert_eq!(SmokeAction::Foo.as_str(), "smoke.foo");
         assert_eq!(SmokeAction::Bar.as_str(), "smoke.bar");
-        assert!(matches!(SmokeAction::parse("smoke.foo"), Ok(SmokeAction::Foo)));
-        assert!(matches!(SmokeAction::parse("smoke.bar"), Ok(SmokeAction::Bar)));
+        assert!(matches!(
+            SmokeAction::parse("smoke.foo"),
+            Ok(SmokeAction::Foo)
+        ));
+        assert!(matches!(
+            SmokeAction::parse("smoke.bar"),
+            Ok(SmokeAction::Bar)
+        ));
         assert!(SmokeAction::parse("smoke.unknown").is_err());
         assert_eq!(format!("{}", SmokeAction::Foo), "smoke.foo");
     }

@@ -19,13 +19,22 @@ impl ResourceId {
         environment: impl Into<String>,
         name: impl Into<String>,
     ) -> Self {
-        Self { kind: kind.into(), environment: environment.into(), name: name.into() }
+        Self {
+            kind: kind.into(),
+            environment: environment.into(),
+            name: name.into(),
+        }
     }
 
     /// Filesystem-safe form for state/checkpoint paths.
     /// Replaces `/` with `__` so it can be used as a single path segment.
     pub fn fs_key(&self) -> String {
-        format!("{}__{}__{}", sanitize(&self.kind), sanitize(&self.environment), sanitize(&self.name))
+        format!(
+            "{}__{}__{}",
+            sanitize(&self.kind),
+            sanitize(&self.environment),
+            sanitize(&self.name)
+        )
     }
 
     /// Parse a `kind/environment/name` string back into a `ResourceId`.
@@ -44,7 +53,13 @@ impl ResourceId {
 
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

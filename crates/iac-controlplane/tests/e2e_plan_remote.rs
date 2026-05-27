@@ -10,7 +10,7 @@
 use iac_controlplane::identity::Role;
 use iac_controlplane::policy::{Policy, PolicyMatch};
 use iac_controlplane::store::CreateUser;
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     LoginRequest, LoginResponse, OperationDesiredState, RegisterRequest, RegisterResponse,
     SubmitOperationRequest, SubmitOperationResponse,
@@ -44,11 +44,11 @@ impl TestServer {
             admin_token: Some(ADMIN_TOKEN.to_string()),
             policies,
             retention: iac_controlplane::retention::RetentionConfig::default(),
-        rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
+            rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
             maintenance_windows: vec![],
             recurring_maintenance_windows: vec![],
             webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-        tls: iac_controlplane::tls::TlsConfig::default(),
+            tls: iac_controlplane::tls::TlsConfig::default(),
             secrets: iac_controlplane::config::SecretsConfig::default(),
             retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
             modules: vec![],
@@ -69,9 +69,13 @@ impl TestServer {
             )),
             config_path: None,
             signer,
-            rate_limiter: std::sync::Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit)),
-        webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+            rate_limiter: std::sync::Arc::new(
+                iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
+            ),
+            webhook_dispatcher: None,
+            maintenance_metrics: Arc::new(
+                iac_controlplane::maintenance::MaintenanceMetrics::default(),
+            ),
             secret_registry: None,
         };
         let app = iac_controlplane::server::router(state);
@@ -80,12 +84,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, store, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            store,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -116,7 +129,11 @@ impl TestServer {
 
     async fn make_user(&self, name: &str, password: &str, roles: Vec<Role>) {
         self.store
-            .create_user(CreateUser { username: name, password, roles })
+            .create_user(CreateUser {
+                username: name,
+                password,
+                roles,
+            })
             .await
             .unwrap();
     }
@@ -124,7 +141,10 @@ impl TestServer {
     async fn login(&self, name: &str, password: &str) -> LoginResponse {
         reqwest::Client::new()
             .post(format!("{}/v1/auth/login", self.url()))
-            .json(&LoginRequest { username: name.into(), password: password.into() })
+            .json(&LoginRequest {
+                username: name.into(),
+                password: password.into(),
+            })
             .send()
             .await
             .unwrap()
@@ -175,7 +195,8 @@ async fn submit_two_files(server: &TestServer, env: &str) -> SubmitOperationResp
                     "content": "beta\n",
                 }
             }),
-        ], canary: None,
+        ],
+        canary: None,
     };
     reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))

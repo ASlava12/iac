@@ -42,14 +42,16 @@ mod tests {
     #[test]
     fn renders_minimal() {
         let out = render(&base());
-        let expected = "# Managed by iac. Do not edit by hand.\n0 3 * * *\troot\t/usr/local/bin/backup.sh\n";
+        let expected =
+            "# Managed by iac. Do not edit by hand.\n0 3 * * *\troot\t/usr/local/bin/backup.sh\n";
         assert_eq!(out, expected);
     }
 
     #[test]
     fn renders_with_env() {
         let mut s = base();
-        s.env.insert("PATH".into(), "/usr/local/bin:/usr/bin".into());
+        s.env
+            .insert("PATH".into(), "/usr/local/bin:/usr/bin".into());
         s.env.insert("MAILTO".into(), "ops@example.com".into());
         let out = render(&s);
         assert!(out.contains("PATH=/usr/local/bin:/usr/bin\n"));

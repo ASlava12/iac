@@ -9,7 +9,7 @@
 //! layer cancels all subsequent layers — the rollout stops at the
 //! boundary instead of cascading damage.
 
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     AssignmentResultRequest, AssignmentResultStatus, RegisterRequest, SubmitOperationRequest,
     SubmitOperationResponse,
@@ -83,12 +83,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, store, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            store,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -136,7 +145,8 @@ impl TestServer {
                 requested_by: "alice".into(),
                 source_commit: None,
                 summary: None,
-                resources, canary: None,
+                resources,
+                canary: None,
             })
             .send()
             .await

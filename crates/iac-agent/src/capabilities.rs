@@ -209,14 +209,15 @@ impl PathRules {
         // Deny takes precedence so an `/etc/shadow` deny can't be bypassed
         // by an over-broad `/etc/**` allow.
         if let Some(deny) = &self.deny
-            && deny.is_match(path) {
-                return Err(DenyReason {
-                    resource_id: resource_id.into(),
-                    kind: kind.into(),
-                    identifier: path.into(),
-                    reason: "matched deny pattern".into(),
-                });
-            }
+            && deny.is_match(path)
+        {
+            return Err(DenyReason {
+                resource_id: resource_id.into(),
+                kind: kind.into(),
+                identifier: path.into(),
+                reason: "matched deny pattern".into(),
+            });
+        }
         if let Some(allow) = &self.allow {
             if allow.is_match(path) {
                 Ok(())
@@ -296,8 +297,7 @@ fn build_set(patterns: &[String], section: &str) -> Result<Option<GlobSet>> {
     }
     let mut builder = GlobSetBuilder::new();
     for p in patterns {
-        let glob = Glob::new(p)
-            .with_context(|| format!("invalid glob in {section}: {p:?}"))?;
+        let glob = Glob::new(p).with_context(|| format!("invalid glob in {section}: {p:?}"))?;
         builder.add(glob);
     }
     let set = builder
@@ -309,7 +309,7 @@ fn build_set(patterns: &[String], section: &str) -> Result<Option<GlobSet>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+    use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
     use indexmap::IndexMap;
     use serde_yaml_ng::{Mapping, Value as YamlValue};
     use tempfile::TempDir;
@@ -375,7 +375,10 @@ mod tests {
         let mut m = Mapping::new();
         m.insert("name".into(), YamlValue::String(name.into()));
         m.insert("schedule".into(), YamlValue::String("0 3 * * *".into()));
-        m.insert("command".into(), YamlValue::String("/usr/local/bin/x".into()));
+        m.insert(
+            "command".into(),
+            YamlValue::String("/usr/local/bin/x".into()),
+        );
         YamlValue::Mapping(m)
     }
 
@@ -386,13 +389,17 @@ mod tests {
             "server_names".into(),
             YamlValue::Sequence(vec![YamlValue::String("app.example.com".into())]),
         );
-        m.insert("upstream".into(), YamlValue::String("http://127.0.0.1:8080".into()));
+        m.insert(
+            "upstream".into(),
+            YamlValue::String("http://127.0.0.1:8080".into()),
+        );
         YamlValue::Mapping(m)
     }
 
     #[test]
     fn missing_file_means_unrestricted() {
-        let opt = Capabilities::load(&std::path::PathBuf::from("/tmp/does-not-exist.yaml")).unwrap();
+        let opt =
+            Capabilities::load(&std::path::PathBuf::from("/tmp/does-not-exist.yaml")).unwrap();
         assert!(opt.is_none());
     }
 
@@ -417,10 +424,25 @@ files:
 "#,
         );
         let caps = Capabilities::load(&path).unwrap().unwrap();
-        assert!(caps.check(&registry, &mk_resource("file", "ok", file_spec("/etc/nginx/conf.d/app.conf"))).is_ok());
-        assert!(caps.check(&registry, &mk_resource("file", "ok", file_spec("/etc/cron.d/backup"))).is_ok());
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("file", "ok", file_spec("/etc/nginx/conf.d/app.conf"))
+            )
+            .is_ok()
+        );
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("file", "ok", file_spec("/etc/cron.d/backup"))
+            )
+            .is_ok()
+        );
         let denial = caps
-            .check(&registry, &mk_resource("file", "denied", file_spec("/etc/passwd")))
+            .check(
+                &registry,
+                &mk_resource("file", "denied", file_spec("/etc/passwd")),
+            )
             .unwrap_err();
         assert_eq!(denial.kind, "file");
         assert_eq!(denial.identifier, "/etc/passwd");
@@ -481,13 +503,25 @@ files:
         );
         let caps = Capabilities::load(&path).unwrap().unwrap();
         // Allow is broad, deny carves out the dangerous bits.
-        assert!(caps.check(&registry, &mk_resource("file", "ok", file_spec("/etc/nginx/x"))).is_ok());
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("file", "ok", file_spec("/etc/nginx/x"))
+            )
+            .is_ok()
+        );
         let denial = caps
-            .check(&registry, &mk_resource("file", "shadow", file_spec("/etc/shadow")))
+            .check(
+                &registry,
+                &mk_resource("file", "shadow", file_spec("/etc/shadow")),
+            )
             .unwrap_err();
         assert!(denial.reason.contains("deny"));
         let denial = caps
-            .check(&registry, &mk_resource("file", "ssh", file_spec("/root/.ssh/authorized_keys")))
+            .check(
+                &registry,
+                &mk_resource("file", "ssh", file_spec("/root/.ssh/authorized_keys")),
+            )
             .unwrap_err();
         assert!(denial.reason.contains("deny"));
     }
@@ -527,10 +561,25 @@ systemd:
         let registry = registry();
         let (_dir, path) = write_caps("docker:\n  allow: [\"web-*\", \"api\"]\n");
         let caps = Capabilities::load(&path).unwrap().unwrap();
-        assert!(caps.check(&registry, &mk_resource("docker.container", "x", docker_spec("web-prod"))).is_ok());
-        assert!(caps.check(&registry, &mk_resource("docker.container", "x", docker_spec("api"))).is_ok());
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("docker.container", "x", docker_spec("web-prod"))
+            )
+            .is_ok()
+        );
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("docker.container", "x", docker_spec("api"))
+            )
+            .is_ok()
+        );
         let denial = caps
-            .check(&registry, &mk_resource("docker.container", "x", docker_spec("worker")))
+            .check(
+                &registry,
+                &mk_resource("docker.container", "x", docker_spec("worker")),
+            )
             .unwrap_err();
         assert_eq!(denial.identifier, "worker");
     }
@@ -547,10 +596,31 @@ cron:
 "#,
         );
         let caps = Capabilities::load(&path).unwrap().unwrap();
-        assert!(caps.check(&registry, &mk_resource("package", "x", package_spec("nginx"))).is_ok());
-        assert!(caps.check(&registry, &mk_resource("package", "x", package_spec("vim"))).is_err());
-        assert!(caps.check(&registry, &mk_resource("cron.job", "x", cron_spec("backup-db"))).is_ok());
-        assert!(caps.check(&registry, &mk_resource("cron.job", "x", cron_spec("evil-script"))).is_err());
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("package", "x", package_spec("nginx"))
+            )
+            .is_ok()
+        );
+        assert!(
+            caps.check(&registry, &mk_resource("package", "x", package_spec("vim")))
+                .is_err()
+        );
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("cron.job", "x", cron_spec("backup-db"))
+            )
+            .is_ok()
+        );
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("cron.job", "x", cron_spec("evil-script"))
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -565,7 +635,11 @@ nginx_vhost:
         );
         let caps = Capabilities::load(&path).unwrap().unwrap();
 
-        let r = mk_resource("nginx.vhost", "app", nginx_spec("/etc/nginx/conf.d/app.conf"));
+        let r = mk_resource(
+            "nginx.vhost",
+            "app",
+            nginx_spec("/etc/nginx/conf.d/app.conf"),
+        );
         assert!(caps.check(&registry, &r).is_ok());
 
         let r = mk_resource(
@@ -582,9 +656,8 @@ nginx_vhost:
         // test exercising the Allow branch, the operator has to spell
         // it out explicitly.
         let registry = registry();
-        let (_dir, path) = write_caps(
-            "default_kind_policy: allow\nfiles:\n  allow: [\"/never\"]\n",
-        );
+        let (_dir, path) =
+            write_caps("default_kind_policy: allow\nfiles:\n  allow: [\"/never\"]\n");
         let caps = Capabilities::load(&path).unwrap().unwrap();
         let r = mk_resource("totally.new.kind", "x", YamlValue::Null);
         assert!(caps.check(&registry, &r).is_ok());
@@ -598,7 +671,10 @@ nginx_vhost:
         let (_dir, path) = write_caps("files:\n  allow: [\"/etc/**\"]\n");
         let caps = Capabilities::load(&path).unwrap().unwrap();
         let denial = caps
-            .check(&registry, &mk_resource("totally.new.kind", "x", YamlValue::Null))
+            .check(
+                &registry,
+                &mk_resource("totally.new.kind", "x", YamlValue::Null),
+            )
             .unwrap_err();
         assert!(denial.reason.contains("default_kind_policy=deny"));
     }
@@ -615,10 +691,19 @@ files:
         );
         let caps = Capabilities::load(&path).unwrap().unwrap();
         // Known kind with matching rule → allowed.
-        assert!(caps.check(&registry, &mk_resource("file", "ok", file_spec("/etc/nginx/x"))).is_ok());
+        assert!(
+            caps.check(
+                &registry,
+                &mk_resource("file", "ok", file_spec("/etc/nginx/x"))
+            )
+            .is_ok()
+        );
         // Unknown kind → denied with explicit reason.
         let denial = caps
-            .check(&registry, &mk_resource("totally.new.kind", "x", YamlValue::Null))
+            .check(
+                &registry,
+                &mk_resource("totally.new.kind", "x", YamlValue::Null),
+            )
             .unwrap_err();
         assert_eq!(denial.kind, "totally.new.kind");
         assert!(denial.reason.contains("default_kind_policy=deny"));
@@ -647,6 +732,8 @@ files:
     fn invalid_glob_fails_to_load() {
         let (_dir, path) = write_caps("files:\n  allow: [\"[bad\"]\n");
         let err = Capabilities::load(&path).unwrap_err();
-        assert!(err.to_string().contains("invalid glob") || err.to_string().contains("files.allow"));
+        assert!(
+            err.to_string().contains("invalid glob") || err.to_string().contains("files.allow")
+        );
     }
 }

@@ -150,7 +150,11 @@ pub fn run_with_timeout(
                 if let Some(s) = child.stderr.as_mut() {
                     s.read_to_end(&mut stderr).ok();
                 }
-                return Ok(Output { status, stdout, stderr });
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
             }
             Ok(None) => {
                 if started.elapsed() >= timeout {
@@ -231,23 +235,15 @@ mod tests {
 
     #[test]
     fn pipes_stdin_to_child() {
-        let out = run_with_timeout(
-            cmd("/usr/bin/wc", &["-c"]),
-            b"abcd",
-            Duration::from_secs(2),
-        )
-        .unwrap();
+        let out =
+            run_with_timeout(cmd("/usr/bin/wc", &["-c"]), b"abcd", Duration::from_secs(2)).unwrap();
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "4");
     }
 
     #[test]
     fn timeout_kills_runaway() {
-        let result = run_with_timeout(
-            cmd("/bin/sleep", &["10"]),
-            b"",
-            Duration::from_millis(200),
-        );
+        let result = run_with_timeout(cmd("/bin/sleep", &["10"]), b"", Duration::from_millis(200));
         match result {
             Err(SubprocessError::Timeout { elapsed, .. }) => {
                 assert!(
@@ -265,7 +261,9 @@ mod tests {
         // when we try to write. The helper must NOT surface that
         // as an error; the child exited 0 and we should see it.
         let mut c = Command::new("/bin/true");
-        c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let out = run_with_timeout(c, &vec![0u8; 1024], Duration::from_secs(2)).unwrap();
         assert!(out.status.success());
     }

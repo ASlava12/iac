@@ -87,9 +87,8 @@ impl WasmRuntime {
         // wasmtime 26 refuses to disable SIMD without also disabling
         // relaxed-SIMD (it's a coupled pair), and CRUD-shaped plugins
         // aren't a profitable target for SIMD-shaped attacks anyway.
-        let engine = Engine::new(&config).map_err(|e| {
-            Error::provider(&spec.kind, format!("wasmtime engine init: {e}"))
-        })?;
+        let engine = Engine::new(&config)
+            .map_err(|e| Error::provider(&spec.kind, format!("wasmtime engine init: {e}")))?;
         let bytes = std::fs::read(&spec.module).map_err(|e| {
             Error::provider(
                 &spec.kind,
@@ -101,9 +100,8 @@ impl WasmRuntime {
         // gate that catches it — wasmtime would happily compile a
         // malicious-but-well-formed module otherwise.
         if let Some(expected) = spec.module_sha256.as_deref() {
-            super::spec::verify_sha256(&bytes, expected, "module").map_err(|e| {
-                Error::provider(&spec.kind, e)
-            })?;
+            super::spec::verify_sha256(&bytes, expected, "module")
+                .map_err(|e| Error::provider(&spec.kind, e))?;
         }
         let module = Module::new(&engine, &bytes).map_err(|e| {
             Error::provider(
@@ -126,17 +124,14 @@ impl WasmRuntime {
     pub fn from_bytes(spec: WasmProviderSpec, bytes: &[u8]) -> Result<Self> {
         let mut config = Config::new();
         config.consume_fuel(true);
-        let engine = Engine::new(&config).map_err(|e| {
-            Error::provider(&spec.kind, format!("wasmtime engine init: {e}"))
-        })?;
+        let engine = Engine::new(&config)
+            .map_err(|e| Error::provider(&spec.kind, format!("wasmtime engine init: {e}")))?;
         if let Some(expected) = spec.module_sha256.as_deref() {
-            super::spec::verify_sha256(bytes, expected, "module").map_err(|e| {
-                Error::provider(&spec.kind, e)
-            })?;
+            super::spec::verify_sha256(bytes, expected, "module")
+                .map_err(|e| Error::provider(&spec.kind, e))?;
         }
-        let module = Module::new(&engine, bytes).map_err(|e| {
-            Error::provider(&spec.kind, format!("compile module: {e}"))
-        })?;
+        let module = Module::new(&engine, bytes)
+            .map_err(|e| Error::provider(&spec.kind, format!("compile module: {e}")))?;
         Ok(Self {
             spec,
             engine,
@@ -158,8 +153,7 @@ impl WasmRuntime {
             &self.engine,
             CallState {
                 limiter: MemoryLimiter {
-                    max_bytes: usize::try_from(self.spec.max_memory_bytes)
-                        .unwrap_or(usize::MAX),
+                    max_bytes: usize::try_from(self.spec.max_memory_bytes).unwrap_or(usize::MAX),
                 },
             },
         );
@@ -192,9 +186,7 @@ impl WasmRuntime {
                     }
                 },
             )
-            .map_err(|e| {
-                Error::provider(&self.spec.kind, format!("link iac.log: {e}"))
-            })?;
+            .map_err(|e| Error::provider(&self.spec.kind, format!("link iac.log: {e}")))?;
         linker
             .instantiate(&mut *store, &self.module)
             .map_err(|e| Error::provider(&self.spec.kind, format!("instantiate: {e}")))
@@ -211,9 +203,7 @@ impl WasmRuntime {
         let instance = self.instantiate(&mut store)?;
         let func = instance
             .get_typed_func::<(), i64>(&mut store, "iac_kind")
-            .map_err(|e| {
-                Error::provider(&self.spec.kind, format!("missing iac_kind: {e}"))
-            })?;
+            .map_err(|e| Error::provider(&self.spec.kind, format!("missing iac_kind: {e}")))?;
         let packed = func
             .call(&mut store, ())
             .map_err(|e| Error::provider(&self.spec.kind, format!("iac_kind: {e}")))?;
@@ -239,8 +229,7 @@ impl WasmRuntime {
     pub fn read_methods(&self) -> Result<Vec<String>> {
         let mut store = self.fresh_store();
         let instance = self.instantiate(&mut store)?;
-        let Ok(func) = instance.get_typed_func::<(), i64>(&mut store, "iac_methods")
-        else {
+        let Ok(func) = instance.get_typed_func::<(), i64>(&mut store, "iac_methods") else {
             return Ok(Vec::new());
         };
         let packed = func
@@ -253,7 +242,10 @@ impl WasmRuntime {
         let mut caller = StoreCaller(&mut store);
         let s = read_string_from_instance(&mut caller, &instance, ptr, len)?;
         serde_json::from_str(&s).map_err(|e| {
-            Error::provider(&self.spec.kind, format!("iac_methods: bad json: {e}: {s:?}"))
+            Error::provider(
+                &self.spec.kind,
+                format!("iac_methods: bad json: {e}: {s:?}"),
+            )
         })
     }
 
@@ -265,40 +257,24 @@ impl WasmRuntime {
         let instance = self.instantiate(&mut store)?;
         let alloc = instance
             .get_typed_func::<i32, i32>(&mut store, "iac_alloc")
-            .map_err(|e| {
-                Error::provider(&self.spec.kind, format!("missing iac_alloc: {e}"))
-            })?;
+            .map_err(|e| Error::provider(&self.spec.kind, format!("missing iac_alloc: {e}")))?;
         let dealloc = instance
             .get_typed_func::<(i32, i32), ()>(&mut store, "iac_dealloc")
-            .map_err(|e| {
-                Error::provider(&self.spec.kind, format!("missing iac_dealloc: {e}"))
-            })?;
+            .map_err(|e| Error::provider(&self.spec.kind, format!("missing iac_dealloc: {e}")))?;
         let target = instance
             .get_typed_func::<(i32, i32), i64>(&mut store, &export_name)
-            .map_err(|e| {
-                Error::provider(
-                    &self.spec.kind,
-                    format!("missing {export_name}: {e}"),
-                )
-            })?;
+            .map_err(|e| Error::provider(&self.spec.kind, format!("missing {export_name}: {e}")))?;
 
-        let in_len = i32::try_from(input.len()).map_err(|_| {
-            Error::provider(&self.spec.kind, "input larger than i32::MAX")
-        })?;
-        let in_ptr = alloc.call(&mut store, in_len).map_err(|e| {
-            Error::provider(
-                &self.spec.kind,
-                format!("iac_alloc({in_len}): {e}"),
-            )
-        })?;
+        let in_len = i32::try_from(input.len())
+            .map_err(|_| Error::provider(&self.spec.kind, "input larger than i32::MAX"))?;
+        let in_ptr = alloc
+            .call(&mut store, in_len)
+            .map_err(|e| Error::provider(&self.spec.kind, format!("iac_alloc({in_len}): {e}")))?;
         write_bytes(&instance, &mut store, in_ptr, input)?;
 
-        let packed = target.call(&mut store, (in_ptr, in_len)).map_err(|e| {
-            Error::provider(
-                &self.spec.kind,
-                format!("{export_name}: {e}"),
-            )
-        })?;
+        let packed = target
+            .call(&mut store, (in_ptr, in_len))
+            .map_err(|e| Error::provider(&self.spec.kind, format!("{export_name}: {e}")))?;
         // Free the input buffer (response is the plugin's
         // responsibility — we copy out then free below).
         let _ = dealloc.call(&mut store, (in_ptr, in_len));
@@ -350,9 +326,8 @@ fn read_string_from_instance(
     let bytes = store
         .memory_bytes(instance)
         .ok_or_else(|| Error::provider("wasm", "module missing `memory` export"))?;
-    let start = usize::try_from(ptr).map_err(|_| {
-        Error::provider("wasm", format!("negative ptr {ptr} returned by guest"))
-    })?;
+    let start = usize::try_from(ptr)
+        .map_err(|_| Error::provider("wasm", format!("negative ptr {ptr} returned by guest")))?;
     let len_us = len as usize;
     let end = start
         .checked_add(len_us)
@@ -376,19 +351,13 @@ fn read_string_from_instance(
 const MAX_GUEST_LOG_BYTES: usize = 64 * 1024;
 
 /// Read a string from a host import context. Used by `iac.log`.
-fn read_string(
-    caller: &mut Caller<'_, CallState>,
-    ptr: i32,
-    len: i32,
-) -> Result<String> {
+fn read_string(caller: &mut Caller<'_, CallState>, ptr: i32, len: i32) -> Result<String> {
     let mem = caller
         .get_export("memory")
         .and_then(|e| e.into_memory())
         .ok_or_else(|| Error::provider("wasm", "host import: memory missing"))?;
-    let len_us = usize::try_from(len)
-        .map_err(|_| Error::provider("wasm", "negative log len"))?;
-    let start = usize::try_from(ptr)
-        .map_err(|_| Error::provider("wasm", "negative log ptr"))?;
+    let len_us = usize::try_from(len).map_err(|_| Error::provider("wasm", "negative log len"))?;
+    let start = usize::try_from(ptr).map_err(|_| Error::provider("wasm", "negative log ptr"))?;
     // Truncate before allocating — never reserve more than the cap.
     let (effective_len, truncated) = if len_us > MAX_GUEST_LOG_BYTES {
         (MAX_GUEST_LOG_BYTES, true)
@@ -419,9 +388,8 @@ fn write_bytes(
     let mem = instance
         .get_memory(&mut *store, "memory")
         .ok_or_else(|| Error::provider("wasm", "module missing `memory` export"))?;
-    let start = usize::try_from(ptr).map_err(|_| {
-        Error::provider("wasm", format!("negative ptr {ptr} from iac_alloc"))
-    })?;
+    let start = usize::try_from(ptr)
+        .map_err(|_| Error::provider("wasm", format!("negative ptr {ptr} from iac_alloc")))?;
     mem.write(&mut *store, start, bytes)
         .map_err(|e| Error::provider("wasm", format!("write: {e}")))
 }
@@ -616,8 +584,7 @@ mod tests {
             wasi: super::super::spec::WasiConfig::default(),
             // 64 zeros — won't match the actual hash of `bytes`.
             module_sha256: Some(
-                "0000000000000000000000000000000000000000000000000000000000000000"
-                    .into(),
+                "0000000000000000000000000000000000000000000000000000000000000000".into(),
             ),
         };
         match WasmRuntime::from_bytes(spec, &bytes) {

@@ -34,13 +34,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use iac_controlplane::config::{RetryAfterFormat, SecretsConfig, SshTargetConfig};
-use iac_controlplane::maintenance::{MaintenanceMetrics, MaintenanceWindow, RecurringMaintenanceWindow};
+use iac_controlplane::maintenance::{
+    MaintenanceMetrics, MaintenanceWindow, RecurringMaintenanceWindow,
+};
 use iac_controlplane::modules::Module;
 use iac_controlplane::policy::Policy;
 use iac_controlplane::rate_limit::{RateLimitConfig, RateLimiter};
 use iac_controlplane::retention::RetentionConfig;
 use iac_controlplane::secrets::SecretRegistry;
-use iac_controlplane::server::{router, AppState, ReloadableState};
+use iac_controlplane::server::{AppState, ReloadableState, router};
 use iac_controlplane::signing::ServerSigner;
 use iac_controlplane::tls::TlsConfig;
 use iac_controlplane::webhook::{WebhookDispatcher, WebhooksConfig};
@@ -206,10 +208,7 @@ impl TestServerBuilder {
         self
     }
 
-    pub fn recurring_maintenance_windows(
-        mut self,
-        w: Vec<RecurringMaintenanceWindow>,
-    ) -> Self {
+    pub fn recurring_maintenance_windows(mut self, w: Vec<RecurringMaintenanceWindow>) -> Self {
         self.recurring_maintenance_windows = w;
         self
     }
@@ -313,10 +312,13 @@ impl TestServerBuilder {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
 
         TestServer {

@@ -27,7 +27,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
-#[command(name = "iac-trial", version, about = "Trial harness workload generator")]
+#[command(
+    name = "iac-trial",
+    version,
+    about = "Trial harness workload generator"
+)]
 struct Cli {
     /// Control-plane base URL.
     #[arg(long, default_value = "http://127.0.0.1:8443")]
@@ -111,15 +115,16 @@ async fn main() -> Result<()> {
     let client = build_client(&cli.admin_token)?;
 
     match cli.cmd {
-        Cmd::SubmitBurst { count, rps, concurrency } => {
-            submit_burst(&cli, &client, count, rps, concurrency).await
-        }
-        Cmd::Longevity { duration_secs, rps } => {
-            longevity(&cli, &client, duration_secs, rps).await
-        }
-        Cmd::WaitFleet { expected, timeout_secs } => {
-            wait_fleet(&cli, &client, expected, timeout_secs).await
-        }
+        Cmd::SubmitBurst {
+            count,
+            rps,
+            concurrency,
+        } => submit_burst(&cli, &client, count, rps, concurrency).await,
+        Cmd::Longevity { duration_secs, rps } => longevity(&cli, &client, duration_secs, rps).await,
+        Cmd::WaitFleet {
+            expected,
+            timeout_secs,
+        } => wait_fleet(&cli, &client, expected, timeout_secs).await,
     }
 }
 
@@ -156,8 +161,7 @@ fn build_client(_token: &str) -> Result<reqwest::Client> {
 /// (F1-density, F1-burst) can exercise larger working sets without
 /// recompiling.
 const DEFAULT_TRIAL_RESOURCE_POOL: u64 = 200;
-static TRIAL_RESOURCE_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static TRIAL_RESOURCE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn make_file_manifest(env: &str, host_selector: Option<&str>) -> serde_json::Value {
     let pool = std::env::var("TRIAL_RESOURCE_POOL_SIZE")
@@ -165,8 +169,7 @@ fn make_file_manifest(env: &str, host_selector: Option<&str>) -> serde_json::Val
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_TRIAL_RESOURCE_POOL);
-    let iter = TRIAL_RESOURCE_COUNTER
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let iter = TRIAL_RESOURCE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let slot = iter % pool;
     let host_tag = host_selector.unwrap_or("any");
     let path = format!("/tmp/trial-{host_tag}-{slot:04}.txt");
@@ -181,10 +184,7 @@ fn make_file_manifest(env: &str, host_selector: Option<&str>) -> serde_json::Val
     if let Some(host) = host_selector
         && let Some(map) = spec.as_object_mut()
     {
-        map.insert(
-            "hostSelector".into(),
-            serde_json::json!({ "name": host }),
-        );
+        map.insert("hostSelector".into(), serde_json::json!({ "name": host }));
     }
     serde_json::json!({
         "apiVersion": "iac.example/v1",
@@ -280,15 +280,7 @@ impl Stats {
             0.0
         };
         let bucket_labels = [
-            "<5ms",
-            "<10ms",
-            "<25ms",
-            "<50ms",
-            "<100ms",
-            "<250ms",
-            "<500ms",
-            "<1s",
-            "<2.5s",
+            "<5ms", "<10ms", "<25ms", "<50ms", "<100ms", "<250ms", "<500ms", "<1s", "<2.5s",
             "≥2.5s",
         ];
         println!("---");
@@ -481,8 +473,7 @@ async fn wait_fleet(
             .await;
         match resp {
             Ok(r) if r.status().is_success() => {
-                let agents: Vec<serde_json::Value> =
-                    r.json().await.unwrap_or_default();
+                let agents: Vec<serde_json::Value> = r.json().await.unwrap_or_default();
                 let n = agents.len();
                 if n != last_seen {
                     last_seen = n;

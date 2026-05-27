@@ -6,17 +6,16 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
+use iac_core::ResourceId;
 use iac_core::diff::{Diff, DiffKind, FieldChange};
 use iac_core::protocol::v1::{
     DriftAcceptRequest, DriftBatch, DriftIgnoreRequest, DriftItem, DriftSummary, RegisterRequest,
     RegisterResponse,
 };
-use iac_core::ResourceId;
 use reqwest::StatusCode;
 use serde_json::json;
-
 
 async fn register(server: &TestServer) -> RegisterResponse {
     let client = reqwest::Client::new();
@@ -34,11 +33,7 @@ async fn register(server: &TestServer) -> RegisterResponse {
     resp.json().await.unwrap()
 }
 
-async fn push_drift(
-    server: &TestServer,
-    creds: &RegisterResponse,
-    resource_name: &str,
-) {
+async fn push_drift(server: &TestServer, creds: &RegisterResponse, resource_name: &str) {
     let client = reqwest::Client::new();
     let item = DriftItem {
         resource_id: ResourceId::new("file", "drift", resource_name),
@@ -57,7 +52,11 @@ async fn push_drift(
         },
     };
     let resp = client
-        .post(format!("{}/v1/agents/{}/drift", server.url(), creds.agent_id))
+        .post(format!(
+            "{}/v1/agents/{}/drift",
+            server.url(),
+            creds.agent_id
+        ))
         .bearer_auth(&creds.token)
         .json(&DriftBatch { items: vec![item] })
         .send()
@@ -135,7 +134,10 @@ async fn ignore_hides_drift_until_ttl_expires() {
     let resp = client
         .post(format!("{}/v1/drift/{id}/ignore", server.url()))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftIgnoreRequest { until: until.clone(), reason: None })
+        .json(&DriftIgnoreRequest {
+            until: until.clone(),
+            reason: None,
+        })
         .send()
         .await
         .unwrap();
@@ -165,7 +167,10 @@ async fn ignore_hides_drift_until_ttl_expires() {
     let resp = client
         .post(format!("{}/v1/drift/{id}/ignore", server.url()))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftIgnoreRequest { until: past, reason: None })
+        .json(&DriftIgnoreRequest {
+            until: past,
+            reason: None,
+        })
         .send()
         .await
         .unwrap();
@@ -213,7 +218,9 @@ async fn empty_reason_is_rejected() {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/drift/{id}/accept", server.url()))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftAcceptRequest { reason: "  ".into() })
+        .json(&DriftAcceptRequest {
+            reason: "  ".into(),
+        })
         .send()
         .await
         .unwrap();
@@ -232,7 +239,10 @@ async fn invalid_until_returns_400() {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/drift/{id}/ignore", server.url()))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftIgnoreRequest { until: "not-a-time".into(), reason: None })
+        .json(&DriftIgnoreRequest {
+            until: "not-a-time".into(),
+            reason: None,
+        })
         .send()
         .await
         .unwrap();
@@ -267,8 +277,8 @@ async fn revert_creates_a_fresh_operation_for_the_drifted_resource() {
     //      original resource_id, and that the new operation exists with
     //      the same desired-state shape.
     use iac_core::protocol::v1::{
-        DriftRevertRequest, DriftRevertResponse, OperationDesiredState,
-        SubmitOperationRequest, SubmitOperationResponse,
+        DriftRevertRequest, DriftRevertResponse, OperationDesiredState, SubmitOperationRequest,
+        SubmitOperationResponse,
     };
     let server = TestServer::spawn().await;
     let creds = register(&server).await;
@@ -293,7 +303,8 @@ async fn revert_creates_a_fresh_operation_for_the_drifted_resource() {
             requested_by: "op".into(),
             source_commit: Some("commit-1".into()),
             summary: Some("initial apply".into()),
-            resources: vec![resource], canary: None,
+            resources: vec![resource],
+            canary: None,
         })
         .send()
         .await
@@ -399,7 +410,9 @@ async fn revert_rejects_already_resolved_drift() {
     let accept = client
         .post(format!("{}/v1/drift/{}/accept", server.url(), drift.id))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftAcceptRequest { reason: "fixed manually".into() })
+        .json(&DriftAcceptRequest {
+            reason: "fixed manually".into(),
+        })
         .send()
         .await
         .unwrap();
@@ -409,7 +422,9 @@ async fn revert_rejects_already_resolved_drift() {
     let revert = client
         .post(format!("{}/v1/drift/{}/revert", server.url(), drift.id))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftRevertRequest { source_commit: None })
+        .json(&DriftRevertRequest {
+            source_commit: None,
+        })
         .send()
         .await
         .unwrap();
@@ -425,9 +440,7 @@ async fn accept_bulk_resolves_every_matching_open_drift() {
     // Phase 7bf: push three events spanning two kinds; accept-bulk
     // with `kind=file` resolves only the file events. The non-matching
     // event stays open.
-    use iac_core::protocol::v1::{
-        DriftBulkAcceptRequest, DriftBulkFilter, DriftBulkResponse,
-    };
+    use iac_core::protocol::v1::{DriftBulkAcceptRequest, DriftBulkFilter, DriftBulkResponse};
     let server = TestServer::spawn().await;
     let creds = register(&server).await;
     let client = reqwest::Client::new();
@@ -446,7 +459,11 @@ async fn accept_bulk_resolves_every_matching_open_drift() {
         },
     };
     let resp = client
-        .post(format!("{}/v1/agents/{}/drift", server.url(), creds.agent_id))
+        .post(format!(
+            "{}/v1/agents/{}/drift",
+            server.url(),
+            creds.agent_id
+        ))
         .bearer_auth(&creds.token)
         .json(&iac_core::protocol::v1::DriftBatch {
             items: vec![
@@ -524,9 +541,7 @@ async fn accept_bulk_rejects_empty_filter() {
 async fn ignore_bulk_silences_matching_for_ttl() {
     // Phase 7bf: silence file-kind drift for 7 days; verify list
     // hides them, then verify other kinds remain visible.
-    use iac_core::protocol::v1::{
-        DriftBulkFilter, DriftBulkIgnoreRequest, DriftBulkResponse,
-    };
+    use iac_core::protocol::v1::{DriftBulkFilter, DriftBulkIgnoreRequest, DriftBulkResponse};
     let server = TestServer::spawn().await;
     let creds = register(&server).await;
     let client = reqwest::Client::new();
@@ -543,7 +558,11 @@ async fn ignore_bulk_silences_matching_for_ttl() {
         },
     };
     let resp = client
-        .post(format!("{}/v1/agents/{}/drift", server.url(), creds.agent_id))
+        .post(format!(
+            "{}/v1/agents/{}/drift",
+            server.url(),
+            creds.agent_id
+        ))
         .bearer_auth(&creds.token)
         .json(&iac_core::protocol::v1::DriftBatch {
             items: vec![mk_item("a"), mk_item("b")],
@@ -597,7 +616,9 @@ async fn revert_404s_when_no_desired_state_exists() {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/drift/{}/revert", server.url(), drift.id))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftRevertRequest { source_commit: None })
+        .json(&DriftRevertRequest {
+            source_commit: None,
+        })
         .send()
         .await
         .unwrap();

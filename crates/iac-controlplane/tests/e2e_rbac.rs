@@ -6,14 +6,14 @@
 
 use iac_controlplane::identity::Role;
 use iac_controlplane::store::CreateUser;
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
+use iac_core::ResourceId;
 use iac_core::diff::Diff;
 use iac_core::protocol::v1::{
     AuditEvent, DriftAcceptRequest, DriftBatch, DriftItem, DriftSummary, LoginRequest,
     LoginResponse, OperationApproveRequest, OperationRejectRequest, OperationStatus, OperationView,
     RegisterRequest, SubmitOperationRequest, SubmitOperationResponse,
 };
-use iac_core::ResourceId;
 use reqwest::StatusCode;
 use serde_json::json;
 use std::net::SocketAddr;
@@ -43,11 +43,11 @@ impl TestServer {
             admin_token: Some(ADMIN_TOKEN.to_string()),
             policies: vec![],
             retention: iac_controlplane::retention::RetentionConfig::default(),
-        rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
+            rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
             maintenance_windows: vec![],
             recurring_maintenance_windows: vec![],
             webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-        tls: iac_controlplane::tls::TlsConfig::default(),
+            tls: iac_controlplane::tls::TlsConfig::default(),
             secrets: iac_controlplane::config::SecretsConfig::default(),
             retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
             modules: vec![],
@@ -68,9 +68,13 @@ impl TestServer {
             )),
             config_path: None,
             signer,
-            rate_limiter: std::sync::Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit)),
-        webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+            rate_limiter: std::sync::Arc::new(
+                iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
+            ),
+            webhook_dispatcher: None,
+            maintenance_metrics: Arc::new(
+                iac_controlplane::maintenance::MaintenanceMetrics::default(),
+            ),
             secret_registry: None,
         };
         let app = iac_controlplane::server::router(state);
@@ -79,12 +83,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, store, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            store,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -98,7 +111,11 @@ impl TestServer {
 
     async fn make_user(&self, name: &str, password: &str, roles: Vec<Role>) {
         self.store
-            .create_user(CreateUser { username: name, password, roles })
+            .create_user(CreateUser {
+                username: name,
+                password,
+                roles,
+            })
             .await
             .unwrap();
     }
@@ -106,7 +123,10 @@ impl TestServer {
     async fn login(&self, name: &str, password: &str) -> LoginResponse {
         reqwest::Client::new()
             .post(format!("{}/v1/auth/login", self.url()))
-            .json(&LoginRequest { username: name.into(), password: password.into() })
+            .json(&LoginRequest {
+                username: name.into(),
+                password: password.into(),
+            })
             .send()
             .await
             .unwrap()
@@ -135,7 +155,8 @@ async fn submit_op(
                 "kind": "file",
                 "metadata": { "name": "x", "environment": env },
                 "spec": { "path": target.display().to_string(), "mode": "0644", "content": "y\n" }
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -145,7 +166,9 @@ async fn submit_op(
 #[tokio::test]
 async fn login_returns_token_with_correct_password() {
     let server = TestServer::spawn().await;
-    server.make_user("alice", "hunter2", vec![Role::Operator]).await;
+    server
+        .make_user("alice", "hunter2", vec![Role::Operator])
+        .await;
 
     let resp = server.login("alice", "hunter2").await;
     assert!(!resp.token.is_empty());
@@ -158,7 +181,9 @@ async fn login_returns_token_with_correct_password() {
 #[tokio::test]
 async fn login_rejects_wrong_password() {
     let server = TestServer::spawn().await;
-    server.make_user("alice", "hunter2", vec![Role::Operator]).await;
+    server
+        .make_user("alice", "hunter2", vec![Role::Operator])
+        .await;
 
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/auth/login", server.url()))
@@ -199,7 +224,11 @@ async fn operator_can_submit_but_not_approve() {
 
     // Operator approves → 403 (needs Approver).
     let resp = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), r.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            r.operation_id
+        ))
         .bearer_auth(&token)
         .json(&OperationApproveRequest { reason: None })
         .send()
@@ -261,7 +290,11 @@ async fn viewer_cannot_submit_or_approve_or_accept_drift() {
         .await
         .unwrap();
     reqwest::Client::new()
-        .post(format!("{}/v1/agents/{}/drift", server.url(), creds.agent_id))
+        .post(format!(
+            "{}/v1/agents/{}/drift",
+            server.url(),
+            creds.agent_id
+        ))
         .bearer_auth(&creds.token)
         .json(&DriftBatch {
             items: vec![DriftItem {
@@ -287,7 +320,9 @@ async fn viewer_cannot_submit_or_approve_or_accept_drift() {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/drift/{id}/accept", server.url()))
         .bearer_auth(&viewer)
-        .json(&DriftAcceptRequest { reason: "no".into() })
+        .json(&DriftAcceptRequest {
+            reason: "no".into(),
+        })
         .send()
         .await
         .unwrap();
@@ -311,7 +346,9 @@ async fn legacy_admin_token_still_works() {
 #[tokio::test]
 async fn audit_records_user_actor_not_admin() {
     let server = TestServer::spawn().await;
-    server.make_user("alice", "p", vec![Role::Operator, Role::Approver]).await;
+    server
+        .make_user("alice", "p", vec![Role::Operator, Role::Approver])
+        .await;
     let token = server.login("alice", "p").await.token;
 
     let dir = TempDir::new().unwrap();
@@ -321,7 +358,10 @@ async fn audit_records_user_actor_not_admin() {
 
     // Audit event for the submission should carry "user:alice".
     let events: Vec<AuditEvent> = reqwest::Client::new()
-        .get(format!("{}/v1/audit?kind=operation.submitted", server.url()))
+        .get(format!(
+            "{}/v1/audit?kind=operation.submitted",
+            server.url()
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -369,16 +409,26 @@ async fn approver_named_user_recorded_on_approve_and_reject() {
         .unwrap();
 
     let resp = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), r1_body.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            r1_body.operation_id
+        ))
         .bearer_auth(&alice_token)
-        .json(&OperationApproveRequest { reason: Some("LGTM".into()) })
+        .json(&OperationApproveRequest {
+            reason: Some("LGTM".into()),
+        })
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     let view: OperationView = reqwest::Client::new()
-        .get(format!("{}/v1/operations/{}", server.url(), r1_body.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            r1_body.operation_id
+        ))
         .bearer_auth(&alice_token)
         .send()
         .await
@@ -417,16 +467,26 @@ async fn approver_named_user_recorded_on_approve_and_reject() {
         .unwrap();
 
     let resp = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/reject", server.url(), r2_body.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/reject",
+            server.url(),
+            r2_body.operation_id
+        ))
         .bearer_auth(&alice_token)
-        .json(&OperationRejectRequest { reason: "needs more thought".into() })
+        .json(&OperationRejectRequest {
+            reason: "needs more thought".into(),
+        })
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     let view: OperationView = reqwest::Client::new()
-        .get(format!("{}/v1/operations/{}", server.url(), r2_body.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            r2_body.operation_id
+        ))
         .bearer_auth(&alice_token)
         .send()
         .await

@@ -5,9 +5,9 @@ use crate::api::BearerToken;
 use crate::error::{ApiError, ApiResult};
 use crate::server::AppState;
 use axum::{
+    Json, Router,
     extract::{ConnectInfo, State},
     routing::post,
-    Json, Router,
 };
 use iac_core::protocol::v1::{LoginRequest, LoginResponse};
 use std::net::SocketAddr;
@@ -47,11 +47,8 @@ async fn login(
     //
     // Phase 9 follow-up: trusted-proxy X-Forwarded-For path — see
     // register handler for the same shape.
-    let client_ip = crate::api::effective_client_ip(
-        &headers,
-        addr,
-        &state.config().trusted_proxies,
-    );
+    let client_ip =
+        crate::api::effective_client_ip(&headers, addr, &state.config().trusted_proxies);
     state
         .rate_limiter
         .check_and_record_login(&req.username, &client_ip.to_string())
@@ -105,7 +102,11 @@ async fn login(
         .map(|r| serde_json::to_value(r).ok())
         .filter_map(|v| v.and_then(|x| x.as_str().map(str::to_string)))
         .collect();
-    Ok(Json(LoginResponse { token, expires_at, roles }))
+    Ok(Json(LoginResponse {
+        token,
+        expires_at,
+        roles,
+    }))
 }
 
 async fn logout(
@@ -121,8 +122,7 @@ async fn logout(
         let _ = state
             .store
             .record_audit(
-                crate::store::AuditRecord::new(&id.audit_actor(), "auth.logout")
-                    .severity("info"),
+                crate::store::AuditRecord::new(&id.audit_actor(), "auth.logout").severity("info"),
             )
             .await;
     }
@@ -141,8 +141,10 @@ async fn refresh(
     State(state): State<AppState>,
     BearerToken(token): BearerToken,
 ) -> ApiResult<Json<LoginResponse>> {
-    let (new_token, expires_at, user) =
-        state.store.refresh_user_token(&token, TOKEN_TTL_SECS).await?;
+    let (new_token, expires_at, user) = state
+        .store
+        .refresh_user_token(&token, TOKEN_TTL_SECS)
+        .await?;
     // Phase 7co (security fix #4.11): audit token refreshes — a
     // compromised account using `refresh` to extend access without
     // reauthentication is otherwise invisible.

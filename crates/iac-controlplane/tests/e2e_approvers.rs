@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_controlplane::identity::Role;
 use iac_controlplane::policy::{Policy, PolicyMatch};
@@ -28,7 +28,10 @@ async fn spawn(policies: Vec<Policy>) -> TestServer {
 async fn login(server: &TestServer, name: &str, password: &str) -> String {
     let resp: LoginResponse = reqwest::Client::new()
         .post(format!("{}/v1/auth/login", server.url()))
-        .json(&LoginRequest { username: name.into(), password: password.into() })
+        .json(&LoginRequest {
+            username: name.into(),
+            password: password.into(),
+        })
         .send()
         .await
         .unwrap()
@@ -105,9 +108,15 @@ async fn approver_in_list_can_approve() {
     assert_eq!(resp.assignment_count, 0);
 
     let r = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(&alice)
-        .json(&OperationApproveRequest { reason: Some("LGTM".into()) })
+        .json(&OperationApproveRequest {
+            reason: Some("LGTM".into()),
+        })
         .send()
         .await
         .unwrap();
@@ -143,7 +152,11 @@ async fn approver_not_in_list_is_forbidden() {
     let resp = submit(&server, &op).await;
 
     let r = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(&bob)
         .json(&OperationApproveRequest { reason: None })
         .send()
@@ -182,9 +195,15 @@ async fn admin_role_bypasses_approvers_list() {
 
     // Carol has Admin → bypasses the list even though her name isn't in it.
     let r = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(&carol)
-        .json(&OperationApproveRequest { reason: Some("break glass".into()) })
+        .json(&OperationApproveRequest {
+            reason: Some("break glass".into()),
+        })
         .send()
         .await
         .unwrap();
@@ -221,7 +240,11 @@ async fn empty_approvers_list_means_any_approver_role() {
     let resp = submit(&server, &op).await;
 
     let r = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(&bob)
         .json(&OperationApproveRequest { reason: None })
         .send()
@@ -249,7 +272,11 @@ async fn legacy_admin_token_bypasses_approvers_list() {
     let resp = submit(&server, &op).await;
 
     let r = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .json(&OperationApproveRequest { reason: None })
         .send()

@@ -16,13 +16,13 @@
 use super::backend::{CheckBackend, CheckOutcome};
 use super::spec::{CheckState, MonitoringCheckSpec};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 
 pub fn observe(backend: &dyn CheckBackend, spec: &MonitoringCheckSpec) -> Result<ObservedState> {
@@ -145,9 +145,7 @@ pub fn apply(
                 last_reason = Some(reason);
                 let attempts_remaining = total_attempts - attempt - 1;
                 if attempts_remaining > 0 {
-                    std::thread::sleep(std::time::Duration::from_secs(
-                        spec.retry_interval_secs,
-                    ));
+                    std::thread::sleep(std::time::Duration::from_secs(spec.retry_interval_secs));
                 }
             }
         }

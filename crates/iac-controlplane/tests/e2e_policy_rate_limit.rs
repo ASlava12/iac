@@ -8,7 +8,7 @@
 //! else unrestricted" without slowing down stage/test envs.
 
 use iac_controlplane::policy::{Policy, PolicyMatch};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{RegisterRequest, SubmitOperationRequest};
 use reqwest::StatusCode;
 use serde_json::json;
@@ -42,7 +42,7 @@ impl TestServer {
             maintenance_windows: vec![],
             recurring_maintenance_windows: vec![],
             webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-        tls: iac_controlplane::tls::TlsConfig::default(),
+            tls: iac_controlplane::tls::TlsConfig::default(),
             secrets: iac_controlplane::config::SecretsConfig::default(),
             retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
             modules: vec![],
@@ -63,11 +63,13 @@ impl TestServer {
             )),
             config_path: None,
             signer,
-            rate_limiter: Arc::new(
-                iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
+            rate_limiter: Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+                &cfg.rate_limit,
+            )),
+            webhook_dispatcher: None,
+            maintenance_metrics: Arc::new(
+                iac_controlplane::maintenance::MaintenanceMetrics::default(),
             ),
-        webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
             secret_registry: None,
         };
         let app = iac_controlplane::server::router(state);
@@ -76,12 +78,20 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -125,7 +135,8 @@ impl TestServer {
                         "mode": "0644",
                         "content": format!("{name}\n"),
                     }
-                })], canary: None,
+                })],
+                canary: None,
             })
             .send()
             .await
@@ -179,7 +190,10 @@ async fn matched_policy_cap_rejects_excess() {
     assert_eq!(body["bucket"]["name"], "prod-cap");
     let detail = body["detail"].as_str().unwrap();
     assert!(detail.starts_with("retry after "), "detail: {detail}");
-    assert!(!detail.contains("bucket="), "legacy prefix should be gone: {detail}");
+    assert!(
+        !detail.contains("bucket="),
+        "legacy prefix should be gone: {detail}"
+    );
 
     server.shutdown().await;
 }
@@ -272,7 +286,10 @@ async fn stricter_of_two_policies_wins() {
     assert_eq!(body["bucket"]["name"], "tight");
     let detail = body["detail"].as_str().unwrap();
     assert!(detail.starts_with("retry after "), "detail: {detail}");
-    assert!(!detail.contains("bucket="), "legacy prefix should be gone: {detail}");
+    assert!(
+        !detail.contains("bucket="),
+        "legacy prefix should be gone: {detail}"
+    );
 
     server.shutdown().await;
 }

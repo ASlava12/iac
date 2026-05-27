@@ -13,13 +13,13 @@
 use super::backend::{ComposeBackend, ComposeService};
 use super::spec::{ComposeState, DockerComposeSpec};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 use std::path::Path;
 
@@ -40,9 +40,7 @@ pub fn observe(backend: &dyn ComposeBackend, spec: &DockerComposeSpec) -> Result
     );
     facts.insert(
         "running_count".into(),
-        YamlValue::Number(
-            (services.iter().filter(|s| s.state == "running").count() as u64).into(),
-        ),
+        YamlValue::Number((services.iter().filter(|s| s.state == "running").count() as u64).into()),
     );
     let present = !services.is_empty();
     Ok(ObservedState {
@@ -146,10 +144,7 @@ pub fn plan(spec: &DockerComposeSpec, diff: &Diff) -> Vec<Step> {
     )]
 }
 
-pub fn pre_apply(
-    backend: &dyn ComposeBackend,
-    spec: &DockerComposeSpec,
-) -> Result<Json> {
+pub fn pre_apply(backend: &dyn ComposeBackend, spec: &DockerComposeSpec) -> Result<Json> {
     // Snapshot what's currently on host for rollback.
     let services = backend.list_services(&spec.project)?;
     let on_disk_sha = read_sha256_of_file(&spec.compose_file());
@@ -179,14 +174,12 @@ pub fn apply(
                 )
             })?;
             let file = spec.compose_file();
-            let source = spec.source.as_deref().ok_or_else(|| {
-                Error::provider("docker.compose", "compose-up requires source")
-            })?;
+            let source = spec
+                .source
+                .as_deref()
+                .ok_or_else(|| Error::provider("docker.compose", "compose-up requires source"))?;
             std::fs::write(&file, source).map_err(|e| {
-                Error::provider(
-                    "docker.compose",
-                    format!("write {}: {e}", file.display()),
-                )
+                Error::provider("docker.compose", format!("write {}: {e}", file.display()))
             })?;
             backend.up(&spec.project, &file, spec.env_file.as_deref())?;
             Ok(StepResult::ok(format!(
@@ -196,7 +189,11 @@ pub fn apply(
         }
         super::ComposeAction::Down => {
             let file = spec.compose_file();
-            let file_arg = if file.exists() { Some(file.as_path()) } else { None };
+            let file_arg = if file.exists() {
+                Some(file.as_path())
+            } else {
+                None
+            };
             backend.down(&spec.project, file_arg)?;
             // Best-effort cleanup of the materialised compose dir; the
             // failure mode here is non-fatal — operator can rm it later.
@@ -259,7 +256,10 @@ mod tests {
     ) -> DockerComposeSpec {
         use serde_yaml_ng::{Mapping, Value};
         let mut m = Mapping::new();
-        m.insert(Value::String("project".into()), Value::String(project.into()));
+        m.insert(
+            Value::String("project".into()),
+            Value::String(project.into()),
+        );
         m.insert(Value::String("state".into()), Value::String(state.into()));
         if let Some(s) = source {
             m.insert(Value::String("source".into()), Value::String(s.into()));
@@ -285,7 +285,12 @@ mod tests {
     fn diff_create_when_present_but_no_services() {
         let backend = MockCompose::new();
         let dir = TempDir::new().unwrap();
-        let spec = spec_with_workdir("p1", "present", Some("services:\n  a:\n    image: x\n"), dir.path());
+        let spec = spec_with_workdir(
+            "p1",
+            "present",
+            Some("services:\n  a:\n    image: x\n"),
+            dir.path(),
+        );
         let observed = observe(&backend, &spec).unwrap();
         let d = diff(&spec, &observed).unwrap();
         assert!(matches!(d.kind, DiffKind::Create));
@@ -295,7 +300,12 @@ mod tests {
     fn diff_update_when_source_changed() {
         let backend = MockCompose::new();
         let dir = TempDir::new().unwrap();
-        let spec = spec_with_workdir("p1", "present", Some("services:\n  a:\n    image: nginx\n"), dir.path());
+        let spec = spec_with_workdir(
+            "p1",
+            "present",
+            Some("services:\n  a:\n    image: nginx\n"),
+            dir.path(),
+        );
         // Pre-populate observed services and a stale on-disk file.
         backend.set_state(
             "p1",
@@ -393,18 +403,34 @@ mod tests {
     fn pre_apply_captures_prior_source() {
         let backend = MockCompose::new();
         let dir = TempDir::new().unwrap();
-        let spec = spec_with_workdir("p1", "present", Some("services:\n  a:\n    image: new\n"), dir.path());
+        let spec = spec_with_workdir(
+            "p1",
+            "present",
+            Some("services:\n  a:\n    image: new\n"),
+            dir.path(),
+        );
         std::fs::create_dir_all(spec.project_dir()).unwrap();
         std::fs::write(spec.compose_file(), "services:\n  a:\n    image: old\n").unwrap();
         let cp = pre_apply(&backend, &spec).unwrap();
-        assert!(cp.get("prior_source").unwrap().as_str().unwrap().contains("old"));
+        assert!(
+            cp.get("prior_source")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("old")
+        );
     }
 
     #[test]
     fn rollback_with_prior_source_re_ups() {
         let backend = MockCompose::new();
         let dir = TempDir::new().unwrap();
-        let spec = spec_with_workdir("p1", "present", Some("services:\n  a:\n    image: new\n"), dir.path());
+        let spec = spec_with_workdir(
+            "p1",
+            "present",
+            Some("services:\n  a:\n    image: new\n"),
+            dir.path(),
+        );
         let cp = json!({"prior_source": "services:\n  a:\n    image: old\n"});
         rollback(&backend, &spec, &cp).unwrap();
         let on_disk = std::fs::read_to_string(spec.compose_file()).unwrap();
@@ -417,7 +443,12 @@ mod tests {
     fn rollback_with_no_prior_source_tears_down() {
         let backend = MockCompose::new();
         let dir = TempDir::new().unwrap();
-        let spec = spec_with_workdir("p1", "present", Some("services:\n  a:\n    image: x\n"), dir.path());
+        let spec = spec_with_workdir(
+            "p1",
+            "present",
+            Some("services:\n  a:\n    image: x\n"),
+            dir.path(),
+        );
         let cp = json!({"prior_source": null});
         rollback(&backend, &spec, &cp).unwrap();
         let calls = backend.calls();

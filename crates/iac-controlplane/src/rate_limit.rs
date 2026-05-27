@@ -140,22 +140,23 @@ impl RateLimiter {
     pub fn apply_config(&self, cfg: &RateLimitConfig) {
         use std::sync::atomic::Ordering::Relaxed;
         let norm = |o: Option<u32>| o.filter(|n| *n > 0).unwrap_or(0);
-        self.max_per_minute.store(norm(cfg.operations_per_minute), Relaxed);
-        self.agent_max_per_minute.store(norm(cfg.agent_requests_per_minute), Relaxed);
-        self.login_user_max_per_minute.store(norm(cfg.login_per_minute_per_user), Relaxed);
-        self.login_ip_max_per_minute.store(norm(cfg.login_per_minute_per_ip), Relaxed);
-        self.register_ip_max_per_minute.store(norm(cfg.register_per_minute_per_ip), Relaxed);
+        self.max_per_minute
+            .store(norm(cfg.operations_per_minute), Relaxed);
+        self.agent_max_per_minute
+            .store(norm(cfg.agent_requests_per_minute), Relaxed);
+        self.login_user_max_per_minute
+            .store(norm(cfg.login_per_minute_per_user), Relaxed);
+        self.login_ip_max_per_minute
+            .store(norm(cfg.login_per_minute_per_ip), Relaxed);
+        self.register_ip_max_per_minute
+            .store(norm(cfg.register_per_minute_per_ip), Relaxed);
     }
 
     /// Phase 7co (security fix #4.2): rate-limit a login attempt
     /// BEFORE the Argon2 verify. Both the per-username and per-IP
     /// buckets are checked; the more-restrictive of the two limits
     /// wins. Both `None`/`0` short-circuit to `Ok(())`.
-    pub async fn check_and_record_login(
-        &self,
-        username: &str,
-        client_ip: &str,
-    ) -> ApiResult<()> {
+    pub async fn check_and_record_login(&self, username: &str, client_ip: &str) -> ApiResult<()> {
         use std::sync::atomic::Ordering::Relaxed;
         let user_max = self.login_user_max_per_minute.load(Relaxed);
         if user_max > 0 {
@@ -191,15 +192,19 @@ impl RateLimiter {
     /// and we'd rather rate-limit unknowns together than skip the
     /// check.
     pub async fn check_and_record_register(&self, client_ip: &str) -> ApiResult<()> {
-        let max = self.register_ip_max_per_minute.load(std::sync::atomic::Ordering::Relaxed);
-        if max == 0 { return Ok(()); }
-        let key = if client_ip.trim().is_empty() { "unknown" } else { client_ip };
-        self.check_and_record_keyed_at(
-            RateLimitBucket::register_ip(key),
-            max,
-            Instant::now(),
-        )
-        .await
+        let max = self
+            .register_ip_max_per_minute
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if max == 0 {
+            return Ok(());
+        }
+        let key = if client_ip.trim().is_empty() {
+            "unknown"
+        } else {
+            client_ip
+        };
+        self.check_and_record_keyed_at(RateLimitBucket::register_ip(key), max, Instant::now())
+            .await
     }
 
     pub fn metrics(&self) -> RateLimitMetricsSnapshot {
@@ -216,9 +221,14 @@ impl RateLimiter {
     /// Returns `Ok(())` if the call is within budget (and records the
     /// timestamp), `Err(ApiError::TooManyRequests { bucket, .. })` otherwise.
     pub async fn check_and_record(&self, environment: &str) -> ApiResult<()> {
-        let max = self.max_per_minute.load(std::sync::atomic::Ordering::Relaxed);
-        if max == 0 { return Ok(()); }
-        self.check_and_record_at(environment, max, Instant::now()).await
+        let max = self
+            .max_per_minute
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if max == 0 {
+            return Ok(());
+        }
+        self.check_and_record_at(environment, max, Instant::now())
+            .await
     }
 
     /// Phase 7bh: per-agent bucket. Caps how many requests a single
@@ -230,14 +240,14 @@ impl RateLimiter {
     /// (Retry-After header, structured `bucket` body field) carries
     /// through.
     pub async fn check_and_record_agent(&self, agent_id: &str) -> ApiResult<()> {
-        let max = self.agent_max_per_minute.load(std::sync::atomic::Ordering::Relaxed);
-        if max == 0 { return Ok(()); }
-        self.check_and_record_keyed_at(
-            RateLimitBucket::agent(agent_id),
-            max,
-            Instant::now(),
-        )
-        .await
+        let max = self
+            .agent_max_per_minute
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if max == 0 {
+            return Ok(());
+        }
+        self.check_and_record_keyed_at(RateLimitBucket::agent(agent_id), max, Instant::now())
+            .await
     }
 
     /// Phase 7n: per-policy bucket. Enforces a cap keyed by policy name
@@ -333,7 +343,8 @@ mod tests {
     async fn zero_limit_treated_as_disabled() {
         let lim = RateLimiter::from_config(&RateLimitConfig {
             operations_per_minute: Some(0),
-            agent_requests_per_minute: None, ..Default::default()
+            agent_requests_per_minute: None,
+            ..Default::default()
         });
         for _ in 0..100 {
             assert!(lim.check_and_record("any").await.is_ok());
@@ -344,7 +355,8 @@ mod tests {
     async fn enforces_cap_within_window() {
         let lim = RateLimiter::from_config(&RateLimitConfig {
             operations_per_minute: Some(3),
-            agent_requests_per_minute: None, ..Default::default()
+            agent_requests_per_minute: None,
+            ..Default::default()
         });
         let t0 = Instant::now();
         // 3 calls inside the same window are fine.
@@ -354,7 +366,10 @@ mod tests {
         // 4th is rejected.
         let err = lim.check_and_record_at("prod", 3, t0).await.unwrap_err();
         match err {
-            ApiError::TooManyRequests { retry_after_secs, bucket } => {
+            ApiError::TooManyRequests {
+                retry_after_secs,
+                bucket,
+            } => {
                 assert!((1..=60).contains(&retry_after_secs));
                 assert_eq!(bucket.r#type, "env");
                 assert_eq!(bucket.name, "prod");
@@ -367,7 +382,8 @@ mod tests {
     async fn separate_environments_have_separate_buckets() {
         let lim = RateLimiter::from_config(&RateLimitConfig {
             operations_per_minute: Some(2),
-            agent_requests_per_minute: None, ..Default::default()
+            agent_requests_per_minute: None,
+            ..Default::default()
         });
         let t0 = Instant::now();
         // Fill prod bucket.
@@ -386,20 +402,23 @@ mod tests {
     async fn entries_expire_after_window() {
         let lim = RateLimiter::from_config(&RateLimitConfig {
             operations_per_minute: Some(1),
-            agent_requests_per_minute: None, ..Default::default()
+            agent_requests_per_minute: None,
+            ..Default::default()
         });
         let t0 = Instant::now();
         assert!(lim.check_and_record_at("env", 1, t0).await.is_ok());
         // 30s later: still capped.
-        assert!(lim
-            .check_and_record_at("env", 1, t0 + Duration::from_secs(30))
-            .await
-            .is_err());
+        assert!(
+            lim.check_and_record_at("env", 1, t0 + Duration::from_secs(30))
+                .await
+                .is_err()
+        );
         // 61s later: bucket cleared, allowed again.
-        assert!(lim
-            .check_and_record_at("env", 1, t0 + Duration::from_secs(61))
-            .await
-            .is_ok());
+        assert!(
+            lim.check_and_record_at("env", 1, t0 + Duration::from_secs(61))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -419,16 +438,14 @@ mod tests {
         // agent doesn't impact a quiet one's budget.
         let lim = RateLimiter::from_config(&RateLimitConfig {
             operations_per_minute: None,
-            agent_requests_per_minute: Some(2), ..Default::default()
+            agent_requests_per_minute: Some(2),
+            ..Default::default()
         });
         // Fill agent-a's bucket via the public path.
         assert!(lim.check_and_record_agent("agent-a").await.is_ok());
         assert!(lim.check_and_record_agent("agent-a").await.is_ok());
         // Third request from agent-a is rejected.
-        let err = lim
-            .check_and_record_agent("agent-a")
-            .await
-            .unwrap_err();
+        let err = lim.check_and_record_agent("agent-a").await.unwrap_err();
         match err {
             ApiError::TooManyRequests { bucket, .. } => {
                 assert_eq!(bucket.r#type, "agent");
@@ -575,6 +592,10 @@ mod tests {
         assert!(lim.check_and_record_login("alice", "9.9.9.9").await.is_ok());
         // Both are now exhausted independently.
         assert!(lim.check_and_record_register("9.9.9.9").await.is_err());
-        assert!(lim.check_and_record_login("alice", "9.9.9.9").await.is_err());
+        assert!(
+            lim.check_and_record_login("alice", "9.9.9.9")
+                .await
+                .is_err()
+        );
     }
 }

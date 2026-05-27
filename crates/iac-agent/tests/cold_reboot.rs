@@ -95,7 +95,9 @@ async fn cold_reboot_observes_drift_and_reconverges() {
     assert!(matches!(r1.operation.status, OperationStatus::Succeeded));
     assert!(target.exists(), "first apply created the file");
     assert!(
-        std::fs::read_to_string(&target).unwrap().contains("hello-iac"),
+        std::fs::read_to_string(&target)
+            .unwrap()
+            .contains("hello-iac"),
         "first apply wrote the right content"
     );
     drop(a1);

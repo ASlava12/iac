@@ -1,11 +1,11 @@
-use crate::api::{require_role, BearerToken};
-use crate::identity::Role;
+use crate::api::{BearerToken, require_role};
 use crate::error::ApiResult;
+use crate::identity::Role;
 use crate::server::AppState;
 use axum::{
+    Json, Router,
     extract::{ConnectInfo, Path, State},
     routing::{get, post},
-    Json, Router,
 };
 use iac_core::protocol::v1::{
     AgentSummary, AssignmentList, AssignmentResultRequest, DesiredStateBatch, DriftAck, DriftBatch,
@@ -29,10 +29,7 @@ pub fn router() -> Router<AppState> {
         // Phase 7cc: explicit token rotation. Auth via current token;
         // returns the new token; old hash is overwritten so subsequent
         // requests with the old token get 401.
-        .route(
-            "/v1/agents/{agent_id}/rotate-token",
-            post(rotate_token),
-        )
+        .route("/v1/agents/{agent_id}/rotate-token", post(rotate_token))
 }
 
 async fn register(
@@ -53,11 +50,8 @@ async fn register(
     // client gets its own bucket. Untrusted peers still bucket by
     // socket IP — header is ignored, so a malicious client can't
     // dodge a bucket by setting the header themselves.
-    let client_ip = crate::api::effective_client_ip(
-        &headers,
-        addr,
-        &state.config().trusted_proxies,
-    );
+    let client_ip =
+        crate::api::effective_client_ip(&headers, addr, &state.config().trusted_proxies);
     state
         .rate_limiter
         .check_and_record_register(&client_ip.to_string())
@@ -120,7 +114,10 @@ async fn observations(
 ) -> ApiResult<Json<ObservationAck>> {
     let _ = state.store.authenticate(&agent_id, &token).await?;
     state.rate_limiter.check_and_record_agent(&agent_id).await?;
-    let n = state.store.record_observations(&agent_id, &req.items).await?;
+    let n = state
+        .store
+        .record_observations(&agent_id, &req.items)
+        .await?;
     Ok(Json(ObservationAck { accepted: n }))
 }
 
@@ -135,7 +132,11 @@ async fn drift(
     let n = state.store.record_drift(&agent_id, &req.items).await?;
     // Auto-close any open drift not in this batch — we treat each drift push
     // as the agent's complete current state.
-    let current: Vec<String> = req.items.iter().map(|i| i.resource_id.to_string()).collect();
+    let current: Vec<String> = req
+        .items
+        .iter()
+        .map(|i| i.resource_id.to_string())
+        .collect();
     state.store.close_drift_not_in(&agent_id, &current).await?;
     Ok(Json(DriftAck { accepted: n }))
 }
@@ -184,9 +185,7 @@ async fn list_assignments(
                 &env.created_at,
                 &payload_json,
             )
-            .map_err(|e| {
-                crate::error::ApiError::Internal(format!("signing failed: {e}"))
-            })?;
+            .map_err(|e| crate::error::ApiError::Internal(format!("signing failed: {e}")))?;
         env.key_id = state.signer.key_id().to_string();
     }
     Ok(Json(AssignmentList { items }))
@@ -199,7 +198,10 @@ async fn assignment_result(
     Json(req): Json<AssignmentResultRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let _ = state.store.authenticate(&agent_id, &token).await?;
-    state.store.complete_assignment(&agent_id, &assignment_id, &req).await?;
+    state
+        .store
+        .complete_assignment(&agent_id, &assignment_id, &req)
+        .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

@@ -7,13 +7,13 @@
 //! row. Phase 1 starts at version 1; future migrations append rows.
 
 use anyhow::{Context, Result};
+use iac_core::ResourceId;
 use iac_core::diff::Diff;
 use iac_core::state::ObservedState;
-use iac_core::ResourceId;
 use jiff::Timestamp;
-use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
 use parking_lot::Mutex;
+use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 // Phase 7cz.8 (replay protection) bumped schema 1 → 2 by adding the
@@ -76,7 +76,9 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        let store = Self { conn: Mutex::new(conn) };
+        let store = Self {
+            conn: Mutex::new(conn),
+        };
         store.migrate()?;
         Ok(store)
     }
@@ -180,11 +182,7 @@ impl Store {
 
     /// Phase 7cz.8: record an executed assignment. Idempotent — re-
     /// inserting the same id is a no-op (PRIMARY KEY conflict).
-    pub fn mark_assignment_processed(
-        &self,
-        assignment_id: &str,
-        status: &str,
-    ) -> Result<()> {
+    pub fn mark_assignment_processed(&self, assignment_id: &str, status: &str) -> Result<()> {
         let conn = self.conn.lock();
         let _ = conn.execute(
             "INSERT OR IGNORE INTO processed_assignments (assignment_id, processed_at, status) \
@@ -277,12 +275,7 @@ impl Store {
         Ok(row)
     }
 
-    pub fn open_drift(
-        &self,
-        resource_id: &ResourceId,
-        severity: &str,
-        diff: &Diff,
-    ) -> Result<i64> {
+    pub fn open_drift(&self, resource_id: &ResourceId, severity: &str, diff: &Diff) -> Result<i64> {
         let conn = self.conn.lock();
         // If there's already an unresolved drift for this resource_id, just
         // bump the diff_json so we don't accumulate duplicates per cycle.
@@ -329,7 +322,11 @@ impl Store {
         Ok(n)
     }
 
-    pub fn close_open_drift_for(&self, resource_id: &ResourceId, resolution: &str) -> Result<usize> {
+    pub fn close_open_drift_for(
+        &self,
+        resource_id: &ResourceId,
+        resolution: &str,
+    ) -> Result<usize> {
         let conn = self.conn.lock();
         let n = conn.execute(
             "UPDATE drift_events
@@ -415,8 +412,9 @@ impl Store {
 
 fn row_to_drift(r: &rusqlite::Row<'_>) -> rusqlite::Result<DriftRow> {
     let diff_json: String = r.get(4)?;
-    let diff: Diff = serde_json::from_str(&diff_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
+    let diff: Diff = serde_json::from_str(&diff_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     Ok(DriftRow {
         id: r.get(0)?,
         resource_id: r.get(1)?,
@@ -432,15 +430,20 @@ fn row_to_drift(r: &rusqlite::Row<'_>) -> rusqlite::Result<DriftRow> {
 fn row_to_observation(r: &rusqlite::Row<'_>) -> rusqlite::Result<ObservationRow> {
     let spec_json: String = r.get(4)?;
     let facts_json: String = r.get(5)?;
-    let spec: serde_json::Value = serde_json::from_str(&spec_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
-    let facts: serde_json::Value = serde_json::from_str(&facts_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?;
+    let spec: serde_json::Value = serde_json::from_str(&spec_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let facts: serde_json::Value = serde_json::from_str(&facts_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     Ok(ObservationRow {
         resource_id: r.get(0)?,
         kind: r.get(1)?,
         observed_at: r.get(2)?,
-        present: { let i: i64 = r.get(3)?; i != 0 },
+        present: {
+            let i: i64 = r.get(3)?;
+            i != 0
+        },
         spec,
         facts,
     })

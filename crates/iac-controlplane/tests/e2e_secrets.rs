@@ -18,7 +18,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_controlplane::secrets::{EnvResolver, Resolver, SecretRegistry};
 use iac_core::protocol::v1::{
@@ -79,7 +79,8 @@ async fn secret_refs_persist_unresolved_in_desired_state() {
             "greet",
             "secrets-test",
             "/tmp/iac-secret-test.txt",
-        )], canary: None,
+        )],
+        canary: None,
     };
     let client = reqwest::Client::new();
     let resp = client
@@ -213,7 +214,8 @@ async fn submit_without_registry_rejects_secret_refs() {
             "greet",
             "secrets-test",
             "/tmp/iac-secret-test.txt",
-        )], canary: None,
+        )],
+        canary: None,
     };
     let client = reqwest::Client::new();
     let resp = client
@@ -253,7 +255,8 @@ async fn submit_without_secrets_in_request_works_under_registry() {
                 "mode": "0644",
                 "content": "no secrets here\n",
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let client = reqwest::Client::new();
     let resp = client

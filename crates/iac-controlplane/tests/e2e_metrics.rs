@@ -10,7 +10,7 @@
 use iac_controlplane::identity::Role;
 use iac_controlplane::store::CreateUser;
 use iac_controlplane::webhook::WebhookDispatcher;
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{LoginRequest, LoginResponse};
 use reqwest::StatusCode;
 use std::net::SocketAddr;
@@ -43,15 +43,15 @@ async fn spawn(with_dispatcher: bool) -> TestServer {
         maintenance_windows: vec![],
         recurring_maintenance_windows: vec![],
         webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-    tls: iac_controlplane::tls::TlsConfig::default(),
-            secrets: iac_controlplane::config::SecretsConfig::default(),
-            retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
-            modules: vec![],
-            agent_token_ttl_secs: None,
-            ssh_targets: vec![],
-            wal_checkpoint_interval_secs: 0,
-            shutdown_timeout_secs: 1,
-            trusted_proxies: vec![],
+        tls: iac_controlplane::tls::TlsConfig::default(),
+        secrets: iac_controlplane::config::SecretsConfig::default(),
+        retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
+        modules: vec![],
+        agent_token_ttl_secs: None,
+        ssh_targets: vec![],
+        wal_checkpoint_interval_secs: 0,
+        shutdown_timeout_secs: 1,
+        trusted_proxies: vec![],
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -65,18 +65,16 @@ async fn spawn(with_dispatcher: bool) -> TestServer {
     let state = AppState {
         store: store.clone(),
         live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
-                iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
-            )),
-            config_path: None,
+            iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
+        )),
+        config_path: None,
         signer,
-        rate_limiter: Arc::new(
-            iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
-        ),
+        rate_limiter: Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+            &cfg.rate_limit,
+        )),
         webhook_dispatcher,
-        maintenance_metrics: Arc::new(
-            iac_controlplane::maintenance::MaintenanceMetrics::default(),
-        ),
-            secret_registry: None,
+        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+        secret_registry: None,
     };
     let app = iac_controlplane::server::router(state);
     let listener = tokio::net::TcpListener::bind(cfg.bind).await.unwrap();
@@ -84,12 +82,21 @@ async fn spawn(with_dispatcher: bool) -> TestServer {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
-    TestServer { addr, shutdown, handle, store, _tempdir: dir }
+    TestServer {
+        addr,
+        shutdown,
+        handle,
+        store,
+        _tempdir: dir,
+    }
 }
 
 impl TestServer {
@@ -246,7 +253,10 @@ async fn metrics_readable_by_viewer_role() {
         .unwrap();
     let token = reqwest::Client::new()
         .post(format!("{}/v1/auth/login", server.url()))
-        .json(&LoginRequest { username: "dash".into(), password: "p".into() })
+        .json(&LoginRequest {
+            username: "dash".into(),
+            password: "p".into(),
+        })
         .send()
         .await
         .unwrap()
@@ -301,15 +311,15 @@ async fn maintenance_counters_track_admit_block_bypass() {
         }],
         recurring_maintenance_windows: vec![],
         webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-    tls: iac_controlplane::tls::TlsConfig::default(),
-            secrets: iac_controlplane::config::SecretsConfig::default(),
-            retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
-            modules: vec![],
-            agent_token_ttl_secs: None,
-            ssh_targets: vec![],
-            wal_checkpoint_interval_secs: 0,
-            shutdown_timeout_secs: 1,
-            trusted_proxies: vec![],
+        tls: iac_controlplane::tls::TlsConfig::default(),
+        secrets: iac_controlplane::config::SecretsConfig::default(),
+        retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
+        modules: vec![],
+        agent_token_ttl_secs: None,
+        ssh_targets: vec![],
+        wal_checkpoint_interval_secs: 0,
+        shutdown_timeout_secs: 1,
+        trusted_proxies: vec![],
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -318,18 +328,16 @@ async fn maintenance_counters_track_admit_block_bypass() {
     let state = AppState {
         store: store.clone(),
         live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
-                iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
-            )),
-            config_path: None,
+            iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
+        )),
+        config_path: None,
         signer,
-        rate_limiter: Arc::new(
-            iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
-        ),
+        rate_limiter: Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+            &cfg.rate_limit,
+        )),
         webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(
-            iac_controlplane::maintenance::MaintenanceMetrics::default(),
-        ),
-            secret_registry: None,
+        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+        secret_registry: None,
     };
     let app = iac_controlplane::server::router(state);
     let listener = tokio::net::TcpListener::bind(cfg.bind).await.unwrap();
@@ -337,10 +345,13 @@ async fn maintenance_counters_track_admit_block_bypass() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{addr}");
 
@@ -376,7 +387,8 @@ async fn maintenance_counters_track_admit_block_bypass() {
                             "mode": "0644",
                             "content": "x\n",
                         }
-                    })], canary: None,
+                    })],
+                    canary: None,
                 });
             if bypass {
                 req = req.header("x-iac-maintenance-bypass", "yes");
@@ -447,15 +459,15 @@ async fn maintenance_recurring_block_increments_per_type_counter() {
             timezone: None,
         }],
         webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-    tls: iac_controlplane::tls::TlsConfig::default(),
-            secrets: iac_controlplane::config::SecretsConfig::default(),
-            retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
-            modules: vec![],
-            agent_token_ttl_secs: None,
-            ssh_targets: vec![],
-            wal_checkpoint_interval_secs: 0,
-            shutdown_timeout_secs: 1,
-            trusted_proxies: vec![],
+        tls: iac_controlplane::tls::TlsConfig::default(),
+        secrets: iac_controlplane::config::SecretsConfig::default(),
+        retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
+        modules: vec![],
+        agent_token_ttl_secs: None,
+        ssh_targets: vec![],
+        wal_checkpoint_interval_secs: 0,
+        shutdown_timeout_secs: 1,
+        trusted_proxies: vec![],
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -464,18 +476,16 @@ async fn maintenance_recurring_block_increments_per_type_counter() {
     let state = AppState {
         store: store.clone(),
         live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
-                iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
-            )),
-            config_path: None,
+            iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
+        )),
+        config_path: None,
         signer,
-        rate_limiter: Arc::new(
-            iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
-        ),
+        rate_limiter: Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+            &cfg.rate_limit,
+        )),
         webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(
-            iac_controlplane::maintenance::MaintenanceMetrics::default(),
-        ),
-            secret_registry: None,
+        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+        secret_registry: None,
     };
     let app = iac_controlplane::server::router(state);
     let listener = tokio::net::TcpListener::bind(cfg.bind).await.unwrap();
@@ -483,10 +493,13 @@ async fn maintenance_recurring_block_increments_per_type_counter() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{addr}");
 
@@ -519,7 +532,8 @@ async fn maintenance_recurring_block_increments_per_type_counter() {
                     "mode": "0644",
                     "content": "x\n",
                 }
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -565,20 +579,21 @@ async fn rate_limit_counters_increment_after_submissions() {
         retention: iac_controlplane::retention::RetentionConfig::default(),
         rate_limit: iac_controlplane::rate_limit::RateLimitConfig {
             operations_per_minute: Some(2),
-            agent_requests_per_minute: None, ..Default::default()
+            agent_requests_per_minute: None,
+            ..Default::default()
         },
         maintenance_windows: vec![],
         recurring_maintenance_windows: vec![],
         webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-    tls: iac_controlplane::tls::TlsConfig::default(),
-            secrets: iac_controlplane::config::SecretsConfig::default(),
-            retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
-            modules: vec![],
-            agent_token_ttl_secs: None,
-            ssh_targets: vec![],
-            wal_checkpoint_interval_secs: 0,
-            shutdown_timeout_secs: 1,
-            trusted_proxies: vec![],
+        tls: iac_controlplane::tls::TlsConfig::default(),
+        secrets: iac_controlplane::config::SecretsConfig::default(),
+        retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
+        modules: vec![],
+        agent_token_ttl_secs: None,
+        ssh_targets: vec![],
+        wal_checkpoint_interval_secs: 0,
+        shutdown_timeout_secs: 1,
+        trusted_proxies: vec![],
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -587,16 +602,16 @@ async fn rate_limit_counters_increment_after_submissions() {
     let state = AppState {
         store: store.clone(),
         live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
-                iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
-            )),
-            config_path: None,
+            iac_controlplane::server::ReloadableState::new(std::sync::Arc::new(cfg.clone())),
+        )),
+        config_path: None,
         signer,
-        rate_limiter: Arc::new(
-            iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
-        ),
+        rate_limiter: Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+            &cfg.rate_limit,
+        )),
         webhook_dispatcher: None,
-    maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
-            secret_registry: None,
+        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+        secret_registry: None,
     };
     let app = iac_controlplane::server::router(state);
     let listener = tokio::net::TcpListener::bind(cfg.bind).await.unwrap();
@@ -604,10 +619,13 @@ async fn rate_limit_counters_increment_after_submissions() {
     let shutdown = Arc::new(Notify::new());
     let signal = shutdown.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .with_graceful_shutdown(async move { signal.notified().await })
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { signal.notified().await })
+        .await
+        .unwrap();
     });
     let url = format!("http://{addr}");
 
@@ -644,7 +662,8 @@ async fn rate_limit_counters_increment_after_submissions() {
                             "mode": "0644",
                             "content": "x\n",
                         }
-                    })], canary: None,
+                    })],
+                    canary: None,
                 })
                 .send()
                 .await

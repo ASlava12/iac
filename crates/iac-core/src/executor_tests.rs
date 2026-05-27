@@ -2,9 +2,9 @@ use super::*;
 use crate::diff::{Diff, DiffKind, FieldChange};
 use crate::operation::{Step, StepResult};
 use crate::provider::{ApplyContext, Provider, VerifyOutcome};
-use crate::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+use crate::resource::{API_VERSION, Metadata, Resource, SourceLocation};
 use crate::state::ObservedState;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 use std::path::Path;
 use std::sync::Mutex;
@@ -271,7 +271,10 @@ fn operations_dir_is_bounded_by_gc() {
     let count_dirs = || {
         std::fs::read_dir(&ops_root)
             .unwrap()
-            .filter(|e| e.as_ref().is_ok_and(|e| e.file_type().is_ok_and(|t| t.is_dir())))
+            .filter(|e| {
+                e.as_ref()
+                    .is_ok_and(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            })
             .count()
     };
 

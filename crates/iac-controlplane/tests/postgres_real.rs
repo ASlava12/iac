@@ -41,9 +41,7 @@ impl PgContainer {
     fn start() -> Self {
         let name = format!("iac-pg-test-{}", std::process::id());
         // Best-effort cleanup of a leftover from a prior crashed run.
-        let _ = Command::new("docker")
-            .args(["rm", "-f", &name])
-            .output();
+        let _ = Command::new("docker").args(["rm", "-f", &name]).output();
 
         let out = Command::new("docker")
             .args([
@@ -97,15 +95,7 @@ impl PgContainer {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
             let out = Command::new("docker")
-                .args([
-                    "exec",
-                    &self.name,
-                    "pg_isready",
-                    "-U",
-                    "iac",
-                    "-d",
-                    "iac",
-                ])
+                .args(["exec", &self.name, "pg_isready", "-U", "iac", "-d", "iac"])
                 .output();
             if matches!(out, Ok(o) if o.status.success()) {
                 // pg_isready can return "accepting connections" while the

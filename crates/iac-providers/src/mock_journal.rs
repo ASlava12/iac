@@ -60,7 +60,11 @@ impl<S: Default> Default for MockJournal<S> {
 impl<S: Default> MockJournal<S> {
     /// Snapshot of every recorded call in arrival order.
     pub fn calls(&self) -> Vec<String> {
-        self.inner.lock().expect("mock journal mutex poisoned").calls.clone()
+        self.inner
+            .lock()
+            .expect("mock journal mutex poisoned")
+            .calls
+            .clone()
     }
 
     /// Arm `op` to fail on the next call with `msg`. The next

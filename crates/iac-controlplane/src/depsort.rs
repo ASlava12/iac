@@ -148,8 +148,7 @@ pub fn topo_sort_by_depends_on(routing: &mut Vec<ResourceForRouting>) -> ApiResu
     // `order`. Build a fresh Vec by moving items out one at a time:
     // we use Option<T> as a take-out-cell since ResourceForRouting
     // isn't Default-or-Clone-friendly to fake.
-    let mut taker: Vec<Option<ResourceForRouting>> =
-        routing.drain(..).map(Some).collect();
+    let mut taker: Vec<Option<ResourceForRouting>> = routing.drain(..).map(Some).collect();
     let mut sorted: Vec<ResourceForRouting> = Vec::with_capacity(n);
     for idx in order {
         // Phase 7cz.16: `order` is the topological-sort output and
@@ -169,10 +168,7 @@ pub fn topo_sort_by_depends_on(routing: &mut Vec<ResourceForRouting>) -> ApiResu
 fn read_depends_on(resource_json: &str) -> ApiResult<Vec<String>> {
     let value: serde_json::Value = serde_json::from_str(resource_json)
         .map_err(|e| ApiError::BadRequest(format!("malformed resource json: {e}")))?;
-    let Some(deps_value) = value
-        .get("metadata")
-        .and_then(|m| m.get("dependsOn"))
-    else {
+    let Some(deps_value) = value.get("metadata").and_then(|m| m.get("dependsOn")) else {
         return Ok(Vec::new());
     };
     let Some(arr) = deps_value.as_array() else {
@@ -205,10 +201,8 @@ mod tests {
     use super::*;
 
     fn rfr(id: &str, depends_on: &[&str]) -> ResourceForRouting {
-        let deps_json: Vec<serde_json::Value> = depends_on
-            .iter()
-            .map(|d| serde_json::json!(d))
-            .collect();
+        let deps_json: Vec<serde_json::Value> =
+            depends_on.iter().map(|d| serde_json::json!(d)).collect();
         let json = serde_json::json!({
             "apiVersion": "iac.example/v1",
             "kind": "file",
@@ -268,11 +262,7 @@ mod tests {
 
     #[test]
     fn chain_dependency_orders_a_b_c() {
-        let mut r = vec![
-            rfr("c", &["b"]),
-            rfr("b", &["a"]),
-            rfr_no_deps("a"),
-        ];
+        let mut r = vec![rfr("c", &["b"]), rfr("b", &["a"]), rfr_no_deps("a")];
         topo_sort_by_depends_on(&mut r).unwrap();
         assert_eq!(ids(&r), vec!["a", "b", "c"]);
     }
@@ -368,11 +358,7 @@ mod tests {
     #[test]
     fn layers_chain_increments() {
         // a → b → c (b depends on a; c depends on b)
-        let mut r = vec![
-            rfr_no_deps("a"),
-            rfr("b", &["a"]),
-            rfr("c", &["b"]),
-        ];
+        let mut r = vec![rfr_no_deps("a"), rfr("b", &["a"]), rfr("c", &["b"])];
         topo_sort_by_depends_on(&mut r).unwrap();
         let layers = compute_resource_layers(&r).unwrap();
         // After topo sort the order is [a, b, c].

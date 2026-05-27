@@ -48,7 +48,12 @@ impl AgentStatus {
         }
     }
 
-    pub fn record_cycle(&mut self, summary: ObserveCycleSummary, open_drift: usize, managed: usize) {
+    pub fn record_cycle(
+        &mut self,
+        summary: ObserveCycleSummary,
+        open_drift: usize,
+        managed: usize,
+    ) {
         self.last_observe_at = Some(summary.at);
         self.healthy = summary.is_clean();
         self.last_observe_summary = Some(summary);
@@ -64,7 +69,9 @@ pub fn write_status(path: &Path, status: &AgentStatus) -> Result<()> {
         .with_context(|| format!("creating status dir {}", parent.display()))?;
     let tmp = parent.join(format!(
         ".{}.tmp",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("status")
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("status")
     ));
     std::fs::write(&tmp, &bytes)
         .with_context(|| format!("writing temp status {}", tmp.display()))?;
@@ -74,8 +81,8 @@ pub fn write_status(path: &Path, status: &AgentStatus) -> Result<()> {
 }
 
 pub fn read_status(path: &Path) -> Result<AgentStatus> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading status {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("reading status {}", path.display()))?;
     let status: AgentStatus = serde_json::from_slice(&bytes)
         .with_context(|| format!("parsing status {}", path.display()))?;
     Ok(status)

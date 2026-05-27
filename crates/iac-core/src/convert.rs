@@ -18,7 +18,7 @@
 
 use crate::diff::FieldChange;
 use crate::resource::Resource;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 
 /// Best-effort YAML → JSON coercion. Returns `Json::Null` on any

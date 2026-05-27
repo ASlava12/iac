@@ -177,7 +177,7 @@ fn is_sensitive_host_path(p: &std::path::Path) -> bool {
         "/sys",
         "/dev",
         "/boot",
-        "/var/lib/iac-agent",       // agent's own state dir
+        "/var/lib/iac-agent",        // agent's own state dir
         "/var/lib/iac-controlplane", // control-plane's state dir
     ];
     let s = p.to_string_lossy();

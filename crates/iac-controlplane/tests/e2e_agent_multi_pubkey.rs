@@ -20,7 +20,7 @@
 //!    auto-migrated to the new pubkey set.
 
 use iac_agent::remote::{Client, Identity};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{RegisterRequest, SigningPubkeyBundle};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -64,9 +64,8 @@ impl TestServer {
             trusted_proxies: vec![],
         };
         let store = Store::connect(&cfg.database_url).await.unwrap();
-        let signer = Arc::new(
-            iac_controlplane::signing::ServerSigner::load_or_create(dir.path()).unwrap(),
-        );
+        let signer =
+            Arc::new(iac_controlplane::signing::ServerSigner::load_or_create(dir.path()).unwrap());
         let state = AppState {
             store: store.clone(),
             live: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -89,12 +88,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, signer, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            signer,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -315,8 +323,7 @@ async fn connect_refuses_no_overlap_bundle() {
         .unwrap();
 
     // Replace pinned set with a key the server has never heard of.
-    let mut id: Identity =
-        serde_json::from_slice(&std::fs::read(&identity_file).unwrap()).unwrap();
+    let mut id: Identity = serde_json::from_slice(&std::fs::read(&identity_file).unwrap()).unwrap();
     id.server_pubkeys = vec![iac_agent::remote::ServerPubkey {
         key_id: "01FORGED".into(),
         public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
@@ -384,7 +391,8 @@ async fn end_to_end_agent_apply_after_rotation() {
                 "mode": "0644",
                 "content": "rotated\n",
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -417,7 +425,10 @@ async fn end_to_end_agent_apply_after_rotation() {
         "agent must reconnect after rotation"
     );
     agent2.observe_once().await.unwrap();
-    assert!(target.exists(), "agent applied envelope signed by new active key");
+    assert!(
+        target.exists(),
+        "agent applied envelope signed by new active key"
+    );
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "rotated\n");
 
     server.shutdown().await;

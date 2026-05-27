@@ -8,7 +8,7 @@
 //! upgrade — they have to opt into shorter windows.
 
 use crate::error::ApiResult;
-use crate::store::{sql, Store};
+use crate::store::{Store, sql};
 use jiff::{Span, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -213,11 +213,9 @@ pub async fn prune_once(store: &Store, config: &RetentionConfig) -> ApiResult<Pr
         .await?;
     }
     if config.observation_max_per_resource > 0 {
-        stats.observations_per_resource = prune_observations_per_resource(
-            store,
-            i64::from(config.observation_max_per_resource),
-        )
-        .await?;
+        stats.observations_per_resource =
+            prune_observations_per_resource(store, i64::from(config.observation_max_per_resource))
+                .await?;
     }
     if config.desired_state_max_per_resource > 0 {
         stats.desired_states_per_resource = prune_desired_states_per_resource(
@@ -251,15 +249,13 @@ pub async fn prune_once(store: &Store, config: &RetentionConfig) -> ApiResult<Pr
     Ok(stats)
 }
 
-async fn delete_older_than(
-    store: &Store,
-    table: &str,
-    column: &str,
-    days: i64,
-) -> ApiResult<u64> {
+async fn delete_older_than(store: &Store, table: &str, column: &str, days: i64) -> ApiResult<u64> {
     let cutoff = cutoff_string(days);
     let q = format!("DELETE FROM {table} WHERE {column} < ?");
-    let res = sqlx::query(&sql(&q)).bind(cutoff).execute(store.pool()).await?;
+    let res = sqlx::query(&sql(&q))
+        .bind(cutoff)
+        .execute(store.pool())
+        .await?;
     Ok(res.rows_affected())
 }
 
@@ -272,7 +268,10 @@ async fn delete_older_than_with_filter(
 ) -> ApiResult<u64> {
     let cutoff = cutoff_string(days);
     let q = format!("DELETE FROM {table} WHERE {extra_filter} AND {column} < ?");
-    let res = sqlx::query(&sql(&q)).bind(cutoff).execute(store.pool()).await?;
+    let res = sqlx::query(&sql(&q))
+        .bind(cutoff)
+        .execute(store.pool())
+        .await?;
     Ok(res.rows_affected())
 }
 
@@ -284,10 +283,7 @@ async fn delete_older_than_with_filter(
 /// Tied `observed_at` values are broken by `id DESC` so the higher-id
 /// (later-inserted) row always wins — agents that submit batches with
 /// identical observed_at don't see arbitrary survivors.
-async fn prune_observations_per_resource(
-    store: &Store,
-    max_per_resource: i64,
-) -> ApiResult<u64> {
+async fn prune_observations_per_resource(store: &Store, max_per_resource: i64) -> ApiResult<u64> {
     // Phase 9-F1-fix-7 (gap-#7 from F1 #7, 2026-05-11): chunked DELETE.
     //
     // The single all-at-once `DELETE FROM observations WHERE id IN
@@ -347,10 +343,7 @@ async fn prune_observations_per_resource(
 /// threshold around 150 k desired_states rows. Default cap=10
 /// × 1400 trial resources holds steady-state at 14 k, two orders
 /// of magnitude below the knee.
-async fn prune_desired_states_per_resource(
-    store: &Store,
-    max_per_resource: i64,
-) -> ApiResult<u64> {
+async fn prune_desired_states_per_resource(store: &Store, max_per_resource: i64) -> ApiResult<u64> {
     const CHUNK_SIZE: i64 = 5_000;
     const INTER_CHUNK_PAUSE_MS: u64 = 50;
     let q = "DELETE FROM desired_states
@@ -467,11 +460,9 @@ mod tests {
     }
 
     async fn insert_audit(store: &Store, timestamp: &str) {
-        sqlx::query(&sql(
-            "INSERT INTO audit_events
+        sqlx::query(&sql("INSERT INTO audit_events
                 (timestamp, actor, kind, severity, payload_json)
-             VALUES (?, 'admin', 'test', 'info', '{}')",
-        ))
+             VALUES (?, 'admin', 'test', 'info', '{}')"))
         .bind(timestamp)
         .execute(store.pool())
         .await
@@ -498,8 +489,10 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.audit, 1);
 
-        let count: (i64,) =
-            sqlx::query_as(&sql("SELECT COUNT(*) FROM audit_events")).fetch_one(store.pool()).await.unwrap();
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM audit_events"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 2);
     }
 
@@ -542,8 +535,10 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.observations, 1);
 
-        let count: (i64,) =
-            sqlx::query_as(&sql("SELECT COUNT(*) FROM observations")).fetch_one(store.pool()).await.unwrap();
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM observations"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 1);
     }
 
@@ -561,12 +556,10 @@ mod tests {
         .unwrap();
 
         // Old + resolved → prunable.
-        sqlx::query(&sql(
-            "INSERT INTO drift_events
+        sqlx::query(&sql("INSERT INTO drift_events
                 (agent_id, resource_id, kind, severity, diff_json, detected_at,
                  received_at, resolved_at)
-             VALUES ('a1', 'file/test/x', 'file', 'warning', '{}', ?, ?, ?)",
-        ))
+             VALUES ('a1', 'file/test/x', 'file', 'warning', '{}', ?, ?, ?)"))
         .bind(ago(60))
         .bind(ago(60))
         .bind(ago(60))
@@ -574,12 +567,10 @@ mod tests {
         .await
         .unwrap();
         // Old + still open → kept.
-        sqlx::query(&sql(
-            "INSERT INTO drift_events
+        sqlx::query(&sql("INSERT INTO drift_events
                 (agent_id, resource_id, kind, severity, diff_json, detected_at,
                  received_at)
-             VALUES ('a1', 'file/test/y', 'file', 'warning', '{}', ?, ?)",
-        ))
+             VALUES ('a1', 'file/test/y', 'file', 'warning', '{}', ?, ?)"))
         .bind(ago(60))
         .bind(ago(60))
         .execute(store.pool())
@@ -590,8 +581,10 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.drift_resolved, 1);
 
-        let count: (i64,) =
-            sqlx::query_as(&sql("SELECT COUNT(*) FROM drift_events")).fetch_one(store.pool()).await.unwrap();
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM drift_events"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 1);
     }
 
@@ -641,8 +634,10 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.user_tokens_expired, 1);
 
-        let count: (i64,) =
-            sqlx::query_as(&sql("SELECT COUNT(*) FROM user_tokens")).fetch_one(store.pool()).await.unwrap();
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM user_tokens"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 1);
     }
 
@@ -652,12 +647,17 @@ mod tests {
         let store = store_in(&dir).await;
         insert_audit(&store, &ago(120)).await;
 
-        let cfg = RetentionConfig { audit_days: 0, ..RetentionConfig::default() };
+        let cfg = RetentionConfig {
+            audit_days: 0,
+            ..RetentionConfig::default()
+        };
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.audit, 0);
 
-        let count: (i64,) =
-            sqlx::query_as(&sql("SELECT COUNT(*) FROM audit_events")).fetch_one(store.pool()).await.unwrap();
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM audit_events"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 1);
     }
 
@@ -665,7 +665,9 @@ mod tests {
     async fn empty_db_prune_is_clean_zero() {
         let dir = TempDir::new().unwrap();
         let store = store_in(&dir).await;
-        let stats = prune_once(&store, &RetentionConfig::default()).await.unwrap();
+        let stats = prune_once(&store, &RetentionConfig::default())
+            .await
+            .unwrap();
         assert_eq!(stats.total(), 0);
     }
 
@@ -727,10 +729,13 @@ mod tests {
         .fetch_all(store.pool())
         .await
         .unwrap();
-        assert_eq!(counts, vec![
-            ("file/test/x".to_string(), 2),
-            ("file/test/y".to_string(), 2),
-        ]);
+        assert_eq!(
+            counts,
+            vec![
+                ("file/test/x".to_string(), 2),
+                ("file/test/y".to_string(), 2),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -755,8 +760,10 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.observations_per_resource, 0);
 
-        let count: (i64,) =
-            sqlx::query_as(&sql("SELECT COUNT(*) FROM observations")).fetch_one(store.pool()).await.unwrap();
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM observations"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 4);
     }
 
@@ -772,21 +779,17 @@ mod tests {
             // (operation_id REFERENCES operations(id) ON DELETE
             // CASCADE) is satisfied.
             let op_id = format!("op-{resource_id}-{i:03}");
-            sqlx::query(&sql(
-                "INSERT INTO operations
+            sqlx::query(&sql("INSERT INTO operations
                     (id, kind, environment, requested_by, status, created_at, matched_policies_json)
-                 VALUES (?, 'apply', 'test', 'test', 'succeeded', ?, '[]')",
-            ))
+                 VALUES (?, 'apply', 'test', 'test', 'succeeded', ?, '[]')"))
             .bind(&op_id)
             .bind(ago(0))
             .execute(store.pool())
             .await
             .unwrap();
-            sqlx::query(&sql(
-                "INSERT INTO desired_states
+            sqlx::query(&sql("INSERT INTO desired_states
                     (operation_id, resource_id, kind, environment, spec_json, metadata_json)
-                 VALUES (?, ?, 'file', 'test', '{}', '{}')",
-            ))
+                 VALUES (?, ?, 'file', 'test', '{}', '{}')"))
             .bind(&op_id)
             .bind(resource_id)
             .execute(store.pool())
@@ -889,8 +892,10 @@ mod tests {
         // Each agent has 3 rows of `file/test/shared`; cap of 2 drops 1
         // per agent → total 2 dropped, 4 remaining.
         assert_eq!(stats.observations_per_resource, 2);
-        let count: (i64,) =
-            sqlx::query_as(&sql("SELECT COUNT(*) FROM observations")).fetch_one(store.pool()).await.unwrap();
+        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM observations"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
         assert_eq!(count.0, 4);
     }
 }

@@ -1,24 +1,17 @@
 // Phase 7cz.16: tests-only exemption for unwrap/expect/panic.
-#![cfg_attr(
-    test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
-)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use iac_controlplane::{
-    identity::Role,
-    server::AppState,
-    signing::ServerSigner,
-    store::CreateUser,
-    Config, Store,
+    Config, Store, identity::Role, server::AppState, signing::ServerSigner, store::CreateUser,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Notify;
 
 // Phase 9 follow-up: optional heap profiling for the CP slow-leak
@@ -41,10 +34,16 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 static GLOBAL_MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(all(feature = "mimalloc", feature = "heap-profiling"))]
-compile_error!("features `mimalloc` and `heap-profiling` are mutually exclusive — both register a #[global_allocator]");
+compile_error!(
+    "features `mimalloc` and `heap-profiling` are mutually exclusive — both register a #[global_allocator]"
+);
 
 #[derive(Parser, Debug)]
-#[command(name = "iac-controlplane", version, about = "IaC control-plane API server (Phase 2a)")]
+#[command(
+    name = "iac-controlplane",
+    version,
+    about = "IaC control-plane API server (Phase 2a)"
+)]
 struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
@@ -79,7 +78,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error: cannot build tokio runtime: {e}");
@@ -133,13 +135,16 @@ async fn bootstrap_admin_from_env(store: &Store) -> Result<()> {
 }
 
 fn init_tracing(verbosity: u8) {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
     let filter = match verbosity {
         0 => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         1 => EnvFilter::new("info,iac_controlplane=debug"),
         _ => EnvFilter::new("debug"),
     };
-    let _ = fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 async fn run(cli: Cli) -> Result<ExitCode> {
@@ -166,8 +171,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .await
         .context("bootstrapping admin user")?;
 
-    let signer =
-        ServerSigner::load_or_create(&config.state_dir).context("initializing signer")?;
+    let signer = ServerSigner::load_or_create(&config.state_dir).context("initializing signer")?;
     let rate_limiter = Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
         &config.rate_limit,
     ));
@@ -175,17 +179,18 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     // Phase 7t / 7ad: build the webhook dispatcher BEFORE AppState so
     // we can share the Arc with both the polling loop and the
     // /v1/metrics handler.
-    let webhook_dispatcher = Arc::new(
-        iac_controlplane::webhook::WebhookDispatcher::new(config.webhooks.clone()),
-    );
+    let webhook_dispatcher = Arc::new(iac_controlplane::webhook::WebhookDispatcher::new(
+        config.webhooks.clone(),
+    ));
     // Phase 7bg: pre-build the per-window counter map from configured
     // window names. `from_config` also runs the Phase 7ai
     // misconfigured-windows count internally.
-    let maintenance_metrics =
-        Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::from_config(
+    let maintenance_metrics = Arc::new(
+        iac_controlplane::maintenance::MaintenanceMetrics::from_config(
             &config.maintenance_windows,
             &config.recurring_maintenance_windows,
-        ));
+        ),
+    );
     // Phase 7am: assemble the secret-resolver registry from config. `env`
     // is always available; `vault` opts in via `[secrets.vault]`.
     let secret_registry = build_secret_registry(&config.secrets)?;
@@ -246,10 +251,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         ssh_shutdown.clone(),
     );
     if !ssh_handles.is_empty() {
-        tracing::info!(
-            target_count = ssh_handles.len(),
-            "spawned SSH push workers"
-        );
+        tracing::info!(target_count = ssh_handles.len(), "spawned SSH push workers");
     }
 
     let app = iac_controlplane::server::router(state.clone());
@@ -322,7 +324,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         });
-        tracing::info!(interval_secs = wal_interval, "WAL checkpoint task scheduled (PASSIVE most ticks, TRUNCATE every 10th)");
+        tracing::info!(
+            interval_secs = wal_interval,
+            "WAL checkpoint task scheduled (PASSIVE most ticks, TRUNCATE every 10th)"
+        );
     } else {
         tracing::info!("WAL checkpoint task disabled (interval = 0)");
     }
@@ -385,7 +390,9 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             .await
             .context("tls server error")?;
     } else {
-        let listener = tokio::net::TcpListener::bind(addr).await.context("binding")?;
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .context("binding")?;
         let actual = listener.local_addr().context("local_addr")?;
         tracing::info!(addr = %actual, "plain HTTP listener bound");
         // Phase 9-F6 follow-up: axum::serve's with_graceful_shutdown
@@ -462,9 +469,7 @@ fn build_secret_registry(
 
     if let Some(s) = &cfg.sops {
         if s.base_dir.as_os_str().is_empty() {
-            anyhow::bail!(
-                "[secrets.sops].base_dir must be set when sops block is present"
-            );
+            anyhow::bail!("[secrets.sops].base_dir must be set when sops block is present");
         }
         let binary = s.resolve_binary();
         let resolver = SopsResolver::new(&s.base_dir, &binary)

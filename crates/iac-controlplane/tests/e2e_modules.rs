@@ -10,7 +10,7 @@
 use iac_controlplane::config::RetryAfterFormat;
 use iac_controlplane::modules::{Module, ModuleParameter};
 use iac_controlplane::rate_limit::{RateLimitConfig, RateLimiter};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{RegisterRequest, SubmitOperationRequest, SubmitOperationResponse};
 use reqwest::StatusCode;
 use serde_json::json;
@@ -125,12 +125,20 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -169,16 +177,19 @@ async fn module_appears_in_expanders_catalog() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Vec<serde_json::Value> = resp.json().await.unwrap();
     let kinds: Vec<&str> = body.iter().filter_map(|d| d["kind"].as_str()).collect();
-    assert!(kinds.contains(&"service"), "built-ins still present: {kinds:?}");
+    assert!(
+        kinds.contains(&"service"),
+        "built-ins still present: {kinds:?}"
+    );
     assert!(
         kinds.contains(&"marker-bundle"),
         "operator-defined module surfaced in catalog: {kinds:?}"
     );
-    let module_entry = body
-        .iter()
-        .find(|d| d["kind"] == "marker-bundle")
-        .unwrap();
-    assert_eq!(module_entry["description"], "Drops two marker files for ops verification");
+    let module_entry = body.iter().find(|d| d["kind"] == "marker-bundle").unwrap();
+    assert_eq!(
+        module_entry["description"],
+        "Drops two marker files for ops verification"
+    );
     let fields = module_entry["spec_fields"].as_array().unwrap();
     assert_eq!(fields.len(), 2);
     assert_eq!(fields[0]["name"], "tag");
@@ -223,7 +234,8 @@ async fn submitting_module_kind_expands_to_primitives() {
                 "kind": "marker-bundle",
                 "metadata": { "name": "alpha", "environment": "prod" },
                 "spec": { "tag": "v1" }
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -236,7 +248,10 @@ async fn submitting_module_kind_expands_to_primitives() {
     assert_eq!(body.blast_radius.kinds, vec!["file".to_string()]);
     // Composite kind must not leak into the blast radius.
     assert!(
-        !body.blast_radius.kinds.contains(&"marker-bundle".to_string()),
+        !body
+            .blast_radius
+            .kinds
+            .contains(&"marker-bundle".to_string()),
         "composite kind must not appear: {:?}",
         body.blast_radius.kinds
     );
@@ -263,7 +278,8 @@ async fn submitting_module_with_missing_required_param_is_400() {
                 "kind": "marker-bundle",
                 "metadata": { "name": "x", "environment": "prod" },
                 "spec": {}
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -296,7 +312,8 @@ async fn submitting_module_with_unknown_field_is_400() {
                 "kind": "marker-bundle",
                 "metadata": { "name": "x", "environment": "prod" },
                 "spec": { "tag": "v1", "ghost": "boom" }
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -304,7 +321,10 @@ async fn submitting_module_with_unknown_field_is_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body: serde_json::Value = resp.json().await.unwrap();
     let detail = body["detail"].as_str().unwrap_or_default();
-    assert!(detail.contains("ghost"), "error must mention unknown field: {detail:?}");
+    assert!(
+        detail.contains("ghost"),
+        "error must mention unknown field: {detail:?}"
+    );
     server.shutdown().await;
 }
 
@@ -351,7 +371,8 @@ async fn module_emitting_another_module_recursively_expands() {
                 "kind": "outer-wrapper",
                 "metadata": { "name": "alpha", "environment": "prod" },
                 "spec": { "tag": "v1" }
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -363,11 +384,17 @@ async fn module_emitting_another_module_recursively_expands() {
     assert_eq!(body.blast_radius.resource_count, 2);
     assert_eq!(body.blast_radius.kinds, vec!["file".to_string()]);
     assert!(
-        !body.blast_radius.kinds.contains(&"outer-wrapper".to_string()),
+        !body
+            .blast_radius
+            .kinds
+            .contains(&"outer-wrapper".to_string()),
         "intermediate composite must not leak"
     );
     assert!(
-        !body.blast_radius.kinds.contains(&"marker-bundle".to_string()),
+        !body
+            .blast_radius
+            .kinds
+            .contains(&"marker-bundle".to_string()),
         "intermediate composite must not leak"
     );
     server.shutdown().await;
@@ -409,7 +436,8 @@ async fn module_recursive_cycle_rejected() {
                 "kind": "self-cycle",
                 "metadata": { "name": "x", "environment": "prod" },
                 "spec": {}
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await
@@ -447,7 +475,8 @@ async fn unknown_kind_passes_through_when_no_module_matches() {
                 "kind": "unknown-thing",
                 "metadata": { "name": "x", "environment": "prod" },
                 "spec": {}
-            })], canary: None,
+            })],
+            canary: None,
         })
         .send()
         .await

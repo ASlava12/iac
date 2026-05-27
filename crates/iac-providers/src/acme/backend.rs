@@ -16,9 +16,9 @@
 //! into `cert_dir` so the observe path has something to read.
 
 use super::spec::{AcmeCertSpec, ChallengeKind};
-use iac_core::{Error, Result};
 use crate::subprocess::run_check_status;
 use iac_core::subprocess::run_with_timeout;
+use iac_core::{Error, Result};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -120,15 +120,12 @@ impl SecretFile {
                 Error::provider("acme.certificate", format!("temp dir for secret: {e}"))
             })?;
         let path = dir.path().join("token");
-        std::fs::write(&path, secret).map_err(|e| {
-            Error::provider("acme.certificate", format!("write secret: {e}"))
-        })?;
+        std::fs::write(&path, secret)
+            .map_err(|e| Error::provider("acme.certificate", format!("write secret: {e}")))?;
         // Tighten perms (Unix only — providers crate is *nix-targeted).
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| {
-                Error::provider("acme.certificate", format!("chmod 0600: {e}"))
-            })?;
+            .map_err(|e| Error::provider("acme.certificate", format!("chmod 0600: {e}")))?;
         Ok(Self { _dir: dir, path })
     }
 }
@@ -145,8 +142,10 @@ impl LegoCli {
     ) -> Result<(Command, Option<SecretFile>)> {
         let mut cmd = Command::new("lego");
         cmd.arg("--accept-tos")
-            .arg("--email").arg(&spec.email)
-            .arg("--path").arg(&spec.cert_dir);
+            .arg("--email")
+            .arg(&spec.email)
+            .arg("--path")
+            .arg(&spec.cert_dir);
         for d in &spec.domains {
             cmd.arg("--domains").arg(d);
         }
@@ -199,8 +198,7 @@ impl AcmeBackend for LegoCli {
         let (mut cmd, _secret) = self.build_command(spec, "renew")?;
         // `lego renew` only fires if the cert is within its --days
         // window; pass the operator's choice through.
-        cmd.arg("--days")
-            .arg(spec.renew_window_days.to_string());
+        cmd.arg("--days").arg(spec.renew_window_days.to_string());
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -261,28 +259,34 @@ impl MockAcme {
     }
 
     pub fn set_next_not_after(&self, unix_secs: i64) {
-        self.journal.with_state_mut(|s| s.next_not_after = Some(unix_secs));
+        self.journal
+            .with_state_mut(|s| s.next_not_after = Some(unix_secs));
     }
 
     fn write_synthetic_cert(spec: &AcmeCertSpec, not_after_unix: i64) -> Result<()> {
         std::fs::create_dir_all(&spec.cert_dir).map_err(|e| {
             Error::provider(
                 "acme.certificate",
-                format!(
-                    "mock create_dir_all {}: {e}",
-                    spec.cert_dir.display()
-                ),
+                format!("mock create_dir_all {}: {e}", spec.cert_dir.display()),
             )
         })?;
         // We don't need a valid X.509 — just the file's *existence*
         // and a marker file the test can decode the expiry from.
-        std::fs::write(spec.cert_file(), b"-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----\n")
-            .map_err(|e| Error::provider("acme.certificate", format!("write cert: {e}")))?;
-        std::fs::write(spec.key_file(), b"-----BEGIN PRIVATE KEY-----\nMOCK\n-----END PRIVATE KEY-----\n")
-            .map_err(|e| Error::provider("acme.certificate", format!("write key: {e}")))?;
+        std::fs::write(
+            spec.cert_file(),
+            b"-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----\n",
+        )
+        .map_err(|e| Error::provider("acme.certificate", format!("write cert: {e}")))?;
+        std::fs::write(
+            spec.key_file(),
+            b"-----BEGIN PRIVATE KEY-----\nMOCK\n-----END PRIVATE KEY-----\n",
+        )
+        .map_err(|e| Error::provider("acme.certificate", format!("write key: {e}")))?;
         // Sidecar with the expiry — the Mock observe path reads this
         // instead of shelling out to openssl on a non-real cert.
-        let sidecar = spec.cert_dir.join(format!("{}.expiry", spec.primary_domain()));
+        let sidecar = spec
+            .cert_dir
+            .join(format!("{}.expiry", spec.primary_domain()));
         std::fs::write(&sidecar, not_after_unix.to_string())
             .map_err(|e| Error::provider("acme.certificate", format!("write sidecar: {e}")))?;
         Ok(())
@@ -311,7 +315,9 @@ impl AcmeBackend for MockAcme {
         // record() returns Err if `issue` is armed via fail_next.
         let not_after = self
             .journal
-            .record("issue", line, |s| s.next_not_after.unwrap_or_else(default_not_after_secs))
+            .record("issue", line, |s| {
+                s.next_not_after.unwrap_or_else(default_not_after_secs)
+            })
             .map_err(|m| Error::provider("acme.certificate", m))?;
         Self::write_synthetic_cert(spec, not_after)
     }
@@ -321,7 +327,9 @@ impl AcmeBackend for MockAcme {
         let not_after = self
             .journal
             .record("renew", line, |s| {
-                s.next_not_after.take().unwrap_or_else(default_not_after_secs)
+                s.next_not_after
+                    .take()
+                    .unwrap_or_else(default_not_after_secs)
             })
             .map_err(|m| Error::provider("acme.certificate", m))?;
         Self::write_synthetic_cert(spec, not_after)
@@ -336,7 +344,8 @@ impl AcmeBackend for MockAcme {
         let _ = std::fs::remove_file(spec.cert_file());
         let _ = std::fs::remove_file(spec.key_file());
         let _ = std::fs::remove_file(
-            spec.cert_dir.join(format!("{}.expiry", spec.primary_domain())),
+            spec.cert_dir
+                .join(format!("{}.expiry", spec.primary_domain())),
         );
         Ok(())
     }

@@ -85,10 +85,7 @@ impl ExternalProviderSpec {
             return Err(format!("kind {:?} contains whitespace", self.kind));
         }
         if !self.binary.is_absolute() {
-            return Err(format!(
-                "binary {} must be absolute",
-                self.binary.display()
-            ));
+            return Err(format!("binary {} must be absolute", self.binary.display()));
         }
         if !(1..=60).contains(&self.handshake_timeout_secs) {
             return Err(format!(

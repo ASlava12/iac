@@ -14,7 +14,6 @@ pub enum UnitType {
     Mount,
 }
 
-
 impl UnitType {
     pub fn suffix(self) -> &'static str {
         match self {

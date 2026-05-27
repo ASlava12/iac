@@ -16,7 +16,6 @@ pub enum DockerState {
     Absent,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
@@ -27,7 +26,6 @@ pub enum RestartPolicy {
     UnlessStopped,
     OnFailure,
 }
-
 
 impl RestartPolicy {
     pub fn as_docker(self) -> &'static str {
@@ -224,7 +222,9 @@ impl DockerContainerSpec {
         }
         for (k, _) in &self.env {
             if k.is_empty() || k.contains('=') || k.contains('\0') {
-                return Err(format!("env key {k:?} must be non-empty and contain no '=' or NUL"));
+                return Err(format!(
+                    "env key {k:?} must be non-empty and contain no '=' or NUL"
+                ));
             }
         }
         for p in &self.ports {
@@ -282,11 +282,12 @@ impl DockerContainerSpec {
         for (i, m) in self.mounts.iter().enumerate() {
             validate_mount(m).map_err(|e| format!("mounts[{i}]: {e}"))?;
             if let Some(canon) = mount_to_short_form(m)
-                && !canonical_seen.insert(canon.clone()) {
-                    return Err(format!(
-                        "mounts[{i}] {canon:?} duplicates an entry in volumes/mounts"
-                    ));
-                }
+                && !canonical_seen.insert(canon.clone())
+            {
+                return Err(format!(
+                    "mounts[{i}] {canon:?} duplicates an entry in volumes/mounts"
+                ));
+            }
         }
         // Phase 7bb: network name. Docker accepts the same character set
         // as container names + a few special predefined names (`host`,
@@ -303,18 +304,18 @@ impl DockerContainerSpec {
         for n in &self.extra_networks {
             validate_network_name(n).map_err(|e| format!("extra_networks {n:?}: {e}"))?;
         }
-        let mut seen_extras: std::collections::BTreeSet<&str> =
-            std::collections::BTreeSet::new();
+        let mut seen_extras: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for n in &self.extra_networks {
             if !seen_extras.insert(n.as_str()) {
                 return Err(format!("extra_networks contains duplicate {n:?}"));
             }
             if let Some(primary) = &self.network
-                && primary == n {
-                    return Err(format!(
-                        "extra_networks {n:?} duplicates primary network; remove from extra_networks"
-                    ));
-                }
+                && primary == n
+            {
+                return Err(format!(
+                    "extra_networks {n:?} duplicates primary network; remove from extra_networks"
+                ));
+            }
         }
         // Phase 7az: healthcheck validation. Command is required when the
         // block is present; durations + retries get range-checked.
@@ -332,9 +333,10 @@ impl DockerContainerSpec {
                 parse_health_duration_secs(s).map_err(|e| format!("healthcheck.timeout: {e}"))?;
             }
             if let Some(r) = hc.retries
-                && r == 0 {
-                    return Err("healthcheck.retries must be > 0".into());
-                }
+                && r == 0
+            {
+                return Err("healthcheck.retries must be > 0".into());
+            }
         }
         Ok(())
     }
@@ -365,7 +367,10 @@ fn validate_image_ref(image: &str) -> Result<(), String> {
     }
     // Conservative: registry/path/component:tag@digest. Disallow shell metas.
     let bad = image.chars().any(|c| {
-        matches!(c, ' ' | '\t' | '\n' | ';' | '|' | '&' | '$' | '`' | '"' | '\'' | '\\')
+        matches!(
+            c,
+            ' ' | '\t' | '\n' | ';' | '|' | '&' | '$' | '`' | '"' | '\'' | '\\'
+        )
     });
     if bad {
         return Err("contains a shell metacharacter".into());
@@ -389,12 +394,16 @@ fn validate_port_spec(p: &str) -> Result<(), String> {
         3 => (parts[1], parts[2]),
         _ => return Err("expected host:container[/proto] or ip:host:container[/proto]".into()),
     };
-    host.parse::<u16>().map_err(|_| format!("host port {host:?} not a valid u16"))?;
-    container.parse::<u16>().map_err(|_| format!("container port {container:?} not a valid u16"))?;
+    host.parse::<u16>()
+        .map_err(|_| format!("host port {host:?} not a valid u16"))?;
+    container
+        .parse::<u16>()
+        .map_err(|_| format!("container port {container:?} not a valid u16"))?;
     if let Some(proto) = proto
-        && !matches!(proto, "tcp" | "udp" | "sctp") {
-            return Err(format!("protocol {proto:?} not in (tcp,udp,sctp)"));
-        }
+        && !matches!(proto, "tcp" | "udp" | "sctp")
+    {
+        return Err(format!("protocol {proto:?} not in (tcp,udp,sctp)"));
+    }
     Ok(())
 }
 
@@ -482,12 +491,10 @@ fn validate_mount(m: &DockerMount) -> Result<(), String> {
         return Err("target must not be empty".into());
     }
     if !m.target.starts_with('/') {
-        return Err(format!(
-            "target {:?} must be absolute",
-            m.target
-        ));
+        return Err(format!("target {:?} must be absolute", m.target));
     }
-    if m.target.contains([' ', '\t', '\n', ';', '"', '\'', '`'].as_slice())
+    if m.target
+        .contains([' ', '\t', '\n', ';', '"', '\'', '`'].as_slice())
         || m.target.contains("..")
     {
         return Err(format!(
@@ -509,9 +516,7 @@ fn validate_mount(m: &DockerMount) -> Result<(), String> {
             if !s.starts_with('/') {
                 return Err(format!("bind source {s:?} must be absolute"));
             }
-            if s.contains([' ', '\t', '\n', ';', '"', '\'', '`'].as_slice())
-                || s.contains("..")
-            {
+            if s.contains([' ', '\t', '\n', ';', '"', '\'', '`'].as_slice()) || s.contains("..") {
                 return Err(format!(
                     "bind source {s:?} contains a disallowed character or '..'"
                 ));
@@ -576,9 +581,7 @@ fn validate_network_name(n: &str) -> Result<(), String> {
         return Err("must not be empty; omit the field for default bridge".into());
     }
     if n.contains([' ', '\t', '\n', ';', '"', '\'', '`', '/'].as_slice()) {
-        return Err(
-            "contains a disallowed character (whitespace, ';', quotes, '`', '/')".into(),
-        );
+        return Err("contains a disallowed character (whitespace, ';', quotes, '`', '/')".into());
     }
     Ok(())
 }
@@ -602,7 +605,11 @@ pub(crate) fn parse_health_duration_secs(s: &str) -> Result<u64, String> {
         's' => 1u64,
         'm' => 60,
         'h' => 3600,
-        _ => return Err(format!("suffix must be one of s/m/h or a bare integer; got {t:?}")),
+        _ => {
+            return Err(format!(
+                "suffix must be one of s/m/h or a bare integer; got {t:?}"
+            ));
+        }
     };
     let digits = &t[..t.len() - 1];
     let n: u64 = digits
@@ -634,8 +641,7 @@ mod tests {
 
     #[test]
     fn rejects_shell_metas_in_image() {
-        let v: Value =
-            serde_yaml_ng::from_str("name: x\nimage: \"a;rm -rf /\"").unwrap();
+        let v: Value = serde_yaml_ng::from_str("name: x\nimage: \"a;rm -rf /\"").unwrap();
         assert!(DockerContainerSpec::from_value(&v).is_err());
     }
 
@@ -686,30 +692,24 @@ labels:
 
     #[test]
     fn rejects_label_key_with_equals() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nlabels:\n  \"a=b\": value",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nlabels:\n  \"a=b\": value").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("label key"), "got: {err}");
     }
 
     #[test]
     fn rejects_empty_label_key() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nlabels:\n  \"\": value",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nlabels:\n  \"\": value").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("non-empty"), "got: {err}");
     }
 
     #[test]
     fn absent_state_forbids_labels() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nstate: absent\nlabels:\n  app: web",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nstate: absent\nlabels:\n  app: web").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("labels"), "got: {err}");
     }
@@ -738,10 +738,7 @@ command: ["nginx", "-g", "daemon off;"]
 
     #[test]
     fn rejects_empty_command_array() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\ncommand: []",
-        )
-        .unwrap();
+        let v: Value = serde_yaml_ng::from_str("name: x\nimage: nginx\ncommand: []").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("must not be empty"), "got: {err}");
     }
@@ -861,30 +858,23 @@ healthcheck:
 
     #[test]
     fn parses_network_basic() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: web\nimage: nginx\nnetwork: my-app-net",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: web\nimage: nginx\nnetwork: my-app-net").unwrap();
         let s = DockerContainerSpec::from_value(&v).unwrap();
         assert_eq!(s.network.as_deref(), Some("my-app-net"));
     }
 
     #[test]
     fn rejects_empty_network() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nnetwork: \"   \"",
-        )
-        .unwrap();
+        let v: Value = serde_yaml_ng::from_str("name: x\nimage: nginx\nnetwork: \"   \"").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("must not be empty"), "got: {err}");
     }
 
     #[test]
     fn rejects_network_with_shell_metas() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nnetwork: \"net;evil\"",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nnetwork: \"net;evil\"").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("disallowed"), "got: {err}");
     }
@@ -893,20 +883,15 @@ healthcheck:
     fn rejects_network_with_slash() {
         // Network names can't contain slashes — that'd look like a
         // docker-compose-style stack/network reference we don't support.
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nnetwork: \"stack/net\"",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nnetwork: \"stack/net\"").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("disallowed"), "got: {err}");
     }
 
     #[test]
     fn absent_state_forbids_network() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nstate: absent\nnetwork: my-net",
-        )
-        .unwrap();
+        let v: Value = serde_yaml_ng::from_str("name: x\nstate: absent\nnetwork: my-net").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("network"), "got: {err}");
     }
@@ -921,17 +906,19 @@ healthcheck:
         .unwrap();
         let s = DockerContainerSpec::from_value(&v).unwrap();
         assert_eq!(s.network.as_deref(), Some("primary"));
-        assert_eq!(s.extra_networks, vec!["mon".to_string(), "audit".to_string()]);
+        assert_eq!(
+            s.extra_networks,
+            vec!["mon".to_string(), "audit".to_string()]
+        );
     }
 
     #[test]
     fn extra_networks_accepts_no_primary() {
         // Edge case: operator wants extras but no primary; primary stays
         // None (default bridge gets the create-time slot).
-        let v: Value = serde_yaml_ng::from_str(
-            "name: web\nimage: nginx\nextra_networks:\n  - extra-only",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: web\nimage: nginx\nextra_networks:\n  - extra-only")
+                .unwrap();
         let s = DockerContainerSpec::from_value(&v).unwrap();
         assert_eq!(s.network, None);
         assert_eq!(s.extra_networks, vec!["extra-only".to_string()]);
@@ -939,10 +926,9 @@ healthcheck:
 
     #[test]
     fn rejects_extra_networks_duplicate_within_list() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: web\nimage: nginx\nextra_networks:\n  - mon\n  - mon",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: web\nimage: nginx\nextra_networks:\n  - mon\n  - mon")
+                .unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("duplicate"), "got: {err}");
     }
@@ -954,28 +940,22 @@ healthcheck:
         )
         .unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
-        assert!(
-            err.contains("duplicates primary network"),
-            "got: {err}"
-        );
+        assert!(err.contains("duplicates primary network"), "got: {err}");
     }
 
     #[test]
     fn rejects_extra_networks_with_shell_metas() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: web\nimage: nginx\nextra_networks:\n  - \"net;evil\"",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: web\nimage: nginx\nextra_networks:\n  - \"net;evil\"")
+                .unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("disallowed"), "got: {err}");
     }
 
     #[test]
     fn absent_state_forbids_extra_networks() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nstate: absent\nextra_networks:\n  - mon",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nstate: absent\nextra_networks:\n  - mon").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("extra_networks"), "got: {err}");
     }
@@ -1142,7 +1122,10 @@ mounts:
             target: "/c".into(),
             readonly: true,
         };
-        assert_eq!(mount_to_cli_arg(&m), "type=bind,source=/h,target=/c,readonly");
+        assert_eq!(
+            mount_to_cli_arg(&m),
+            "type=bind,source=/h,target=/c,readonly"
+        );
 
         let tmpfs = DockerMount {
             r#type: "tmpfs".into(),
@@ -1172,40 +1155,36 @@ volumes:
 
     #[test]
     fn rejects_relative_destination() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nvolumes: [\"/host:relative/path\"]",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nvolumes: [\"/host:relative/path\"]")
+                .unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("absolute"), "got: {err}");
     }
 
     #[test]
     fn rejects_volume_traversal() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nvolumes: [\"/etc/../etc:/c\"]",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nvolumes: [\"/etc/../etc:/c\"]")
+                .unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains(".."), "got: {err}");
     }
 
     #[test]
     fn rejects_volume_shell_metas() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nvolumes: [\"/data:/app;rm -rf /\"]",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nvolumes: [\"/data:/app;rm -rf /\"]")
+                .unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("shell"), "got: {err}");
     }
 
     #[test]
     fn rejects_unknown_volume_mode() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nvolumes: [\"/data:/app:weird\"]",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nvolumes: [\"/data:/app:weird\"]")
+                .unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("'ro' or 'rw'"), "got: {err}");
     }
@@ -1214,10 +1193,8 @@ volumes:
     fn rejects_relative_bind_source() {
         // Source with '/' but not absolute → operator probably meant a
         // relative path, which docker-compose accepts but we don't.
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nimage: nginx\nvolumes: [\"./local:/app\"]",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nimage: nginx\nvolumes: [\"./local:/app\"]").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("relative path"), "got: {err}");
     }
@@ -1241,20 +1218,16 @@ volumes:
 
     #[test]
     fn absent_state_forbids_volumes() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nstate: absent\nvolumes: [\"/data:/app\"]",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nstate: absent\nvolumes: [\"/data:/app\"]").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("volumes"), "got: {err}");
     }
 
     #[test]
     fn absent_state_forbids_command() {
-        let v: Value = serde_yaml_ng::from_str(
-            "name: x\nstate: absent\ncommand: [\"sh\"]",
-        )
-        .unwrap();
+        let v: Value =
+            serde_yaml_ng::from_str("name: x\nstate: absent\ncommand: [\"sh\"]").unwrap();
         let err = DockerContainerSpec::from_value(&v).unwrap_err();
         assert!(err.contains("command"), "got: {err}");
     }
@@ -1272,6 +1245,9 @@ labels:
         )
         .unwrap();
         let s = DockerContainerSpec::from_value(&v).unwrap();
-        assert_eq!(s.labels.get("app").map(String::as_str), Some("name=web&env=prod"));
+        assert_eq!(
+            s.labels.get("app").map(String::as_str),
+            Some("name=web&env=prod")
+        );
     }
 }

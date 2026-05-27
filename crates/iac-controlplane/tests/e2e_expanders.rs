@@ -8,14 +8,13 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_controlplane::expansion::ExpanderDescriptor;
 use iac_controlplane::identity::Role;
 use iac_controlplane::store::CreateUser;
 use iac_core::protocol::v1::{LoginRequest, LoginResponse};
 use reqwest::StatusCode;
-
 
 #[tokio::test]
 async fn admin_lists_expanders() {
@@ -30,16 +29,35 @@ async fn admin_lists_expanders() {
     let list: Vec<ExpanderDescriptor> = r.json().await.unwrap();
     let kinds: Vec<&str> = list.iter().map(|d| d.kind.as_str()).collect();
     // Order matters — list_expanders returns a stable order.
-    assert_eq!(kinds, vec!["service", "cron-job-bundle", "web-with-monitoring"]);
+    assert_eq!(
+        kinds,
+        vec!["service", "cron-job-bundle", "web-with-monitoring"]
+    );
     // Each descriptor names primitives it emits.
     let svc = list.iter().find(|d| d.kind == "service").unwrap();
     assert!(svc.emits.contains(&"docker.container".to_string()));
     assert!(svc.emits.contains(&"nginx.vhost".to_string()));
     // Phase 7p: spec_fields populated.
-    assert!(svc.spec_fields.iter().any(|f| f.name == "image" && f.required));
-    assert!(svc.spec_fields.iter().any(|f| f.name == "port" && f.required));
-    assert!(svc.spec_fields.iter().any(|f| f.name == "domain" && f.required));
-    assert!(svc.spec_fields.iter().any(|f| f.name == "internal_port" && !f.required));
+    assert!(
+        svc.spec_fields
+            .iter()
+            .any(|f| f.name == "image" && f.required)
+    );
+    assert!(
+        svc.spec_fields
+            .iter()
+            .any(|f| f.name == "port" && f.required)
+    );
+    assert!(
+        svc.spec_fields
+            .iter()
+            .any(|f| f.name == "domain" && f.required)
+    );
+    assert!(
+        svc.spec_fields
+            .iter()
+            .any(|f| f.name == "internal_port" && !f.required)
+    );
     server.shutdown().await;
 }
 
@@ -65,7 +83,11 @@ async fn show_returns_single_expander_with_spec_fields() {
     // expand_web_with_monitoring.
     let image = d.spec_fields.iter().find(|f| f.name == "image").unwrap();
     assert!(image.required);
-    let health = d.spec_fields.iter().find(|f| f.name == "health_path").unwrap();
+    let health = d
+        .spec_fields
+        .iter()
+        .find(|f| f.name == "health_path")
+        .unwrap();
     assert!(!health.required);
     server.shutdown().await;
 }
@@ -109,7 +131,10 @@ async fn viewer_can_list_expanders() {
         .unwrap();
     let token = reqwest::Client::new()
         .post(format!("{}/v1/auth/login", server.url()))
-        .json(&LoginRequest { username: "vince".into(), password: "p".into() })
+        .json(&LoginRequest {
+            username: "vince".into(),
+            password: "p".into(),
+        })
         .send()
         .await
         .unwrap()

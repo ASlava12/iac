@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_core::protocol::v1::{
@@ -18,7 +18,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
-
 
 fn build_agent(workdir: &Path, server_url: &str, name: &str, env: &str) -> Agent {
     let manifests = workdir.join("manifests.d");
@@ -61,7 +60,8 @@ async fn web_with_monitoring_expands_and_lands_on_one_agent() {
                 "port": 8080,
                 "domain": "api.example.com",
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))

@@ -49,7 +49,10 @@ spec:
 
 fn indent(s: &str, n: usize) -> String {
     let prefix = " ".repeat(n);
-    s.lines().map(|l| format!("{prefix}{l}")).collect::<Vec<_>>().join("\n")
+    s.lines()
+        .map(|l| format!("{prefix}{l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn stdout(o: &Output) -> String {
@@ -78,7 +81,11 @@ fn full_lifecycle_create_apply_rollback() {
 
     // 2. plan: 1 change, exit 2.
     let o = run(&state, &["plan", manifest.to_str().unwrap()]);
-    assert_eq!(o.status.code(), Some(2), "expected exit 2 for plan with changes");
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "expected exit 2 for plan with changes"
+    );
     assert!(stdout(&o).contains("file/test/greeting"));
 
     // 3. apply.
@@ -141,7 +148,10 @@ spec: {}
     let o = run(&state, &["validate", manifest.to_str().unwrap()]);
     assert!(!o.status.success());
     let combined = format!("{}{}", stdout(&o), String::from_utf8_lossy(&o.stderr));
-    assert!(combined.contains("unknown resource kind"), "actual: {combined}");
+    assert!(
+        combined.contains("unknown resource kind"),
+        "actual: {combined}"
+    );
 }
 
 #[test]

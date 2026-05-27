@@ -31,8 +31,8 @@
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use std::collections::HashMap;
 use std::fs;
@@ -351,17 +351,14 @@ impl ServerSigner {
         let _guard = self.mutate_lock.lock().unwrap_or_else(|e| e.into_inner());
         let state_snapshot = self.state.load_full();
         if state_snapshot.active_id == key_id {
-            anyhow::bail!(
-                "cannot retire active key {key_id}; rotate first to elect a new active"
-            );
+            anyhow::bail!("cannot retire active key {key_id}; rotate first to elect a new active");
         }
         if !state_snapshot.keys.contains_key(key_id) {
             return Ok(false);
         }
         let path = self.dir.join(format!("{key_id}.bin"));
         if path.exists() {
-            fs::remove_file(&path)
-                .with_context(|| format!("removing {}", path.display()))?;
+            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
         }
         let new_state = load_set(&self.dir)?;
         self.state.store(Arc::new(new_state));
@@ -384,8 +381,8 @@ fn load_set(keys_dir: &Path) -> Result<SignerState> {
     }
 
     let mut keys: HashMap<String, KeyEntry> = HashMap::new();
-    for entry in fs::read_dir(keys_dir)
-        .with_context(|| format!("listing {}", keys_dir.display()))?
+    for entry in
+        fs::read_dir(keys_dir).with_context(|| format!("listing {}", keys_dir.display()))?
     {
         let entry = entry?;
         let name = entry.file_name();
@@ -408,7 +405,10 @@ fn load_set(keys_dir: &Path) -> Result<SignerState> {
         let verifying_key = signing_key.verifying_key();
         keys.insert(
             stem.to_string(),
-            KeyEntry { signing_key, verifying_key },
+            KeyEntry {
+                signing_key,
+                verifying_key,
+            },
         );
     }
 
@@ -454,12 +454,12 @@ fn write_key_file(path: &Path, bytes: &[u8]) -> Result<()> {
     // Phase 7cz.16: `path` is always built as `<keys_dir>/<key_id>.bin`
     // by the caller, so `parent()` and `file_name()` always succeed.
     // Tag for clippy.
-    let parent = path.parent().ok_or_else(|| {
-        anyhow::anyhow!("key path {} has no parent", path.display())
-    })?;
-    let file_name = path.file_name().ok_or_else(|| {
-        anyhow::anyhow!("key path {} has no filename", path.display())
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("key path {} has no parent", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("key path {} has no filename", path.display()))?;
     let tmp = parent.join(format!(".{}.tmp", file_name.to_string_lossy()));
     fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
@@ -473,9 +473,8 @@ fn write_active_pointer(keys_dir: &Path, key_id: &str) -> Result<()> {
     let active_path = keys_dir.join("active");
     let tmp = keys_dir.join(".active.tmp");
     fs::write(&tmp, key_id).with_context(|| format!("writing {}", tmp.display()))?;
-    fs::rename(&tmp, &active_path).with_context(|| {
-        format!("renaming {} -> {}", tmp.display(), active_path.display())
-    })?;
+    fs::rename(&tmp, &active_path)
+        .with_context(|| format!("renaming {} -> {}", tmp.display(), active_path.display()))?;
     Ok(())
 }
 
@@ -587,10 +586,11 @@ mod tests {
         assert!(!ids.contains(&original.as_str()));
         assert!(ids.contains(&new_id.as_str()));
         // On-disk file gone.
-        assert!(!dir
-            .path()
-            .join(format!("signing-keys/{original}.bin"))
-            .exists());
+        assert!(
+            !dir.path()
+                .join(format!("signing-keys/{original}.bin"))
+                .exists()
+        );
     }
 
     #[test]
@@ -661,13 +661,8 @@ mod tests {
         // Sign with new active. Verify only the NEW pubkey accepts.
         let payload = br#"{}"#;
         let sig_b64 = signer.sign("a", "b", "c", "2026", payload).unwrap();
-        let msg = iac_core::protocol::v1::canonical_assignment_message(
-            "a",
-            "b",
-            "c",
-            "2026",
-            payload,
-        );
+        let msg =
+            iac_core::protocol::v1::canonical_assignment_message("a", "b", "c", "2026", payload);
         let pub_bytes = B64.decode(&new_pub).unwrap();
         let mut buf = [0u8; 32];
         buf.copy_from_slice(&pub_bytes);
@@ -676,6 +671,9 @@ mod tests {
         let mut sig_buf = [0u8; 64];
         sig_buf.copy_from_slice(&sig_bytes);
         let sig = Signature::from_bytes(&sig_buf);
-        assert!(vkey.verify(&msg, &sig).is_ok(), "new pubkey verifies new signature");
+        assert!(
+            vkey.verify(&msg, &sig).is_ok(),
+            "new pubkey verifies new signature"
+        );
     }
 }

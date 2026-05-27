@@ -17,8 +17,8 @@
 //! follow-up.
 
 use super::spec::{Family, FirewallRuleSpec};
-use iac_core::{Error, Result};
 use crate::subprocess::run_with_status;
+use iac_core::{Error, Result};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -56,13 +56,7 @@ pub trait FirewallBackend: Send + Sync + std::fmt::Debug {
 
     /// Delete the rule tagged `iac:<name>`. Idempotent: missing rule
     /// is success.
-    fn ensure_absent(
-        &self,
-        name: &str,
-        table: &str,
-        chain: &str,
-        family: Family,
-    ) -> Result<()>;
+    fn ensure_absent(&self, name: &str, table: &str, chain: &str, family: Family) -> Result<()>;
 }
 
 /// Real backend — shells out to `iptables` / `ip6tables`. Each method
@@ -178,20 +172,13 @@ impl FirewallBackend for IptablesBackend {
         Ok(())
     }
 
-    fn ensure_absent(
-        &self,
-        name: &str,
-        table: &str,
-        chain: &str,
-        family: Family,
-    ) -> Result<()> {
+    fn ensure_absent(&self, name: &str, table: &str, chain: &str, family: Family) -> Result<()> {
         // We don't know the full match expression for an arbitrary
         // pre-existing rule, so iterate through `-S` output to find
         // the line tagged `iac:<name>` in the right table+chain, then
         // delete by index.
         let bin = Self::binary(family);
-        let (ok, stdout, _stderr) =
-            Self::run(&[bin, "-t", table, "-S", chain])?;
+        let (ok, stdout, _stderr) = Self::run(&[bin, "-t", table, "-S", chain])?;
         if !ok {
             // Chain may not exist (filter table always has built-ins;
             // custom chains don't). Treat as "no rule to delete."
@@ -244,42 +231,36 @@ pub(crate) fn parse_save_line(
     let mut i = 0;
     while i < tokens.len() {
         match tokens[i].as_str() {
-            "-A"
-                if i + 1 < tokens.len() => {
-                    chain = tokens[i + 1].clone();
-                    i += 2;
-                    continue;
-                }
-            "-p"
-                if i + 1 < tokens.len() => {
-                    protocol = tokens[i + 1].clone();
-                    i += 2;
-                    continue;
-                }
-            "--dport"
-                if i + 1 < tokens.len() => {
-                    port = tokens[i + 1].parse().ok();
-                    i += 2;
-                    continue;
-                }
-            "-s"
-                if i + 1 < tokens.len() => {
-                    source = Some(strip_default_prefix(&tokens[i + 1]));
-                    i += 2;
-                    continue;
-                }
-            "-d"
-                if i + 1 < tokens.len() => {
-                    destination = Some(strip_default_prefix(&tokens[i + 1]));
-                    i += 2;
-                    continue;
-                }
-            "-j"
-                if i + 1 < tokens.len() => {
-                    action = tokens[i + 1].clone();
-                    i += 2;
-                    continue;
-                }
+            "-A" if i + 1 < tokens.len() => {
+                chain = tokens[i + 1].clone();
+                i += 2;
+                continue;
+            }
+            "-p" if i + 1 < tokens.len() => {
+                protocol = tokens[i + 1].clone();
+                i += 2;
+                continue;
+            }
+            "--dport" if i + 1 < tokens.len() => {
+                port = tokens[i + 1].parse().ok();
+                i += 2;
+                continue;
+            }
+            "-s" if i + 1 < tokens.len() => {
+                source = Some(strip_default_prefix(&tokens[i + 1]));
+                i += 2;
+                continue;
+            }
+            "-d" if i + 1 < tokens.len() => {
+                destination = Some(strip_default_prefix(&tokens[i + 1]));
+                i += 2;
+                continue;
+            }
+            "-j" if i + 1 < tokens.len() => {
+                action = tokens[i + 1].clone();
+                i += 2;
+                continue;
+            }
             _ => {}
         }
         i += 1;
@@ -308,13 +289,15 @@ pub(crate) fn parse_save_line(
 /// round-trips against the operator's input.
 fn strip_default_prefix(s: &str) -> String {
     if let Some(rest) = s.strip_suffix("/32")
-        && !rest.contains(':') {
-            return rest.to_string();
-        }
+        && !rest.contains(':')
+    {
+        return rest.to_string();
+    }
     if let Some(rest) = s.strip_suffix("/128")
-        && rest.contains(':') {
-            return rest.to_string();
-        }
+        && rest.contains(':')
+    {
+        return rest.to_string();
+    }
     s.to_string()
 }
 
@@ -390,13 +373,7 @@ impl FirewallBackend for MockFirewall {
         Ok(())
     }
 
-    fn ensure_absent(
-        &self,
-        name: &str,
-        _table: &str,
-        _chain: &str,
-        family: Family,
-    ) -> Result<()> {
+    fn ensure_absent(&self, name: &str, _table: &str, _chain: &str, family: Family) -> Result<()> {
         let mut rules = self.rules.lock().unwrap();
         rules.retain(|r| !(r.name == name && r.family == family));
         Ok(())
@@ -489,7 +466,8 @@ mod tests {
     #[test]
     fn mock_ensure_absent_is_idempotent() {
         let m = MockFirewall::new();
-        m.ensure_absent("ghost", "filter", "INPUT", Family::Ipv4).unwrap();
+        m.ensure_absent("ghost", "filter", "INPUT", Family::Ipv4)
+            .unwrap();
         // No error, no rules.
         assert!(m.rules().is_empty());
     }

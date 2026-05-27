@@ -153,7 +153,10 @@ spec:
         "apply failed: {r:?}\n--apply.log--\n{apply_log}\n--observe.log--\n{observe_log}"
     );
     let marker = applied_dir.join("w1.marker");
-    assert!(marker.exists(), "apply.sh did not run: marker missing\n--apply.log--\n{apply_log}\n--observe.log--\n{observe_log}");
+    assert!(
+        marker.exists(),
+        "apply.sh did not run: marker missing\n--apply.log--\n{apply_log}\n--observe.log--\n{observe_log}"
+    );
     assert_eq!(std::fs::read_to_string(&marker).unwrap(), "hello");
 
     // Re-observe: no drift.
@@ -280,7 +283,8 @@ spec:
     );
     assert_eq!(
         summary.drift_detected, 1,
-        "no drift: errors={:?}; summary={summary:?}", summary.errors
+        "no drift: errors={:?}; summary={summary:?}",
+        summary.errors
     );
 
     use iac_core::operation::OperationStatus;
@@ -452,7 +456,9 @@ async fn wasm_component_provider_observes_and_applies() {
     let Ok(core_bytes) = std::fs::read(&core_wasm_path) else {
         eprintln!(
             "skipping: build the fixture first via\n  cd {} && cargo build --release --target wasm32-unknown-unknown",
-            workspace_root.join("iac-providers/tests/fixtures/test-plugin").display()
+            workspace_root
+                .join("iac-providers/tests/fixtures/test-plugin")
+                .display()
         );
         return;
     };
@@ -523,11 +529,7 @@ spec:
 
     let summary = agent.observe_once().await.unwrap();
     assert_eq!(summary.observed, 1, "{summary:?}");
-    assert_eq!(
-        summary.drift_detected, 1,
-        "errors={:?}",
-        summary.errors
-    );
+    assert_eq!(summary.drift_detected, 1, "errors={:?}", summary.errors);
 
     use iac_core::operation::OperationStatus;
     let r = agent.apply_once().await.unwrap();
@@ -576,7 +578,9 @@ async fn wasi_preview2_preopen_round_trips_a_file() {
     if !component_path.exists() {
         eprintln!(
             "skipping: build the fixture first via\n  cd {} && cargo build --release --target wasm32-wasip2",
-            workspace_root.join("iac-providers/tests/fixtures/wasi-plugin").display()
+            workspace_root
+                .join("iac-providers/tests/fixtures/wasi-plugin")
+                .display()
         );
         return;
     }
@@ -642,10 +646,7 @@ spec:
     .unwrap();
 
     let summary = agent.observe_once().await.unwrap();
-    assert_eq!(
-        summary.observed, 1,
-        "manifest didn't load: {summary:?}"
-    );
+    assert_eq!(summary.observed, 1, "manifest didn't load: {summary:?}");
     // The fixture observes `present: true` whenever it could read
     // /state/marker.txt — so an unobserved drift means the plugin
     // got the bytes through the preopen successfully and the spec

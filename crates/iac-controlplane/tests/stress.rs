@@ -26,7 +26,7 @@
 
 #![cfg(test)]
 
-use iac_controlplane::{server::AppState, Config as ServerConfig};
+use iac_controlplane::{Config as ServerConfig, server::AppState};
 use iac_core::protocol::v1::{
     AgentHealth, AssignmentResultRequest, AssignmentResultStatus, OperationStatus, OperationView,
     RegisterRequest, SubmitOperationRequest, SubmitOperationResponse,
@@ -81,7 +81,9 @@ impl StressServer {
             shutdown_timeout_secs: 1,
             trusted_proxies: vec![],
         };
-        let store = iac_controlplane::Store::connect(&cfg.database_url).await.unwrap();
+        let store = iac_controlplane::Store::connect(&cfg.database_url)
+            .await
+            .unwrap();
         let signer = std::sync::Arc::new(
             iac_controlplane::signing::ServerSigner::load_or_create(dir.path()).unwrap(),
         );
@@ -107,12 +109,20 @@ impl StressServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -184,30 +194,31 @@ async fn simulated_agent(
             }
         };
         if resp.status() == StatusCode::OK
-            && let Ok(list) = resp.json::<iac_core::protocol::v1::AssignmentList>().await {
-                for env in list.items {
-                    let result = AssignmentResultRequest {
-                        status: AssignmentResultStatus::Succeeded,
-                        items: vec![],
-                        summary: None,
-                    };
-                    let post_resp = client
-                        .post(format!(
-                            "{server_url}/v1/agents/{agent_id}/assignments/{}/result",
-                            env.assignment_id
-                        ))
-                        .bearer_auth(&token)
-                        .json(&result)
-                        .send()
-                        .await;
-                    if matches!(post_resp, Ok(ref r) if r.status() == StatusCode::OK) {
-                        completed += 1;
-                    }
-                    // Non-200 / errored POSTs: silently dropped.
-                    // The Phase 7cj lease re-claim makes orphaned
-                    // assignments recoverable on the next poll.
+            && let Ok(list) = resp.json::<iac_core::protocol::v1::AssignmentList>().await
+        {
+            for env in list.items {
+                let result = AssignmentResultRequest {
+                    status: AssignmentResultStatus::Succeeded,
+                    items: vec![],
+                    summary: None,
+                };
+                let post_resp = client
+                    .post(format!(
+                        "{server_url}/v1/agents/{agent_id}/assignments/{}/result",
+                        env.assignment_id
+                    ))
+                    .bearer_auth(&token)
+                    .json(&result)
+                    .send()
+                    .await;
+                if matches!(post_resp, Ok(ref r) if r.status() == StatusCode::OK) {
+                    completed += 1;
                 }
+                // Non-200 / errored POSTs: silently dropped.
+                // The Phase 7cj lease re-claim makes orphaned
+                // assignments recoverable on the next poll.
             }
+        }
         // Stop ASAP when done is signaled — but yield first so any
         // in-flight assignment fanout can land before we exit.
         tokio::select! {
@@ -262,8 +273,10 @@ impl StressReport {
             self.scenario, self.agents, self.operations, self.resources_per_op,
         );
         eprintln!("  total wall-clock:     {} ms", self.total_wall_clock_ms);
-        eprintln!("  submit p50/p95/p99:   {} / {} / {} ms",
-            self.submit_p50_ms, self.submit_p95_ms, self.submit_p99_ms);
+        eprintln!(
+            "  submit p50/p95/p99:   {} / {} / {} ms",
+            self.submit_p50_ms, self.submit_p95_ms, self.submit_p99_ms
+        );
         eprintln!("  fanout→roll-up time:  {} ms", self.completion_total_ms);
         eprintln!("  completed assignments: {}", self.completed_assignments);
         eprintln!(

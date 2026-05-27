@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_core::protocol::v1::{
@@ -20,8 +20,13 @@ use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 
-
-fn build_agent(workdir: &Path, server_url: &str, name: &str, env: &str, caps: Option<&Path>) -> Agent {
+fn build_agent(
+    workdir: &Path,
+    server_url: &str,
+    name: &str,
+    env: &str,
+    caps: Option<&Path>,
+) -> Agent {
     let manifests = workdir.join("manifests.d");
     std::fs::create_dir_all(&manifests).unwrap();
     let cfg = AgentConfig::load(
@@ -68,7 +73,8 @@ async fn submit(
             requested_by: "op".into(),
             source_commit: None,
             summary: None,
-            resources, canary: None,
+            resources,
+            canary: None,
         })
         .send()
         .await
@@ -102,7 +108,13 @@ files:
     )
     .unwrap();
 
-    let agent = build_agent(dir.path(), &server.url(), "caps-agent", "caps", Some(&caps_path));
+    let agent = build_agent(
+        dir.path(),
+        &server.url(),
+        "caps-agent",
+        "caps",
+        Some(&caps_path),
+    );
     assert!(agent.connect_remote().await);
 
     // Two resources: one inside allowed/, one inside forbidden/.
@@ -127,13 +139,20 @@ files:
 
     // Neither file should have been written — assignments are atomic w.r.t.
     // capability denial.
-    assert!(!target_ok.exists(), "allowed file should NOT exist when assignment was rejected");
+    assert!(
+        !target_ok.exists(),
+        "allowed file should NOT exist when assignment was rejected"
+    );
     assert!(!target_bad.exists(), "forbidden file should NOT exist");
 
     // Server should reflect the failure.
     let client = reqwest::Client::new();
     let view: OperationView = client
-        .get(format!("{}/v1/operations/{}", server.url(), resp.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -185,7 +204,13 @@ files:
     )
     .unwrap();
 
-    let agent = build_agent(dir.path(), &server.url(), "caps-clean", "caps", Some(&caps_path));
+    let agent = build_agent(
+        dir.path(),
+        &server.url(),
+        "caps-clean",
+        "caps",
+        Some(&caps_path),
+    );
     assert!(agent.connect_remote().await);
 
     let target = allowed_dir.join("ok.txt");
@@ -203,7 +228,11 @@ files:
 
     let client = reqwest::Client::new();
     let view: OperationView = client
-        .get(format!("{}/v1/operations/{}", server.url(), resp.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -224,8 +253,13 @@ async fn missing_capabilities_file_is_unrestricted() {
     let caps_path = dir.path().join("capabilities.yaml");
     assert!(!caps_path.exists());
 
-    let agent =
-        build_agent(dir.path(), &server.url(), "caps-soft", "caps", Some(&caps_path));
+    let agent = build_agent(
+        dir.path(),
+        &server.url(),
+        "caps-soft",
+        "caps",
+        Some(&caps_path),
+    );
     assert!(agent.connect_remote().await);
 
     let target = dir.path().join("anywhere.txt");

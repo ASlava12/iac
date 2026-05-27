@@ -93,8 +93,7 @@ pub struct CloudflareCreds {
 
 impl DnsRecordSpec {
     pub fn from_value(v: &YamlValue) -> Result<Self, String> {
-        let spec: Self = serde_yaml_ng::from_value(v.clone())
-            .map_err(|e| format!("parse: {e}"))?;
+        let spec: Self = serde_yaml_ng::from_value(v.clone()).map_err(|e| format!("parse: {e}"))?;
         spec.validate()?;
         Ok(spec)
     }
@@ -122,7 +121,8 @@ impl DnsRecordSpec {
                 })?;
                 if cf.api_token.is_empty() {
                     return Err(
-                        "cloudflare.api_token must not be empty (use ${secret://env/CF_API_TOKEN})".into(),
+                        "cloudflare.api_token must not be empty (use ${secret://env/CF_API_TOKEN})"
+                            .into(),
                     );
                 }
             }
@@ -136,9 +136,7 @@ impl DnsRecordSpec {
             match self.record_type {
                 RecordType::A => {
                     if v.parse::<std::net::Ipv4Addr>().is_err() {
-                        return Err(format!(
-                            "A record value {v:?} is not a valid IPv4 address"
-                        ));
+                        return Err(format!("A record value {v:?} is not a valid IPv4 address"));
                     }
                 }
                 RecordType::AAAA => {
@@ -150,9 +148,7 @@ impl DnsRecordSpec {
                 }
                 RecordType::CNAME => {
                     if v.contains(' ') || !v.contains('.') {
-                        return Err(format!(
-                            "CNAME record value {v:?} should be a hostname"
-                        ));
+                        return Err(format!("CNAME record value {v:?} should be a hostname"));
                     }
                 }
                 RecordType::TXT | RecordType::MX => {
@@ -315,21 +311,27 @@ cloudflare:
 
     #[test]
     fn fqdn_handles_relative_name() {
-        let v = yaml("zone: example.com\nname: app\ntype: A\nvalue: '1.2.3.4'\nprovider: cloudflare\ncloudflare: {api_token: t}\n");
+        let v = yaml(
+            "zone: example.com\nname: app\ntype: A\nvalue: '1.2.3.4'\nprovider: cloudflare\ncloudflare: {api_token: t}\n",
+        );
         let s = DnsRecordSpec::from_value(&v).unwrap();
         assert_eq!(s.fqdn(), "app.example.com");
     }
 
     #[test]
     fn fqdn_handles_at_apex() {
-        let v = yaml("zone: example.com\nname: '@'\ntype: A\nvalue: '1.2.3.4'\nprovider: cloudflare\ncloudflare: {api_token: t}\n");
+        let v = yaml(
+            "zone: example.com\nname: '@'\ntype: A\nvalue: '1.2.3.4'\nprovider: cloudflare\ncloudflare: {api_token: t}\n",
+        );
         let s = DnsRecordSpec::from_value(&v).unwrap();
         assert_eq!(s.fqdn(), "example.com");
     }
 
     #[test]
     fn fqdn_doesnt_double_zone() {
-        let v = yaml("zone: example.com\nname: app.example.com\ntype: A\nvalue: '1.2.3.4'\nprovider: cloudflare\ncloudflare: {api_token: t}\n");
+        let v = yaml(
+            "zone: example.com\nname: app.example.com\ntype: A\nvalue: '1.2.3.4'\nprovider: cloudflare\ncloudflare: {api_token: t}\n",
+        );
         let s = DnsRecordSpec::from_value(&v).unwrap();
         assert_eq!(s.fqdn(), "app.example.com");
     }

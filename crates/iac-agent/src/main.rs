@@ -1,8 +1,5 @@
 // Phase 7cz.16: tests-only exemption for unwrap/expect/panic.
-#![cfg_attr(
-    test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
-)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -10,7 +7,7 @@ use iac_agent::{Agent, Config, ConfigOverrides};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Notify;
 
 const APP: &str = "iac-agent";
@@ -119,7 +116,11 @@ enum DriftAction {
     /// List open (unresolved) drift events.
     List,
     /// Mark an open drift event resolved with an explanation.
-    Resolve { id: i64, #[arg(long, default_value = "manual")] reason: String },
+    Resolve {
+        id: i64,
+        #[arg(long, default_value = "manual")]
+        reason: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -147,13 +148,16 @@ fn main() -> ExitCode {
 }
 
 fn init_tracing(verbosity: u8) {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
     let filter = match verbosity {
         0 => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         1 => EnvFilter::new("info,iac_agent=debug"),
         _ => EnvFilter::new("debug"),
     };
-    let _ = fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 async fn run(cli: Cli) -> Result<ExitCode> {
@@ -232,7 +236,10 @@ fn cmd_status(config: &Config, format: OutputFormat) -> Result<ExitCode> {
     let status = match iac_agent::status::read_status(&config.status_file) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: status file unavailable ({}): {e}", config.status_file.display());
+            eprintln!(
+                "error: status file unavailable ({}): {e}",
+                config.status_file.display()
+            );
             return Ok(ExitCode::from(1));
         }
     };
@@ -240,7 +247,11 @@ fn cmd_status(config: &Config, format: OutputFormat) -> Result<ExitCode> {
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&status)?),
         OutputFormat::Human => print_status_human(&status),
     }
-    Ok(if status.healthy { ExitCode::SUCCESS } else { ExitCode::from(3) })
+    Ok(if status.healthy {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(3)
+    })
 }
 
 fn print_status_human(s: &iac_agent::AgentStatus) {
@@ -256,7 +267,10 @@ fn print_status_human(s: &iac_agent::AgentStatus) {
         println!("last observe: <none>");
     }
     if let Some(c) = &s.last_observe_summary {
-        println!("last cycle:   {} resource(s), {} drift(s), {} ms", c.observed, c.drift_detected, c.duration_ms);
+        println!(
+            "last cycle:   {} resource(s), {} drift(s), {} ms",
+            c.observed, c.drift_detected, c.duration_ms
+        );
         for e in &c.errors {
             println!("  ! {e}");
         }
@@ -277,7 +291,11 @@ async fn cmd_observe(agent: Agent, format: OutputFormat) -> Result<ExitCode> {
             }
         }
     }
-    Ok(if summary.errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(3) })
+    Ok(if summary.errors.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(3)
+    })
 }
 
 async fn cmd_plan(agent: Agent, format: OutputFormat) -> Result<ExitCode> {
@@ -301,7 +319,11 @@ async fn cmd_plan(agent: Agent, format: OutputFormat) -> Result<ExitCode> {
             }
         }
     }
-    Ok(if plan.has_changes() { ExitCode::from(2) } else { ExitCode::SUCCESS })
+    Ok(if plan.has_changes() {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 async fn cmd_apply(agent: Agent, format: OutputFormat, yes: bool) -> Result<ExitCode> {

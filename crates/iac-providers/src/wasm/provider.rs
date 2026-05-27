@@ -76,9 +76,8 @@ impl PluginRuntime for WasmRuntimeAdapter {
         // byte slice and returns a string for historical reasons; we
         // adapt at the trait boundary so the rest of the plugin
         // module sees pure JSON.
-        let bytes = serde_json::to_vec(&params).map_err(|e| {
-            Error::provider(self.runtime.kind(), format!("encode {method}: {e}"))
-        })?;
+        let bytes = serde_json::to_vec(&params)
+            .map_err(|e| Error::provider(self.runtime.kind(), format!("encode {method}: {e}")))?;
         let resp = self.runtime.call(method, &bytes)?;
         if resp.is_empty() {
             return Ok(Json::Null);
@@ -116,12 +115,12 @@ impl PluginRuntime for WasmRuntimeAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::spec::WasmRuntimeKind;
+    use super::*;
     use iac_core::diff::DiffKind;
     use iac_core::operation::StepStatus;
     use iac_core::provider::{ApplyContext, Provider};
-    use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+    use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
     use indexmap::IndexMap;
     use serde_yaml_ng::Value as YamlValue;
 

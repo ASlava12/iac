@@ -44,10 +44,7 @@ impl SysctlBackend for ProcfsBackend {
                 Ok(Some(s.trim_end_matches(['\n', '\r']).to_string()))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(Error::provider(
-                "sysctl",
-                format!("reading {path}: {e}"),
-            )),
+            Err(e) => Err(Error::provider("sysctl", format!("reading {path}: {e}"))),
         }
     }
 
@@ -56,9 +53,8 @@ impl SysctlBackend for ProcfsBackend {
         // payload in one go. We use `fs::write` (single syscall) to
         // ensure we don't accidentally split the value across
         // multiple writes.
-        fs::write(path, value).map_err(|e| {
-            Error::provider("sysctl", format!("writing {path}: {e}"))
-        })?;
+        fs::write(path, value)
+            .map_err(|e| Error::provider("sysctl", format!("writing {path}: {e}")))?;
         Ok(())
     }
 }
@@ -83,7 +79,10 @@ impl MockSysctl {
     }
 
     pub fn seed(&self, path: &str, value: &str) {
-        self.values.lock().unwrap().insert(path.into(), value.into());
+        self.values
+            .lock()
+            .unwrap()
+            .insert(path.into(), value.into());
     }
 
     pub fn writes(&self) -> Vec<(String, String)> {

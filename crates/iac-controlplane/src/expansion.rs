@@ -10,9 +10,9 @@
 //! loaded from a config file; for now the only built-in expander is `service`.
 
 use crate::error::{ApiError, ApiResult};
-use crate::modules::{expand_module, Module};
+use crate::modules::{Module, expand_module};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Phase 7l: descriptor for `GET /v1/expanders`. Lets operators see
 /// what composite kinds the server accepts without reading source.
@@ -320,9 +320,10 @@ fn expand_service(raw: &Value) -> ApiResult<Vec<Value>> {
         .clone()
         .unwrap_or_else(|| format!("/etc/nginx/conf.d/{name}.conf"));
 
-    let host_selector = spec.host_selector.as_ref().map(|h| {
-        json!({ "name": h.name })
-    });
+    let host_selector = spec
+        .host_selector
+        .as_ref()
+        .map(|h| json!({ "name": h.name }));
 
     // docker.container expansion
     let mut docker_spec = serde_json::Map::new();
@@ -360,7 +361,10 @@ fn expand_service(raw: &Value) -> ApiResult<Vec<Value>> {
     let mut nginx_spec = serde_json::Map::new();
     nginx_spec.insert("config_path".into(), json!(nginx_path));
     nginx_spec.insert("server_names".into(), json!(vec![spec.domain.clone()]));
-    nginx_spec.insert("upstream".into(), json!(format!("http://127.0.0.1:{}", spec.port)));
+    nginx_spec.insert(
+        "upstream".into(),
+        json!(format!("http://127.0.0.1:{}", spec.port)),
+    );
     if let Some(hs) = &host_selector {
         nginx_spec.insert("hostSelector".into(), hs.clone());
     }
@@ -451,7 +455,10 @@ fn expand_cron_job_bundle(raw: &Value) -> ApiResult<Vec<Value>> {
         .clone()
         .unwrap_or_else(|| format!("/usr/local/bin/{name}"));
 
-    let host_selector = spec.host_selector.as_ref().map(|h| json!({ "name": h.name }));
+    let host_selector = spec
+        .host_selector
+        .as_ref()
+        .map(|h| json!({ "name": h.name }));
 
     // file resource (the script)
     let mut file_spec = serde_json::Map::new();
@@ -572,7 +579,10 @@ fn expand_web_with_monitoring(raw: &Value) -> ApiResult<Vec<Value>> {
         ));
     }
 
-    let host_selector = spec.host_selector.as_ref().map(|h| json!({ "name": h.name }));
+    let host_selector = spec
+        .host_selector
+        .as_ref()
+        .map(|h| json!({ "name": h.name }));
     let composite_anno = json!({ "iac.example/composite-of": "web-with-monitoring" });
     let nginx_path = format!("/etc/nginx/conf.d/{name}.conf");
     let healthcheck_script_path = format!("/usr/local/bin/{name}-healthcheck");
@@ -715,7 +725,10 @@ mod tests {
         // verify the catalog matches the code.
         let kinds: Vec<String> = list_expanders().iter().map(|d| d.kind.clone()).collect();
         // Sanity: catalog isn't empty.
-        assert!(!kinds.is_empty(), "list_expanders should return at least one entry");
+        assert!(
+            !kinds.is_empty(),
+            "list_expanders should return at least one entry"
+        );
         // The sole way to detect drift in the other direction (a kind
         // added to the match arm but not the catalog) is the integration
         // surface: anything reachable via expand_resources but missing
@@ -750,8 +763,12 @@ mod tests {
                      doesn't have a representative spec for it — add one"
                 ),
             };
-            let out = expand_resources(vec![raw], &[]).expect("documented expander must accept its representative spec");
-            assert!(!out.is_empty(), "{kind} should expand to at least one primitive");
+            let out = expand_resources(vec![raw], &[])
+                .expect("documented expander must accept its representative spec");
+            assert!(
+                !out.is_empty(),
+                "{kind} should expand to at least one primitive"
+            );
         }
     }
 
@@ -786,7 +803,10 @@ mod tests {
             );
         }
 
-        let docker = out.iter().find(|r| r["kind"] == "docker.container").unwrap();
+        let docker = out
+            .iter()
+            .find(|r| r["kind"] == "docker.container")
+            .unwrap();
         assert_eq!(docker["spec"]["image"], "nginx:1.27-alpine");
         assert_eq!(docker["spec"]["ports"], json!(["8080:80"]));
         assert_eq!(docker["spec"]["restart_policy"], "unless-stopped");
@@ -812,7 +832,10 @@ mod tests {
         let mut svc = service_resource("api", "prod");
         svc["spec"]["env"] = json!({ "FOO": "bar", "BAZ": "qux" });
         let out = expand_resources(vec![svc], &[]).unwrap();
-        let docker = out.iter().find(|r| r["kind"] == "docker.container").unwrap();
+        let docker = out
+            .iter()
+            .find(|r| r["kind"] == "docker.container")
+            .unwrap();
         assert_eq!(docker["spec"]["env"]["FOO"], "bar");
         // nginx vhost has no env field — not nginx's job.
         let nginx = out.iter().find(|r| r["kind"] == "nginx.vhost").unwrap();
@@ -824,7 +847,10 @@ mod tests {
         let mut svc = service_resource("api", "prod");
         svc["spec"]["internal_port"] = json!(3000);
         let out = expand_resources(vec![svc], &[]).unwrap();
-        let docker = out.iter().find(|r| r["kind"] == "docker.container").unwrap();
+        let docker = out
+            .iter()
+            .find(|r| r["kind"] == "docker.container")
+            .unwrap();
         assert_eq!(docker["spec"]["ports"], json!(["8080:3000"]));
     }
 
@@ -834,7 +860,10 @@ mod tests {
         svc["spec"]["nginx_config_path"] = json!("/etc/nginx/sites-enabled/api.conf");
         let out = expand_resources(vec![svc], &[]).unwrap();
         let nginx = out.iter().find(|r| r["kind"] == "nginx.vhost").unwrap();
-        assert_eq!(nginx["spec"]["config_path"], "/etc/nginx/sites-enabled/api.conf");
+        assert_eq!(
+            nginx["spec"]["config_path"],
+            "/etc/nginx/sites-enabled/api.conf"
+        );
     }
 
     #[test]
@@ -1046,10 +1075,12 @@ mod tests {
         // Every minute → "* * * * *", not "*/1 * * * *".
         assert_eq!(cron["spec"]["schedule"], "* * * * *");
         let file = out.iter().find(|r| r["kind"] == "file").unwrap();
-        assert!(file["spec"]["content"]
-            .as_str()
-            .unwrap()
-            .contains("/api/v1/healthz"));
+        assert!(
+            file["spec"]["content"]
+                .as_str()
+                .unwrap()
+                .contains("/api/v1/healthz")
+        );
     }
 
     #[test]

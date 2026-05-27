@@ -5,16 +5,16 @@
 //! previous value for rollback. Reverting via Absent state needs an
 //! ApplyContext-carried checkpoint that doesn't exist in v1; deferred.
 
-use super::backend::{read_current, SysctlBackend};
+use super::backend::{SysctlBackend, read_current};
 use super::spec::SysctlSettingSpec;
 use iac_core::{
+    Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 
 pub fn observe(backend: &dyn SysctlBackend, spec: &SysctlSettingSpec) -> Result<ObservedState> {
@@ -232,11 +232,7 @@ mod tests {
         let backend = MockSysctl::new();
         backend.seed("/proc/sys/net/ipv4/ip_forward", "0");
         let s = spec("net.ipv4.ip_forward", "1");
-        let step = Step::new(
-            "sysctl.set",
-            format!("sysctl.setting/{}", s.key),
-            json!({}),
-        );
+        let step = Step::new("sysctl.set", format!("sysctl.setting/{}", s.key), json!({}));
         apply(&backend, &s, &step).unwrap();
         assert_eq!(
             backend.current("/proc/sys/net/ipv4/ip_forward").as_deref(),

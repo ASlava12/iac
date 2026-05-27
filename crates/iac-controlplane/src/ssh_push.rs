@@ -33,9 +33,7 @@
 
 use crate::config::{SshHostKeyPolicy, SshTargetConfig};
 use crate::store::{AuditRecord, Store};
-use iac_core::protocol::v1::{
-    AssignmentPayload, AssignmentResultRequest, AssignmentResultStatus,
-};
+use iac_core::protocol::v1::{AssignmentPayload, AssignmentResultRequest, AssignmentResultStatus};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,7 +145,10 @@ async fn run_worker(
         .await
         {
             match claim {
-                WorkResult::Claimed { assignment_id, payload_json } => {
+                WorkResult::Claimed {
+                    assignment_id,
+                    payload_json,
+                } => {
                     if let Err(e) = process_assignment(
                         &store,
                         &target,
@@ -176,16 +177,15 @@ async fn run_worker(
 }
 
 enum WorkResult {
-    Claimed { assignment_id: String, payload_json: String },
+    Claimed {
+        assignment_id: String,
+        payload_json: String,
+    },
     Idle,
     Shutdown,
 }
 
-async fn wait_for_work(
-    store: &Store,
-    agent_id: &str,
-    shutdown: &Arc<Notify>,
-) -> WorkResult {
+async fn wait_for_work(store: &Store, agent_id: &str, shutdown: &Arc<Notify>) -> WorkResult {
     let target_ids = vec![agent_id.to_string()];
     tokio::select! {
         _ = shutdown.notified() => WorkResult::Shutdown,
@@ -255,21 +255,29 @@ async fn process_assignment(
         .map(|p| p.as_os_str().to_os_string())
         .unwrap_or_else(|| "ssh".into());
     let mut cmd = Command::new(ssh_program);
-    cmd.arg("-o").arg("BatchMode=yes")
-        .arg("-o").arg(host_key_check_arg(target.host_key_policy))
-        .arg("-o").arg(format!("ConnectTimeout={}", target.connect_timeout_secs))
-        .arg("-p").arg(target.port.to_string());
+    cmd.arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg(host_key_check_arg(target.host_key_policy))
+        .arg("-o")
+        .arg(format!("ConnectTimeout={}", target.connect_timeout_secs))
+        .arg("-p")
+        .arg(target.port.to_string());
     if let Some(known) = &target.known_hosts_file {
-        cmd.arg("-o").arg(format!("UserKnownHostsFile={}", known.display()));
+        cmd.arg("-o")
+            .arg(format!("UserKnownHostsFile={}", known.display()));
     }
     // Phase 7da.1: per-worker ControlMaster — every push to this
     // target reuses the same TCP+SSH session, dropping per-push
     // handshake cost from ~500 ms to ~5 ms once the master is up.
     // Long ControlPersist matches the agent's polling cadence.
     if let Some(cp_dir) = control_path {
-        cmd.arg("-o").arg("ControlMaster=auto")
-            .arg("-o").arg(format!("ControlPath={}/%C", cp_dir.display()))
-            .arg("-o").arg("ControlPersist=300s");
+        cmd.arg("-o")
+            .arg("ControlMaster=auto")
+            .arg("-o")
+            .arg(format!("ControlPath={}/%C", cp_dir.display()))
+            .arg("-o")
+            .arg("ControlPersist=300s");
     }
     if let Some(key) = &target.identity_file {
         cmd.arg("-i").arg(key);
@@ -298,8 +306,7 @@ async fn process_assignment(
     }
 
     // Bound the wait. SSH targets that hang shouldn't pin a worker.
-    let output = match tokio::time::timeout(MAX_PUSH_DURATION, child.wait_with_output()).await
-    {
+    let output = match tokio::time::timeout(MAX_PUSH_DURATION, child.wait_with_output()).await {
         Ok(Ok(out)) => out,
         Ok(Err(e)) => {
             let msg = format!("ssh wait_with_output: {e}");
@@ -339,7 +346,14 @@ async fn process_assignment(
         let summary = format!(
             "ssh exit={:?} stderr_tail={}",
             status.code(),
-            stderr.chars().rev().take(500).collect::<String>().chars().rev().collect::<String>()
+            stderr
+                .chars()
+                .rev()
+                .take(500)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
         );
         report_result(
             store,
@@ -367,21 +381,22 @@ async fn process_assignment(
             // where we have no items because something went wrong
             // before the remote even ran).
             let actor = format!("ssh-push:{}", target.name);
-            let extra =
-                build_push_audit(target, &actor, agent_id, assignment_id, &result.status);
+            let extra = build_push_audit(target, &actor, agent_id, assignment_id, &result.status);
             store
-                .complete_assignment_with_extra_audit(
-                    agent_id,
-                    assignment_id,
-                    &result,
-                    Some(extra),
-                )
+                .complete_assignment_with_extra_audit(agent_id, assignment_id, &result, Some(extra))
                 .await?;
         }
         Err(e) => {
             let summary = format!(
                 "ssh exited 0 but result JSON malformed: {e}; stdout_tail={}",
-                stdout.chars().rev().take(500).collect::<String>().chars().rev().collect::<String>()
+                stdout
+                    .chars()
+                    .rev()
+                    .take(500)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>()
             );
             report_result(
                 store,

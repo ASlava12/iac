@@ -45,14 +45,23 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub fn validation(resource: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Validation { resource: resource.into(), message: message.into() }
+        Self::Validation {
+            resource: resource.into(),
+            message: message.into(),
+        }
     }
 
     pub fn manifest(path: impl Into<PathBuf>, message: impl Into<String>) -> Self {
-        Self::Manifest { path: path.into(), message: message.into() }
+        Self::Manifest {
+            path: path.into(),
+            message: message.into(),
+        }
     }
 
     pub fn provider(name: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Provider { provider: name.into(), message: message.into() }
+        Self::Provider {
+            provider: name.into(),
+            message: message.into(),
+        }
     }
 }

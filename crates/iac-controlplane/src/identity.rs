@@ -18,9 +18,9 @@
 
 use crate::auth::{ct_eq, hash_token};
 use crate::error::{ApiError, ApiResult};
+use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 use serde::{Deserialize, Serialize};
 
 /// User-facing roles. The order encodes the inclusion lattice — a higher
@@ -48,7 +48,11 @@ pub enum Identity {
     /// Static admin token from server config.
     LegacyAdmin,
     /// Authenticated user.
-    User { id: String, username: String, roles: Vec<Role> },
+    User {
+        id: String,
+        username: String,
+        roles: Vec<Role>,
+    },
     /// Agent caller (per-agent bearer token from `register`).
     Agent { id: String, name: String },
 }
@@ -120,17 +124,11 @@ pub async fn require_role(
 
 /// Same as `require_role` but doesn't enforce a minimum — callers that need
 /// the identity for naming purposes only.
-pub async fn resolve_identity(
-    state: &crate::server::AppState,
-    token: &str,
-) -> ApiResult<Identity> {
+pub async fn resolve_identity(state: &crate::server::AppState, token: &str) -> ApiResult<Identity> {
     resolve(state, token).await
 }
 
-async fn resolve(
-    state: &crate::server::AppState,
-    token: &str,
-) -> ApiResult<Identity> {
+async fn resolve(state: &crate::server::AppState, token: &str) -> ApiResult<Identity> {
     // 1. Legacy static admin_token.
     // Phase 7bx: admin_token is NOT hot-reloadable — it's the bootstrap
     // credential. We still snapshot for consistency.
@@ -215,7 +213,10 @@ mod tests {
 
     #[test]
     fn agent_holds_no_human_roles() {
-        let id = Identity::Agent { id: "a1".into(), name: "vm14".into() };
+        let id = Identity::Agent {
+            id: "a1".into(),
+            name: "vm14".into(),
+        };
         assert!(!id.has_role(Role::Viewer));
         assert!(!id.has_role(Role::Operator));
     }
@@ -233,7 +234,11 @@ mod tests {
             "user:alice"
         );
         assert_eq!(
-            Identity::Agent { id: "01H".into(), name: "vm14".into() }.audit_actor(),
+            Identity::Agent {
+                id: "01H".into(),
+                name: "vm14".into()
+            }
+            .audit_actor(),
             "agent:01H"
         );
     }

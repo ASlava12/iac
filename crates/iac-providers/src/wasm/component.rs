@@ -17,15 +17,15 @@
 
 use super::spec::{WasiConfig, WasmProviderSpec};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Checkpoint, Step, StepResult, StepStatus},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use parking_lot::Mutex;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 use std::path::Path;
 use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable};
@@ -42,8 +42,8 @@ wasmtime::component::bindgen!({
 });
 
 use exports::iac::plugin::provider::{
-    ApplyOutcome, DiffKind as WitDiffKind, DiffResult, FieldChange as WitFieldChange,
-    Metadata, Observed, Phase, VerifyOutcome as WitVerifyOutcome,
+    ApplyOutcome, DiffKind as WitDiffKind, DiffResult, FieldChange as WitFieldChange, Metadata,
+    Observed, Phase, VerifyOutcome as WitVerifyOutcome,
 };
 
 /// Component-model variant of [`super::WasmProvider`]. Same wire
@@ -119,16 +119,14 @@ fn build_wasi(cfg: &WasiConfig) -> Result<WasiCtx> {
         } else {
             (DirPerms::READ, FilePerms::READ)
         };
-        builder.preopened_dir(&p.host, &p.guest, dir_perms, file_perms).map_err(|e| {
-            Error::provider(
-                "wasm",
-                format!(
-                    "preopen {}->{}: {e}",
-                    p.host.display(),
-                    p.guest
-                ),
-            )
-        })?;
+        builder
+            .preopened_dir(&p.host, &p.guest, dir_perms, file_perms)
+            .map_err(|e| {
+                Error::provider(
+                    "wasm",
+                    format!("preopen {}->{}: {e}", p.host.display(), p.guest),
+                )
+            })?;
     }
     for kv in &cfg.env {
         if let Some((k, v)) = kv.split_once('=') {
@@ -177,9 +175,8 @@ impl WasmComponentProvider {
         let mut config = Config::new();
         config.consume_fuel(true);
         config.wasm_component_model(true);
-        let engine = Engine::new(&config).map_err(|e| {
-            Error::provider(&spec.kind, format!("wasmtime engine init: {e}"))
-        })?;
+        let engine = Engine::new(&config)
+            .map_err(|e| Error::provider(&spec.kind, format!("wasmtime engine init: {e}")))?;
         let bytes = std::fs::read(&spec.module).map_err(|e| {
             Error::provider(
                 &spec.kind,
@@ -191,9 +188,8 @@ impl WasmComponentProvider {
         // runtimes — pinned hash matches sha256 of the raw bytes
         // on disk.
         if let Some(expected) = spec.module_sha256.as_deref() {
-            super::spec::verify_sha256(&bytes, expected, "module").map_err(|e| {
-                Error::provider(&spec.kind, e)
-            })?;
+            super::spec::verify_sha256(&bytes, expected, "module")
+                .map_err(|e| Error::provider(&spec.kind, e))?;
         }
         let component = Component::new(&engine, &bytes).map_err(|e| {
             Error::provider(
@@ -240,8 +236,7 @@ impl WasmComponentProvider {
             &self.engine,
             CompState {
                 limiter: MemLimiter {
-                    max_bytes: usize::try_from(self.spec.max_memory_bytes)
-                        .unwrap_or(usize::MAX),
+                    max_bytes: usize::try_from(self.spec.max_memory_bytes).unwrap_or(usize::MAX),
                 },
                 wasi,
                 resources: ResourceTable::new(),
@@ -252,10 +247,7 @@ impl WasmComponentProvider {
         Ok(store)
     }
 
-    fn instantiate(
-        &self,
-        store: &mut Store<CompState>,
-    ) -> Result<Plugin> {
+    fn instantiate(&self, store: &mut Store<CompState>) -> Result<Plugin> {
         let mut linker: ComponentLinker<CompState> = ComponentLinker::new(&self.engine);
         // Phase 7de: register WASI preview2 imports only when the
         // operator opted in. Empty config keeps the linker pristine
@@ -264,25 +256,23 @@ impl WasmComponentProvider {
         // surface into sync vs async; the sync variant matches our
         // synchronous `Provider::observe` blocking-pool model.
         if !self.spec.wasi.is_empty() {
-            wasmtime_wasi::add_to_linker_sync(&mut linker).map_err(|e| {
-                Error::provider(&self.spec.kind, format!("link wasi: {e}"))
-            })?;
+            wasmtime_wasi::add_to_linker_sync(&mut linker)
+                .map_err(|e| Error::provider(&self.spec.kind, format!("link wasi: {e}")))?;
         }
-        Plugin::instantiate(store, &self.component, &linker).map_err(|e| {
-            Error::provider(&self.spec.kind, format!("instantiate component: {e}"))
-        })
+        Plugin::instantiate(store, &self.component, &linker)
+            .map_err(|e| Error::provider(&self.spec.kind, format!("instantiate component: {e}")))
     }
 
     fn refresh_meta(&self) -> Result<()> {
         let mut store = self.store()?;
         let plugin = self.instantiate(&mut store)?;
         let prov = plugin.iac_plugin_provider();
-        let kind = prov.call_kind(&mut store).map_err(|e| {
-            Error::provider(&self.spec.kind, format!("kind(): {e}"))
-        })?;
-        let methods = prov.call_methods(&mut store).map_err(|e| {
-            Error::provider(&self.spec.kind, format!("methods(): {e}"))
-        })?;
+        let kind = prov
+            .call_kind(&mut store)
+            .map_err(|e| Error::provider(&self.spec.kind, format!("kind(): {e}")))?;
+        let methods = prov
+            .call_methods(&mut store)
+            .map_err(|e| Error::provider(&self.spec.kind, format!("methods(): {e}")))?;
         *self.cached_meta.lock() = Some(CachedMeta { kind, methods });
         Ok(())
     }
@@ -329,10 +319,14 @@ impl Provider for WasmComponentProvider {
         let plugin = self.instantiate(&mut store)?;
         let prov = plugin.iac_plugin_provider();
         let result = prov
-            .call_observe(&mut store, &Self::metadata_for(resource), &Self::spec_json(resource))
+            .call_observe(
+                &mut store,
+                &Self::metadata_for(resource),
+                &Self::spec_json(resource),
+            )
             .map_err(|e| Error::provider(&self.spec.kind, format!("observe call: {e}")))?;
-        let observed: Observed = result
-            .map_err(|msg| Error::provider(&self.spec.kind, format!("observe: {msg}")))?;
+        let observed: Observed =
+            result.map_err(|msg| Error::provider(&self.spec.kind, format!("observe: {msg}")))?;
         if observed.present {
             let v: Json = serde_json::from_str(&observed.spec_json).map_err(|e| {
                 Error::provider(
@@ -365,16 +359,11 @@ impl Provider for WasmComponentProvider {
                     &Self::spec_json(resource),
                     &observed_wit,
                 )
-                .map_err(|e| {
-                    Error::provider(&self.spec.kind, format!("diff call: {e}"))
-                })?;
+                .map_err(|e| Error::provider(&self.spec.kind, format!("diff call: {e}")))?;
             return Ok(diff_from_wit(result));
         }
 
-        let desired_absent = matches!(
-            spec_state_field(&resource.spec).as_deref(),
-            Some("absent")
-        );
+        let desired_absent = matches!(spec_state_field(&resource.spec).as_deref(), Some("absent"));
         match (observed.present, desired_absent) {
             (false, true) => Ok(Diff::no_change()),
             (false, false) => Ok(Diff {
@@ -423,12 +412,7 @@ impl Provider for WasmComponentProvider {
         )])
     }
 
-    fn pre_apply(
-        &self,
-        resource: &Resource,
-        _step: &Step,
-        _ctx: &ApplyContext,
-    ) -> Result<Json> {
+    fn pre_apply(&self, resource: &Resource, _step: &Step, _ctx: &ApplyContext) -> Result<Json> {
         // Phase 7dg: typed pre-apply opt-in. The plugin returns a
         // JSON-encoded checkpoint string we wrap in a tagged
         // envelope so `rollback` can route it back to the typed
@@ -444,12 +428,9 @@ impl Provider for WasmComponentProvider {
                     &Self::metadata_for(resource),
                     &Self::spec_json(resource),
                 )
-                .map_err(|e| {
-                    Error::provider(&self.spec.kind, format!("pre-apply call: {e}"))
-                })?;
-            let checkpoint_json = result.map_err(|msg| {
-                Error::provider(&self.spec.kind, format!("pre-apply: {msg}"))
-            })?;
+                .map_err(|e| Error::provider(&self.spec.kind, format!("pre-apply call: {e}")))?;
+            let checkpoint_json = result
+                .map_err(|msg| Error::provider(&self.spec.kind, format!("pre-apply: {msg}")))?;
             return Ok(json!({
                 "wit_checkpoint": checkpoint_json,
             }));
@@ -462,12 +443,7 @@ impl Provider for WasmComponentProvider {
         }))
     }
 
-    fn apply(
-        &self,
-        resource: &Resource,
-        step: &Step,
-        _ctx: &ApplyContext,
-    ) -> Result<StepResult> {
+    fn apply(&self, resource: &Resource, step: &Step, _ctx: &ApplyContext) -> Result<StepResult> {
         let phase = match step.action.as_str() {
             "wasm-component-create" => Phase::Create,
             "wasm-component-update" => Phase::Update,
@@ -525,9 +501,7 @@ impl Provider for WasmComponentProvider {
                     &Self::metadata_for(resource),
                     &Self::spec_json(resource),
                 )
-                .map_err(|e| {
-                    Error::provider(&self.spec.kind, format!("verify call: {e}"))
-                })?;
+                .map_err(|e| Error::provider(&self.spec.kind, format!("verify call: {e}")))?;
             return Ok(verify_from_wit(outcome));
         }
         let observed = self.observe(resource)?;
@@ -566,12 +540,9 @@ impl Provider for WasmComponentProvider {
             let prov = plugin.iac_plugin_provider();
             let result = prov
                 .call_rollback(&mut store, &Self::metadata_for(resource), &cp)
-                .map_err(|e| {
-                    Error::provider(&self.spec.kind, format!("rollback call: {e}"))
-                })?;
-            return result.map_err(|msg| {
-                Error::provider(&self.spec.kind, format!("rollback: {msg}"))
-            });
+                .map_err(|e| Error::provider(&self.spec.kind, format!("rollback call: {e}")))?;
+            return result
+                .map_err(|msg| Error::provider(&self.spec.kind, format!("rollback: {msg}")));
         }
         // Host fallback: synthesise an apply against the prior
         // observed state. Reads the host-shaped checkpoint shape
@@ -601,9 +572,7 @@ impl Provider for WasmComponentProvider {
                 &serde_json::to_string(&prior_spec).unwrap_or_else(|_| "null".into()),
                 phase,
             )
-            .map_err(|e| {
-                Error::provider(&self.spec.kind, format!("rollback apply call: {e}"))
-            })?;
+            .map_err(|e| Error::provider(&self.spec.kind, format!("rollback apply call: {e}")))?;
         if !outcome.ok {
             return Err(Error::provider(
                 &self.spec.kind,
@@ -650,8 +619,7 @@ fn observed_to_wit(observed: &ObservedState) -> Observed {
     Observed {
         present: observed.present,
         spec_json: if observed.present {
-            serde_json::to_string(&yaml_to_json(&observed.spec))
-                .unwrap_or_else(|_| "null".into())
+            serde_json::to_string(&yaml_to_json(&observed.spec)).unwrap_or_else(|_| "null".into())
         } else {
             String::new()
         },
@@ -692,17 +660,17 @@ fn parse_json_to_yaml(s: String) -> Option<YamlValue> {
 fn verify_from_wit(o: WitVerifyOutcome) -> VerifyOutcome {
     match o {
         WitVerifyOutcome::Ok => VerifyOutcome::Match,
-        WitVerifyOutcome::Mismatch(changes) => VerifyOutcome::Mismatch(
-            changes.into_iter().map(field_change_from_wit).collect(),
-        ),
+        WitVerifyOutcome::Mismatch(changes) => {
+            VerifyOutcome::Mismatch(changes.into_iter().map(field_change_from_wit).collect())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
     use indexmap::IndexMap;
-    use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
 
     #[test]
     fn rejects_core_wasm_as_component() {
@@ -722,8 +690,7 @@ mod tests {
             wasi: super::super::spec::WasiConfig::default(),
             module_sha256: None,
         };
-        let err =
-            WasmComponentProvider::from_component_bytes(spec, &core_bytes).unwrap_err();
+        let err = WasmComponentProvider::from_component_bytes(spec, &core_bytes).unwrap_err();
         assert!(
             err.contains("compile") || err.contains("component"),
             "expected component-compile error, got: {err}"
@@ -741,8 +708,7 @@ mod tests {
             wasi: super::super::spec::WasiConfig::default(),
             module_sha256: None,
         };
-        let err = WasmComponentProvider::from_component_bytes(spec, b"not wasm")
-            .unwrap_err();
+        let err = WasmComponentProvider::from_component_bytes(spec, b"not wasm").unwrap_err();
         assert!(!err.is_empty());
     }
 
@@ -806,7 +772,9 @@ mod tests {
     #[test]
     fn observe_present_branch() {
         let Some(p) = build_provider() else {
-            eprintln!("skipping: build the fixture with `cargo build --release --target wasm32-unknown-unknown` in tests/fixtures/test-plugin");
+            eprintln!(
+                "skipping: build the fixture with `cargo build --release --target wasm32-unknown-unknown` in tests/fixtures/test-plugin"
+            );
             return;
         };
         // The fixture reports present iff the resource name starts

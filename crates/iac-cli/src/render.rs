@@ -86,20 +86,25 @@ fn write_item<W: Write>(out: &mut W, item: &ApplyItem) -> std::io::Result<()> {
     writeln!(out, "  [{marker}] {}", item.resource_id)?;
     for s in &item.steps {
         let status = format!("{:?}", s.step.status).to_lowercase();
-        writeln!(out, "        {}: {} -> {}", s.step.action, s.step.description, status)?;
+        writeln!(
+            out,
+            "        {}: {} -> {}",
+            s.step.action, s.step.description, status
+        )?;
         if let Some(err) = &s.result.error {
             writeln!(out, "          error: {err}")?;
         }
     }
     if let Some(v) = &item.verify
-        && !v.matched {
-            writeln!(out, "        verify: MISMATCH")?;
-            if let Some(changes) = &v.mismatch {
-                for c in changes {
-                    writeln!(out, "          {}", format_change(c))?;
-                }
+        && !v.matched
+    {
+        writeln!(out, "        verify: MISMATCH")?;
+        if let Some(changes) = &v.mismatch {
+            for c in changes {
+                writeln!(out, "          {}", format_change(c))?;
             }
         }
+    }
     if let Some(err) = &item.error {
         writeln!(out, "        error: {err}")?;
     }
@@ -119,8 +124,16 @@ fn format_change(change: &FieldChange) -> String {
     if change.sensitive {
         return format!("{}: <sensitive> -> <sensitive>", change.field);
     }
-    let from = change.from.as_ref().map(yaml_inline).unwrap_or_else(|| "<absent>".into());
-    let to = change.to.as_ref().map(yaml_inline).unwrap_or_else(|| "<absent>".into());
+    let from = change
+        .from
+        .as_ref()
+        .map(yaml_inline)
+        .unwrap_or_else(|| "<absent>".into());
+    let to = change
+        .to
+        .as_ref()
+        .map(yaml_inline)
+        .unwrap_or_else(|| "<absent>".into());
     format!("{}: {} -> {}", change.field, from, to)
 }
 

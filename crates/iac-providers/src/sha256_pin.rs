@@ -17,7 +17,10 @@ pub(crate) fn validate_sha256_hex(s: &str, field: &'static str) -> Result<(), St
             s.len()
         ));
     }
-    if !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if !s
+        .bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err(format!(
             "{field} must be lowercase hex (a-f / 0-9); got {s:?}"
         ));
@@ -29,11 +32,7 @@ pub(crate) fn validate_sha256_hex(s: &str, field: &'static str) -> Result<(), St
 /// `expected` (which must already be format-validated). Returns
 /// the actual hex hash on mismatch so the operator can update
 /// their config if the expected change is legitimate.
-pub(crate) fn verify_sha256(
-    bytes: &[u8],
-    expected: &str,
-    label: &str,
-) -> Result<(), String> {
+pub(crate) fn verify_sha256(bytes: &[u8], expected: &str, label: &str) -> Result<(), String> {
     use sha2::{Digest, Sha256};
     let actual = hex::encode(Sha256::digest(bytes));
     if actual != expected {

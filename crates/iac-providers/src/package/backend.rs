@@ -8,9 +8,9 @@
 
 //! Apt backend with a trait for testability.
 
+use crate::subprocess::run_with_status;
 use iac_core::{Error, Result};
 use std::collections::HashMap;
-use crate::subprocess::run_with_status;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -28,7 +28,10 @@ use std::sync::Mutex;
 pub enum InstallStatus {
     NotInstalled,
     /// dpkg's `Status` field. The `version` is `${Version}` from dpkg-query.
-    Installed { status: String, version: String },
+    Installed {
+        status: String,
+        version: String,
+    },
 }
 
 impl InstallStatus {
@@ -137,7 +140,10 @@ impl MockPackageBackend {
         Self::default()
     }
     pub fn preinstall(&self, name: &str, version: &str) {
-        self.installed.lock().unwrap().insert(name.into(), version.into());
+        self.installed
+            .lock()
+            .unwrap()
+            .insert(name.into(), version.into());
     }
     pub fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
@@ -146,7 +152,10 @@ impl MockPackageBackend {
         self.calls.lock().unwrap().push(format!("{action} {name}"));
     }
     pub fn fail_install(&self, name: &str, error: &str) {
-        self.install_failures.lock().unwrap().insert(name.into(), error.into());
+        self.install_failures
+            .lock()
+            .unwrap()
+            .insert(name.into(), error.into());
     }
 }
 

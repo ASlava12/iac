@@ -8,7 +8,9 @@ pub struct ProviderRegistry {
 
 impl ProviderRegistry {
     pub fn new() -> Self {
-        Self { providers: HashMap::new() }
+        Self {
+            providers: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, provider: Box<dyn Provider>) {
@@ -23,7 +25,8 @@ impl ProviderRegistry {
     }
 
     pub fn require(&self, kind: &str) -> crate::Result<&dyn Provider> {
-        self.get(kind).ok_or_else(|| crate::Error::UnknownKind(kind.to_string()))
+        self.get(kind)
+            .ok_or_else(|| crate::Error::UnknownKind(kind.to_string()))
     }
 
     pub fn kinds(&self) -> impl Iterator<Item = &str> {

@@ -26,9 +26,7 @@
 //!     deps; cross-compile to musl works trivially).
 
 use anyhow::{Context, Result};
-use iac_core::protocol::v1::{
-    AssignmentPayload, AssignmentResultRequest, AssignmentResultStatus,
-};
+use iac_core::protocol::v1::{AssignmentPayload, AssignmentResultRequest, AssignmentResultStatus};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -128,10 +126,14 @@ impl SshTarget {
     /// invocation arguments.
     pub fn ssh_command(&self) -> Command {
         let mut cmd = Command::new("ssh");
-        cmd.arg("-o").arg("BatchMode=yes")
-            .arg("-o").arg("StrictHostKeyChecking=accept-new")
-            .arg("-o").arg("ConnectTimeout=10")
-            .arg("-p").arg(self.port.to_string());
+        cmd.arg("-o")
+            .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("StrictHostKeyChecking=accept-new")
+            .arg("-o")
+            .arg("ConnectTimeout=10")
+            .arg("-p")
+            .arg(self.port.to_string());
         self.add_control_master_args(&mut cmd);
         if let Some(key) = &self.identity_file {
             cmd.arg("-i").arg(key);
@@ -142,10 +144,14 @@ impl SshTarget {
 
     fn scp_command(&self) -> Command {
         let mut cmd = Command::new("scp");
-        cmd.arg("-o").arg("BatchMode=yes")
-            .arg("-o").arg("StrictHostKeyChecking=accept-new")
-            .arg("-o").arg("ConnectTimeout=10")
-            .arg("-P").arg(self.port.to_string());
+        cmd.arg("-o")
+            .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("StrictHostKeyChecking=accept-new")
+            .arg("-o")
+            .arg("ConnectTimeout=10")
+            .arg("-P")
+            .arg(self.port.to_string());
         self.add_control_master_args(&mut cmd);
         if let Some(key) = &self.identity_file {
             cmd.arg("-i").arg(key);
@@ -163,9 +169,12 @@ impl SshTarget {
     fn add_control_master_args(&self, cmd: &mut Command) {
         if let Some(dir) = &self.control_dir {
             let path = dir.join("%C");
-            cmd.arg("-o").arg("ControlMaster=auto")
-                .arg("-o").arg(format!("ControlPath={}", path.display()))
-                .arg("-o").arg("ControlPersist=60s");
+            cmd.arg("-o")
+                .arg("ControlMaster=auto")
+                .arg("-o")
+                .arg(format!("ControlPath={}", path.display()))
+                .arg("-o")
+                .arg("ControlPersist=60s");
         }
     }
 }
@@ -322,11 +331,7 @@ pub fn bootstrap_iac_binary(target: &SshTarget) -> Result<String> {
     check.arg("--").arg(format!(
         "test -x {remote_path} && {remote_path} --version 2>/dev/null"
     ));
-    if check
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+    if check.output().map(|o| o.status.success()).unwrap_or(false) {
         return Ok(remote_path);
     }
 
@@ -344,9 +349,7 @@ pub fn bootstrap_iac_binary(target: &SshTarget) -> Result<String> {
         );
     }
     let mut chmod = target.ssh_command();
-    chmod
-        .arg("--")
-        .arg(format!("chmod +x {remote_path}"));
+    chmod.arg("--").arg(format!("chmod +x {remote_path}"));
     let chmod_output = chmod.output().context("chmod via ssh")?;
     if !chmod_output.status.success() {
         anyhow::bail!(
@@ -437,10 +440,7 @@ pub fn dispatch_apply(
 /// Phase 7cn: ad-hoc shell command on a target. The command runs
 /// under the target's login shell; operators escape quoting per
 /// shell convention. Captures stdout/stderr/exit code.
-pub fn dispatch_run(
-    target: &SshTarget,
-    shell_command: &str,
-) -> Result<DispatchOutcome> {
+pub fn dispatch_run(target: &SshTarget, shell_command: &str) -> Result<DispatchOutcome> {
     let mut cmd = target.ssh_command();
     cmd.arg("--").arg(shell_command);
     let output = cmd
@@ -519,8 +519,7 @@ fn local_iac_path() -> Result<PathBuf> {
 fn file_sha256_full(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("opening {} for sha256", path.display()))?;
-    iac_core::hash::sha256_hex_reader(file)
-        .with_context(|| format!("hashing {}", path.display()))
+    iac_core::hash::sha256_hex_reader(file).with_context(|| format!("hashing {}", path.display()))
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -570,13 +569,11 @@ mod tests {
 
     #[test]
     fn overrides_apply_in_order() {
-        let t = SshTarget::parse("admin@host")
-            .unwrap()
-            .with_overrides(
-                Some(Path::new("/tmp/key")),
-                Some(2222),
-                Some("/usr/local/bin/iac"),
-            );
+        let t = SshTarget::parse("admin@host").unwrap().with_overrides(
+            Some(Path::new("/tmp/key")),
+            Some(2222),
+            Some("/usr/local/bin/iac"),
+        );
         assert_eq!(t.identity_file.as_deref(), Some(Path::new("/tmp/key")));
         assert_eq!(t.port, 2222);
         assert_eq!(t.remote_iac.as_deref(), Some("/usr/local/bin/iac"));
@@ -589,7 +586,9 @@ mod tests {
 
     #[test]
     fn tail_chars_truncates_long() {
-        let s: String = (0..1000).map(|i| char::from((i % 26) as u8 + b'a')).collect();
+        let s: String = (0..1000)
+            .map(|i| char::from((i % 26) as u8 + b'a'))
+            .collect();
         let tail = tail_chars(&s, 50);
         assert_eq!(tail.len(), 50);
         assert!(s.ends_with(&tail));

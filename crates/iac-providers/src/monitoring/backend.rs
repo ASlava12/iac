@@ -150,9 +150,7 @@ pub(crate) fn check_http(url: &str, expected_status: u16, timeout: Duration) -> 
         .and_then(|s| s.parse::<u16>().ok());
     match code {
         Some(c) if c == expected_status => CheckOutcome::Healthy,
-        Some(c) => {
-            CheckOutcome::Unhealthy(format!("status {c} (expected {expected_status})"))
-        }
+        Some(c) => CheckOutcome::Unhealthy(format!("status {c} (expected {expected_status})")),
         None => CheckOutcome::Unhealthy(format!("malformed status line: {status_line:?}")),
     }
 }

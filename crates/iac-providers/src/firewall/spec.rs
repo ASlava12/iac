@@ -115,9 +115,10 @@ impl FirewallRuleSpec {
             _ => {}
         }
         if let Some(p) = self.port
-            && p == 0 {
-                return Err("port must be 1..=65535".into());
-            }
+            && p == 0
+        {
+            return Err("port must be 1..=65535".into());
+        }
         if let Some(addr) = &self.source {
             validate_addr(addr, self.family).map_err(|e| format!("source: {e}"))?;
         }
@@ -233,7 +234,9 @@ fn validate_addr(addr: &str, family: Family) -> Result<(), String> {
             // 4 octets of digits, each 0..=255.
             let octets: Vec<&str> = host.split('.').collect();
             if octets.len() != 4 {
-                return Err(format!("{addr:?} not a valid IPv4 address (4 octets expected)"));
+                return Err(format!(
+                    "{addr:?} not a valid IPv4 address (4 octets expected)"
+                ));
             }
             for o in &octets {
                 let n: u16 = o
@@ -244,7 +247,9 @@ fn validate_addr(addr: &str, family: Family) -> Result<(), String> {
                 }
             }
             if let Some(p) = prefix_opt {
-                let n: u8 = p.parse().map_err(|_| format!("{addr:?} prefix {p:?} not a number"))?;
+                let n: u8 = p
+                    .parse()
+                    .map_err(|_| format!("{addr:?} prefix {p:?} not a number"))?;
                 if n > 32 {
                     return Err(format!("{addr:?} IPv4 prefix {n} out of range 0..=32"));
                 }
@@ -259,7 +264,9 @@ fn validate_addr(addr: &str, family: Family) -> Result<(), String> {
                 return Err(format!("{addr:?} contains non-hex characters"));
             }
             if let Some(p) = prefix_opt {
-                let n: u8 = p.parse().map_err(|_| format!("{addr:?} prefix {p:?} not a number"))?;
+                let n: u8 = p
+                    .parse()
+                    .map_err(|_| format!("{addr:?} prefix {p:?} not a number"))?;
                 if n > 128 {
                     return Err(format!("{addr:?} IPv6 prefix {n} out of range 0..=128"));
                 }
@@ -280,10 +287,8 @@ mod tests {
 
     #[test]
     fn parses_minimal_present() {
-        let s = parse(
-            "name: allow-ssh\nchain: INPUT\nprotocol: tcp\nport: 22\naction: ACCEPT",
-        )
-        .unwrap();
+        let s = parse("name: allow-ssh\nchain: INPUT\nprotocol: tcp\nport: 22\naction: ACCEPT")
+            .unwrap();
         assert_eq!(s.name, "allow-ssh");
         assert_eq!(s.table, "filter"); // default
         assert_eq!(s.chain, "INPUT");
@@ -317,79 +322,63 @@ mod tests {
 
     #[test]
     fn rejects_empty_name() {
-        let err = parse("name: ''\nchain: INPUT\nprotocol: all\naction: ACCEPT")
-            .unwrap_err();
+        let err = parse("name: ''\nchain: INPUT\nprotocol: all\naction: ACCEPT").unwrap_err();
         assert!(err.contains("must not be empty"), "got: {err}");
     }
 
     #[test]
     fn rejects_invalid_chars_in_name() {
-        let err = parse("name: 'evil; rm'\nchain: INPUT\nprotocol: all\naction: ACCEPT")
-            .unwrap_err();
+        let err =
+            parse("name: 'evil; rm'\nchain: INPUT\nprotocol: all\naction: ACCEPT").unwrap_err();
         assert!(err.contains("alphanumeric"), "got: {err}");
     }
 
     #[test]
     fn rejects_unknown_table() {
-        let err = parse(
-            "name: r\ntable: bogus\nchain: INPUT\nprotocol: all\naction: ACCEPT",
-        )
-        .unwrap_err();
+        let err = parse("name: r\ntable: bogus\nchain: INPUT\nprotocol: all\naction: ACCEPT")
+            .unwrap_err();
         assert!(err.contains("table"), "got: {err}");
     }
 
     #[test]
     fn rejects_chain_invalid_for_table() {
         // PREROUTING is not a filter-table chain.
-        let err = parse(
-            "name: r\ntable: filter\nchain: PREROUTING\nprotocol: all\naction: ACCEPT",
-        )
-        .unwrap_err();
+        let err = parse("name: r\ntable: filter\nchain: PREROUTING\nprotocol: all\naction: ACCEPT")
+            .unwrap_err();
         assert!(err.contains("chain"), "got: {err}");
     }
 
     #[test]
     fn rejects_tcp_without_port() {
-        let err = parse(
-            "name: r\nchain: INPUT\nprotocol: tcp\naction: ACCEPT",
-        )
-        .unwrap_err();
+        let err = parse("name: r\nchain: INPUT\nprotocol: tcp\naction: ACCEPT").unwrap_err();
         assert!(err.contains("requires `port`"), "got: {err}");
     }
 
     #[test]
     fn rejects_icmp_with_port() {
-        let err = parse(
-            "name: r\nchain: INPUT\nprotocol: icmp\nport: 22\naction: ACCEPT",
-        )
-        .unwrap_err();
+        let err =
+            parse("name: r\nchain: INPUT\nprotocol: icmp\nport: 22\naction: ACCEPT").unwrap_err();
         assert!(err.contains("must not set `port`"), "got: {err}");
     }
 
     #[test]
     fn rejects_unknown_action() {
-        let err = parse(
-            "name: r\nchain: INPUT\nprotocol: all\naction: NUKE",
-        )
-        .unwrap_err();
+        let err = parse("name: r\nchain: INPUT\nprotocol: all\naction: NUKE").unwrap_err();
         assert!(err.contains("action"), "got: {err}");
     }
 
     #[test]
     fn rejects_invalid_ipv4_source() {
-        let err = parse(
-            "name: r\nchain: INPUT\nprotocol: all\naction: ACCEPT\nsource: 10.0.0.999",
-        )
-        .unwrap_err();
+        let err = parse("name: r\nchain: INPUT\nprotocol: all\naction: ACCEPT\nsource: 10.0.0.999")
+            .unwrap_err();
         assert!(err.contains("source"), "got: {err}");
     }
 
     #[test]
     fn rejects_ipv4_with_oversized_prefix() {
-        let err = parse(
-            "name: r\nchain: INPUT\nprotocol: all\naction: ACCEPT\nsource: 10.0.0.0/64",
-        )
-        .unwrap_err();
+        let err =
+            parse("name: r\nchain: INPUT\nprotocol: all\naction: ACCEPT\nsource: 10.0.0.0/64")
+                .unwrap_err();
         assert!(err.contains("prefix"), "got: {err}");
     }
 
@@ -406,11 +395,12 @@ mod tests {
 
     #[test]
     fn rejects_unknown_field() {
-        let err = parse(
-            "name: r\nchain: INPUT\nprotocol: all\naction: ACCEPT\nbogus_field: 1",
-        )
-        .unwrap_err();
-        assert!(err.contains("bogus_field") || err.contains("unknown"), "got: {err}");
+        let err = parse("name: r\nchain: INPUT\nprotocol: all\naction: ACCEPT\nbogus_field: 1")
+            .unwrap_err();
+        assert!(
+            err.contains("bogus_field") || err.contains("unknown"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -424,10 +414,8 @@ mod tests {
 
     #[test]
     fn rejects_port_zero() {
-        let err = parse(
-            "name: r\nchain: INPUT\nprotocol: tcp\nport: 0\naction: ACCEPT",
-        )
-        .unwrap_err();
+        let err =
+            parse("name: r\nchain: INPUT\nprotocol: tcp\nport: 0\naction: ACCEPT").unwrap_err();
         assert!(err.contains("port"), "got: {err}");
     }
 }

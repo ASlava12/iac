@@ -45,7 +45,8 @@ pub struct MaintenanceMetrics {
     /// name)`; rendered with `{window_kind="...", window_name="..."}`
     /// labels in the metrics endpoint. Operators with multiple
     /// windows can finally tell which one is blocking submissions.
-    pub per_window_blocked: std::collections::HashMap<(WindowKind, String), std::sync::atomic::AtomicU64>,
+    pub per_window_blocked:
+        std::collections::HashMap<(WindowKind, String), std::sync::atomic::AtomicU64>,
 }
 
 /// Phase 7bg: kind label for per-window counters. Two windows with
@@ -132,8 +133,7 @@ impl MaintenanceMetrics {
         use std::sync::atomic::Ordering::Relaxed;
         let count = absolute.iter().filter(|w| w.parse().is_err()).count()
             + recurring.iter().filter(|w| w.parse().is_err()).count();
-        self.misconfigured_windows
-            .store(count as u64, Relaxed);
+        self.misconfigured_windows.store(count as u64, Relaxed);
     }
 
     /// Phase 7bg: build the per-window counter map, one zero-valued
@@ -321,7 +321,9 @@ pub struct RecurringMaintenanceWindow {
 }
 
 fn parse_hhmm(s: &str) -> Result<u32, String> {
-    let (h, m) = s.split_once(':').ok_or_else(|| format!("expected HH:MM, got {s:?}"))?;
+    let (h, m) = s
+        .split_once(':')
+        .ok_or_else(|| format!("expected HH:MM, got {s:?}"))?;
     let h: u32 = h.parse().map_err(|_| format!("bad hour {h:?}"))?;
     let m: u32 = m.parse().map_err(|_| format!("bad minute {m:?}"))?;
     if h >= 24 || m >= 60 {
@@ -397,7 +399,12 @@ impl RecurringMaintenanceWindow {
                 ))
             })?,
         };
-        Ok(RecurringWindowParsed { start_min, end_min, days, tz })
+        Ok(RecurringWindowParsed {
+            start_min,
+            end_min,
+            days,
+            tz,
+        })
     }
 }
 
@@ -421,7 +428,9 @@ pub fn check(
         if w.environment != "*" && w.environment != environment {
             continue;
         }
-        let Ok((start, end)) = w.parse() else { continue };
+        let Ok((start, end)) = w.parse() else {
+            continue;
+        };
         if now >= start && now < end {
             if let Some(m) = metrics {
                 m.record_window_block(WindowKind::Absolute, &w.name);
@@ -429,15 +438,9 @@ pub fn check(
             // Retry-After in seconds until the window closes. Saturating
             // to avoid panics on giant intervals; the cap below keeps it
             // friendly to clients that store the header in a u32.
-            let retry_secs = end
-                .duration_since(now)
-                .as_secs()
-                .clamp(1, 24 * 60 * 60);
+            let retry_secs = end.duration_since(now).as_secs().clamp(1, 24 * 60 * 60);
             return Err(ApiError::ServiceUnavailable {
-                reason: format!(
-                    "maintenance window {:?} is active until {}",
-                    w.name, w.end
-                ),
+                reason: format!("maintenance window {:?} is active until {}", w.name, w.end),
                 retry_after_secs: retry_secs as u64,
             });
         }
@@ -518,7 +521,12 @@ mod tests {
         // entries — operators alert on `> 0`.
         let m = MaintenanceMetrics::default();
         let abs = vec![
-            w("good", "prod", "2026-05-01T02:00:00Z", "2026-05-01T04:00:00Z"),
+            w(
+                "good",
+                "prod",
+                "2026-05-01T02:00:00Z",
+                "2026-05-01T04:00:00Z",
+            ),
             w("bad-start", "prod", "not-a-time", "2026-05-01T04:00:00Z"),
             w(
                 "inverted",
@@ -544,7 +552,12 @@ mod tests {
         // returns one entry per valid window, all with count=0 until a
         // block actually fires.
         let abs = vec![
-            w("freeze-q4", "prod", "2026-05-01T02:00:00Z", "2026-05-01T04:00:00Z"),
+            w(
+                "freeze-q4",
+                "prod",
+                "2026-05-01T02:00:00Z",
+                "2026-05-01T04:00:00Z",
+            ),
             // misconfigured — must be excluded from the per_window map
             w("bad-start", "prod", "not-a-time", "2026-05-01T04:00:00Z"),
         ];
@@ -553,7 +566,11 @@ mod tests {
         let entries = m.snapshot().per_window_blocked;
         // freeze-q4 + weekend; bad-start excluded.
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|e| e.name == "freeze-q4" && e.count == 0));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.name == "freeze-q4" && e.count == 0)
+        );
         assert!(entries.iter().any(|e| e.name == "weekend" && e.count == 0));
         // Misconfigured count still ticks as before.
         assert_eq!(m.snapshot().misconfigured_windows, 1);
@@ -565,8 +582,18 @@ mod tests {
         // increment the per-window counter for that name (and not the
         // counters for any other window).
         let abs = vec![
-            w("freeze-a", "prod", "2026-05-01T02:00:00Z", "2026-05-01T04:00:00Z"),
-            w("freeze-b", "prod", "2026-05-01T05:00:00Z", "2026-05-01T07:00:00Z"),
+            w(
+                "freeze-a",
+                "prod",
+                "2026-05-01T02:00:00Z",
+                "2026-05-01T04:00:00Z",
+            ),
+            w(
+                "freeze-b",
+                "prod",
+                "2026-05-01T05:00:00Z",
+                "2026-05-01T07:00:00Z",
+            ),
         ];
         let m = MaintenanceMetrics::from_config(&abs, &[]);
         let _ = check(&abs, "prod", ts("2026-05-01T03:00:00Z"), Some(&m));
@@ -589,11 +616,19 @@ mod tests {
         let _ = check_recurring(&rec, "prod", ts("2026-05-04T03:00:00Z"), Some(&m));
         let entries = m.snapshot().per_window_blocked;
         assert_eq!(
-            entries.iter().find(|e| e.name == "monday-window").unwrap().count,
+            entries
+                .iter()
+                .find(|e| e.name == "monday-window")
+                .unwrap()
+                .count,
             1
         );
         assert_eq!(
-            entries.iter().find(|e| e.name == "tuesday-window").unwrap().count,
+            entries
+                .iter()
+                .find(|e| e.name == "tuesday-window")
+                .unwrap()
+                .count,
             0
         );
     }
@@ -640,7 +675,10 @@ mod tests {
         )];
         let err = check(&win, "prod", ts("2026-05-01T03:00:00Z"), None).unwrap_err();
         match err {
-            ApiError::ServiceUnavailable { reason, retry_after_secs } => {
+            ApiError::ServiceUnavailable {
+                reason,
+                retry_after_secs,
+            } => {
                 assert!(reason.contains("tuesday"), "reason: {reason}");
                 // 1 hour left in the window.
                 assert!(retry_after_secs > 0);
@@ -727,7 +765,13 @@ mod tests {
         assert!(check(&win, "prod", ts("2026-05-01T03:00:00Z"), None).is_ok());
     }
 
-    fn rw(name: &str, env: &str, weekdays: &[&str], start: &str, end: &str) -> RecurringMaintenanceWindow {
+    fn rw(
+        name: &str,
+        env: &str,
+        weekdays: &[&str],
+        start: &str,
+        end: &str,
+    ) -> RecurringMaintenanceWindow {
         RecurringMaintenanceWindow {
             name: name.into(),
             environment: env.into(),
@@ -766,7 +810,11 @@ mod tests {
         // 2026-05-04 is a Monday. Window: Mondays 02:00-04:00.
         let win = vec![rw("mon-2-4", "prod", &["mon"], "02:00", "04:00")];
         let err = check_recurring(&win, "prod", ts("2026-05-04T03:00:00Z"), None).unwrap_err();
-        if let ApiError::ServiceUnavailable { reason, retry_after_secs } = err {
+        if let ApiError::ServiceUnavailable {
+            reason,
+            retry_after_secs,
+        } = err
+        {
             assert!(reason.contains("mon-2-4"), "reason: {reason}");
             // ~1 hour left in the window. The seconds calculation rolls
             // up to the next minute boundary, so the upper bound is a
@@ -864,7 +912,14 @@ mod tests {
         // Window: every day 02:00-04:00 New_York time.
         // 2026-05-04 06:30Z = 02:30 EDT (DST active in May, UTC-4).
         // Inside the window → must block.
-        let win = vec![rw_tz("ny-2-4", "prod", &[], "02:00", "04:00", "America/New_York")];
+        let win = vec![rw_tz(
+            "ny-2-4",
+            "prod",
+            &[],
+            "02:00",
+            "04:00",
+            "America/New_York",
+        )];
         let inside_ny = ts("2026-05-04T06:30:00Z");
         let err = check_recurring(&win, "prod", inside_ny, None).unwrap_err();
         match err {

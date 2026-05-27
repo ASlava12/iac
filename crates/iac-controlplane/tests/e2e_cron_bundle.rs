@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_core::protocol::v1::{
@@ -18,7 +18,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
-
 
 fn build_agent(workdir: &Path, server_url: &str, name: &str, env: &str) -> Agent {
     let manifests = workdir.join("manifests.d");
@@ -60,7 +59,8 @@ async fn cron_bundle_expands_and_blast_radius_reported() {
                 "schedule": "0 3 * * *",
                 "script": "#!/bin/bash\necho hello\n",
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -89,7 +89,11 @@ async fn cron_bundle_expands_and_blast_radius_reported() {
     let agent_id = identity["agent_id"].as_str().unwrap();
     let token = identity["token"].as_str().unwrap();
     let ds: DesiredStateBatch = reqwest::Client::new()
-        .get(format!("{}/v1/agents/{}/desired-state", server.url(), agent_id))
+        .get(format!(
+            "{}/v1/agents/{}/desired-state",
+            server.url(),
+            agent_id
+        ))
         .bearer_auth(token)
         .send()
         .await
@@ -107,8 +111,16 @@ async fn cron_bundle_expands_and_blast_radius_reported() {
     assert!(kinds.contains(&"cron.job"));
 
     // Cross-check the file path in the cron.job spec matches the file's path.
-    let file = ds.items.iter().find(|i| i.resource["kind"] == "file").unwrap();
-    let cron = ds.items.iter().find(|i| i.resource["kind"] == "cron.job").unwrap();
+    let file = ds
+        .items
+        .iter()
+        .find(|i| i.resource["kind"] == "file")
+        .unwrap();
+    let cron = ds
+        .items
+        .iter()
+        .find(|i| i.resource["kind"] == "cron.job")
+        .unwrap();
     assert_eq!(
         file.resource["spec"]["path"].as_str().unwrap(),
         cron.resource["spec"]["command"].as_str().unwrap()
@@ -147,7 +159,8 @@ async fn cron_bundle_with_host_selector_routes_to_named_agent() {
                 "user": "logger",
                 "hostSelector": { "name": "cron-A" },
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -181,11 +194,7 @@ async fn cron_bundle_with_host_selector_routes_to_named_agent() {
         preview.items.iter().map(|i| i.agent_id.as_str()).collect();
     assert_eq!(agents.len(), 1);
     // Both children point at the custom path.
-    let cron = preview
-        .items
-        .iter()
-        .find(|i| i.kind == "cron.job")
-        .unwrap();
+    let cron = preview.items.iter().find(|i| i.kind == "cron.job").unwrap();
     assert_eq!(
         cron.resource["spec"]["command"].as_str().unwrap(),
         "/opt/scripts/rotate.sh"
@@ -198,7 +207,12 @@ async fn cron_bundle_with_host_selector_routes_to_named_agent() {
 #[tokio::test]
 async fn malformed_cron_bundle_spec_returns_400() {
     let server = TestServer::spawn().await;
-    let _agent = build_agent(&TempDir::new().unwrap().keep(), &server.url(), "vm-cron", "ops");
+    let _agent = build_agent(
+        &TempDir::new().unwrap().keep(),
+        &server.url(),
+        "vm-cron",
+        "ops",
+    );
 
     // Missing required `script`.
     let req = SubmitOperationRequest {
@@ -211,7 +225,8 @@ async fn malformed_cron_bundle_spec_returns_400() {
             "kind": "cron-job-bundle",
             "metadata": { "name": "broken", "environment": "ops" },
             "spec": { "schedule": "* * * * *" }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))

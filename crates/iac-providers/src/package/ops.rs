@@ -1,13 +1,13 @@
 use super::backend::{InstallStatus, PackageBackend};
 use super::spec::{PackageSpec, PackageState};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 
 pub fn observe(backend: &dyn PackageBackend, spec: &PackageSpec) -> Result<ObservedState> {
@@ -23,7 +23,10 @@ pub fn observe(backend: &dyn PackageBackend, spec: &PackageSpec) -> Result<Obser
                 observed_at: jiff::Timestamp::now(),
             })
         }
-        InstallStatus::Installed { status: dpkg_status, version } => {
+        InstallStatus::Installed {
+            status: dpkg_status,
+            version,
+        } => {
             let installed = status.is_installed();
             facts.insert("installed".into(), YamlValue::Bool(installed));
             facts.insert("dpkg_status".into(), YamlValue::String(dpkg_status.clone()));
@@ -47,7 +50,11 @@ pub fn observe(backend: &dyn PackageBackend, spec: &PackageSpec) -> Result<Obser
 }
 
 pub fn diff(spec: &PackageSpec, observed: &ObservedState) -> Diff {
-    let installed = observed.facts.get("installed").and_then(YamlValue::as_bool).unwrap_or(false);
+    let installed = observed
+        .facts
+        .get("installed")
+        .and_then(YamlValue::as_bool)
+        .unwrap_or(false);
     let observed_version = observed
         .facts
         .get("version")
@@ -91,9 +98,7 @@ pub fn diff(spec: &PackageSpec, observed: &ObservedState) -> Diff {
                             to: Some(YamlValue::String(pin.clone())),
                             sensitive: false,
                         }],
-                        reasons: vec![format!(
-                            "version pin {observed_version} -> {pin}"
-                        )],
+                        reasons: vec![format!("version pin {observed_version} -> {pin}")],
                         reversible: true,
                     };
                 }
@@ -164,8 +169,10 @@ pub fn rollback(backend: &dyn PackageBackend, checkpoint: &Json) -> Result<()> {
         .get("name")
         .and_then(Json::as_str)
         .ok_or_else(|| Error::provider("package", "checkpoint missing 'name'"))?;
-    let prev_installed =
-        checkpoint.get("previous_installed").and_then(Json::as_bool).unwrap_or(false);
+    let prev_installed = checkpoint
+        .get("previous_installed")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
     let prev_version = checkpoint.get("previous_version").and_then(Json::as_str);
 
     let cur = backend.query(name)?;
@@ -173,9 +180,10 @@ pub fn rollback(backend: &dyn PackageBackend, checkpoint: &Json) -> Result<()> {
         (true, true) => {
             // Reinstall pinned version if it differed.
             if let Some(prev_v) = prev_version
-                && cur.version() != Some(prev_v) {
-                    backend.install(name, Some(prev_v))?;
-                }
+                && cur.version() != Some(prev_v)
+            {
+                backend.install(name, Some(prev_v))?;
+            }
         }
         (true, false) => backend.remove(name)?,
         (false, true) => backend.install(name, prev_version)?,
@@ -186,8 +194,8 @@ pub fn rollback(backend: &dyn PackageBackend, checkpoint: &Json) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::backend::MockPackageBackend;
+    use super::*;
     use iac_core::operation::StepStatus;
 
     fn spec_install(name: &str) -> PackageSpec {

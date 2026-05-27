@@ -17,12 +17,11 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_core::protocol::v1::{SigningPubkey, SigningPubkeyBundle};
 use reqwest::StatusCode;
 use tempfile::TempDir;
-
 
 #[tokio::test]
 async fn signing_keys_bundle_returns_active_alone_initially() {
@@ -67,7 +66,11 @@ async fn rotate_changes_active_keeps_old_in_bundle() {
         .await
         .unwrap();
     assert_ne!(rotated.active_key_id, initial_id, "active changed");
-    assert_eq!(rotated.keys.len(), 2, "old key retained in verification set");
+    assert_eq!(
+        rotated.keys.len(),
+        2,
+        "old key retained in verification set"
+    );
     let ids: Vec<&str> = rotated.keys.iter().map(|k| k.key_id.as_str()).collect();
     assert!(ids.contains(&initial_id.as_str()));
     assert!(ids.contains(&rotated.active_key_id.as_str()));
@@ -284,6 +287,9 @@ async fn rotated_keyset_persists_across_restart() {
     assert_eq!(reloaded.key_id(), rotated, "active persists");
     let pubkeys = reloaded.pubkeys();
     let ids: Vec<&str> = pubkeys.iter().map(|(id, _)| id.as_str()).collect();
-    assert!(ids.contains(&initial.as_str()), "old key still in set after reload");
+    assert!(
+        ids.contains(&initial.as_str()),
+        "old key still in set after reload"
+    );
     assert!(ids.contains(&rotated.as_str()));
 }

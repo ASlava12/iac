@@ -22,7 +22,7 @@
 //! - Canary composes with phased apply: layer-N canary runs only
 //!   after layer-(N-1) baseline succeeds.
 
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     AssignmentResultRequest, AssignmentResultStatus, CanarySpec, RegisterRequest,
     SubmitOperationRequest, SubmitOperationResponse,
@@ -96,12 +96,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, store, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            store,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -256,7 +265,10 @@ async fn canary_50_pct_across_4_agents_splits_2_2() {
                 file_resource("c", "prod", "vm-c"),
                 file_resource("d", "prod", "vm-d"),
             ],
-            Some(CanarySpec { pct: 50, min_count: None }),
+            Some(CanarySpec {
+                pct: 50,
+                min_count: None,
+            }),
         )
         .await;
     let assignments = assignments_of(&server.store, &resp.operation_id).await;
@@ -298,7 +310,10 @@ async fn canary_succeeds_promotes_baseline() {
                 file_resource("c", "prod", "vm-c"),
                 file_resource("d", "prod", "vm-d"),
             ],
-            Some(CanarySpec { pct: 50, min_count: None }),
+            Some(CanarySpec {
+                pct: 50,
+                min_count: None,
+            }),
         )
         .await;
 
@@ -353,7 +368,10 @@ async fn canary_failure_cancels_baseline_and_fails_op() {
                 file_resource("c", "prod", "vm-c"),
                 file_resource("d", "prod", "vm-d"),
             ],
-            Some(CanarySpec { pct: 25, min_count: None }),
+            Some(CanarySpec {
+                pct: 25,
+                min_count: None,
+            }),
         )
         .await;
 
@@ -401,7 +419,10 @@ async fn canary_on_single_agent_layer_skips_split() {
         .submit_with_canary(
             "solo",
             vec![file_resource("solo-r", "solo", "only")],
-            Some(CanarySpec { pct: 50, min_count: None }),
+            Some(CanarySpec {
+                pct: 50,
+                min_count: None,
+            }),
         )
         .await;
     let assignments = assignments_of(&server.store, &resp.operation_id).await;
@@ -430,7 +451,10 @@ async fn canary_min_count_floor_overrides_pct() {
         .submit_with_canary(
             "prod",
             resources,
-            Some(CanarySpec { pct: 10, min_count: Some(3) }),
+            Some(CanarySpec {
+                pct: 10,
+                min_count: Some(3),
+            }),
         )
         .await;
     let assignments = assignments_of(&server.store, &resp.operation_id).await;
@@ -456,7 +480,10 @@ async fn canary_count_capped_to_n_minus_one() {
                 file_resource("r2", "prod", "vm-2"),
                 file_resource("r3", "prod", "vm-3"),
             ],
-            Some(CanarySpec { pct: 99, min_count: None }),
+            Some(CanarySpec {
+                pct: 99,
+                min_count: None,
+            }),
         )
         .await;
     let assignments = assignments_of(&server.store, &resp.operation_id).await;
@@ -507,7 +534,10 @@ async fn canary_composes_with_phased_apply() {
                 make("c", "vm-c", &["file/phase/a"]),
                 make("d", "vm-d", &["file/phase/b"]),
             ],
-            Some(CanarySpec { pct: 50, min_count: None }),
+            Some(CanarySpec {
+                pct: 50,
+                min_count: None,
+            }),
         )
         .await;
     let assignments = assignments_of(&server.store, &resp.operation_id).await;

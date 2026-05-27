@@ -157,11 +157,12 @@ impl MonitoringCheckSpec {
                     return Err(format!("http target {url:?} has no host"));
                 }
                 if let Some(code) = self.expected_status
-                    && !(100..=599).contains(&code) {
-                        return Err(format!(
-                            "expected_status {code} not a valid HTTP status (100..=599)"
-                        ));
-                    }
+                    && !(100..=599).contains(&code)
+                {
+                    return Err(format!(
+                        "expected_status {code} not a valid HTTP status (100..=599)"
+                    ));
+                }
             }
             CheckType::Tcp => {
                 if self.expected_status.is_some() {
@@ -218,10 +219,8 @@ mod tests {
 
     #[test]
     fn parses_minimal_http() {
-        let s = parse(
-            "name: web-healthz\ntype: http\ntarget: http://localhost:8080/healthz",
-        )
-        .unwrap();
+        let s =
+            parse("name: web-healthz\ntype: http\ntarget: http://localhost:8080/healthz").unwrap();
         assert_eq!(s.name, "web-healthz");
         assert_eq!(s.check_type, CheckType::Http);
         assert_eq!(s.target, "http://localhost:8080/healthz");
@@ -238,10 +237,9 @@ mod tests {
 
     #[test]
     fn parses_with_expected_status_and_timeout() {
-        let s = parse(
-            "name: c\ntype: http\ntarget: http://x/\nexpected_status: 204\ntimeout_secs: 10",
-        )
-        .unwrap();
+        let s =
+            parse("name: c\ntype: http\ntarget: http://x/\nexpected_status: 204\ntimeout_secs: 10")
+                .unwrap();
         assert_eq!(s.expected_status, Some(204));
         assert_eq!(s.timeout_secs, 10);
     }
@@ -266,35 +264,26 @@ mod tests {
 
     #[test]
     fn rejects_tcp_with_expected_status() {
-        let err = parse(
-            "name: c\ntype: tcp\ntarget: x:80\nexpected_status: 200",
-        )
-        .unwrap_err();
+        let err = parse("name: c\ntype: tcp\ntarget: x:80\nexpected_status: 200").unwrap_err();
         assert!(err.contains("expected_status forbidden"), "got: {err}");
     }
 
     #[test]
     fn rejects_invalid_status_code() {
-        let err = parse(
-            "name: c\ntype: http\ntarget: http://x/\nexpected_status: 999",
-        )
-        .unwrap_err();
+        let err =
+            parse("name: c\ntype: http\ntarget: http://x/\nexpected_status: 999").unwrap_err();
         assert!(err.contains("100..=599"), "got: {err}");
     }
 
     #[test]
     fn rejects_zero_timeout() {
-        let err = parse("name: c\ntype: http\ntarget: http://x/\ntimeout_secs: 0")
-            .unwrap_err();
+        let err = parse("name: c\ntype: http\ntarget: http://x/\ntimeout_secs: 0").unwrap_err();
         assert!(err.contains("timeout_secs"), "got: {err}");
     }
 
     #[test]
     fn rejects_oversized_timeout() {
-        let err = parse(
-            "name: c\ntype: http\ntarget: http://x/\ntimeout_secs: 120",
-        )
-        .unwrap_err();
+        let err = parse("name: c\ntype: http\ntarget: http://x/\ntimeout_secs: 120").unwrap_err();
         assert!(err.contains("timeout_secs"), "got: {err}");
     }
 
@@ -318,11 +307,11 @@ mod tests {
 
     #[test]
     fn rejects_unknown_field() {
-        let err = parse(
-            "name: c\ntype: http\ntarget: http://x/\nbogus: 1",
-        )
-        .unwrap_err();
-        assert!(err.contains("bogus") || err.contains("unknown"), "got: {err}");
+        let err = parse("name: c\ntype: http\ntarget: http://x/\nbogus: 1").unwrap_err();
+        assert!(
+            err.contains("bogus") || err.contains("unknown"),
+            "got: {err}"
+        );
     }
 
     #[test]

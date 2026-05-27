@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_core::protocol::v1::{
@@ -19,7 +19,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
-
 
 fn build_agent(workdir: &Path, server_url: &str, name: &str, env: &str) -> Agent {
     let manifests = workdir.join("manifests.d");
@@ -63,7 +62,8 @@ async fn service_expands_and_blast_radius_reported() {
                 "port": 8080,
                 "domain": "app.example.com",
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -93,7 +93,11 @@ async fn service_expands_and_blast_radius_reported() {
     let agent_id = identity["agent_id"].as_str().unwrap();
     let token = identity["token"].as_str().unwrap();
     let ds: DesiredStateBatch = reqwest::Client::new()
-        .get(format!("{}/v1/agents/{}/desired-state", server.url(), agent_id))
+        .get(format!(
+            "{}/v1/agents/{}/desired-state",
+            server.url(),
+            agent_id
+        ))
         .bearer_auth(token)
         .send()
         .await
@@ -112,7 +116,11 @@ async fn service_expands_and_blast_radius_reported() {
 
     // OperationView lists both primitives via the assignment's payload.
     let view: OperationView = reqwest::Client::new()
-        .get(format!("{}/v1/operations/{}", server.url(), submit.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            submit.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -155,7 +163,8 @@ async fn service_with_host_selector_routes_to_named_agent() {
                 "domain": "api.example.com",
                 "hostSelector": { "name": "host-A" },
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -179,7 +188,12 @@ async fn service_with_host_selector_routes_to_named_agent() {
 #[tokio::test]
 async fn malformed_service_spec_returns_400() {
     let server = TestServer::spawn().await;
-    let _agent = build_agent(&TempDir::new().unwrap().keep(), &server.url(), "vm-svc", "svc");
+    let _agent = build_agent(
+        &TempDir::new().unwrap().keep(),
+        &server.url(),
+        "vm-svc",
+        "svc",
+    );
 
     let req = SubmitOperationRequest {
         environment: "svc".into(),
@@ -194,7 +208,8 @@ async fn malformed_service_spec_returns_400() {
                 "image": "nginx",
                 // missing required `port` and `domain`
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -227,7 +242,8 @@ async fn primitive_resources_passthrough_with_blast_radius() {
             "kind": "file",
             "metadata": { "name": "x", "environment": "prim" },
             "spec": { "path": target.display().to_string(), "mode": "0644", "content": "y\n" }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))

@@ -7,7 +7,7 @@
 //! These tests validate them against a live server.
 
 use iac_agent::remote::Client;
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{AgentHealth, HeartbeatRequest, RegisterRequest};
 use reqwest::StatusCode;
 use std::net::SocketAddr;
@@ -77,12 +77,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, store, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            store,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -123,10 +132,8 @@ async fn identity_persists_expires_at_when_ttl_configured() {
     assert!(secs_left > 3500 && secs_left <= 3600, "got: {secs_left}");
 
     // identity.json on disk also has it.
-    let on_disk: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&identity_file).unwrap(),
-    )
-    .unwrap();
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&identity_file).unwrap()).unwrap();
     assert!(on_disk["token_expires_at"].is_string());
 
     server.shutdown().await;
@@ -185,16 +192,12 @@ async fn rotate_token_swaps_identity_in_memory_and_on_disk() {
     // In-memory identity changed.
     assert_ne!(client.identity().token, original_token);
     // Heartbeat with the NEW token works.
-    let resp = client
-        .heartbeat(AgentHealth::Healthy, 0, 0, None)
-        .await;
+    let resp = client.heartbeat(AgentHealth::Healthy, 0, 0, None).await;
     assert!(resp.is_ok(), "heartbeat after rotate: {resp:?}");
 
     // On-disk identity also has the new token.
-    let on_disk: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&identity_file).unwrap(),
-    )
-    .unwrap();
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&identity_file).unwrap()).unwrap();
     assert_eq!(on_disk["token"], client.identity().token);
     // Old token now rejected by the server.
     let bogus_resp = reqwest::Client::new()
@@ -297,7 +300,10 @@ async fn rotate_if_needed_no_op_for_grandfathered_token() {
     let token_before = client.identity().token.clone();
 
     // Even with absurd safety margin, no rotation for grandfathered.
-    let result = client.rotate_if_needed(&identity_file, 999_999).await.unwrap();
+    let result = client
+        .rotate_if_needed(&identity_file, 999_999)
+        .await
+        .unwrap();
     assert!(result.is_none());
     assert_eq!(client.identity().token, token_before);
 

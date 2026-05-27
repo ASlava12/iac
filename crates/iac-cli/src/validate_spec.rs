@@ -13,7 +13,7 @@
 //! (port range, hostname syntax) stays server-side where the
 //! authoritative serde rules live.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use iac_core::Resource;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -66,8 +66,7 @@ pub fn validate_resources(
                 continue;
             }
         };
-        let known: BTreeSet<&str> =
-            desc.spec_fields.iter().map(|f| f.name.as_str()).collect();
+        let known: BTreeSet<&str> = desc.spec_fields.iter().map(|f| f.name.as_str()).collect();
 
         // Required fields present?
         for field in &desc.spec_fields {
@@ -191,11 +190,7 @@ fn type_mismatch(declared: &str, value: &serde_json::Value) -> Option<String> {
         // that may emit a richer catalog than this CLI build understands.
         _ => return None,
     };
-    if ok {
-        None
-    } else {
-        Some(observed.to_string())
-    }
+    if ok { None } else { Some(observed.to_string()) }
 }
 
 /// Split on top-level commas only — i.e. commas inside `<...>` are part of
@@ -234,14 +229,8 @@ fn json_kind(v: &serde_json::Value) -> &'static str {
 /// Fetch the catalog from a running control-plane. Best-effort: any
 /// failure (network, auth, timeout) returns `None` so the caller can
 /// decide whether to skip validation rather than block the submission.
-pub async fn fetch_catalog(
-    server_url: &str,
-    bearer: &str,
-) -> Result<Vec<ExpanderDescriptor>> {
-    let url = format!(
-        "{}/v1/expanders",
-        server_url.trim_end_matches('/')
-    );
+pub async fn fetch_catalog(server_url: &str, bearer: &str) -> Result<Vec<ExpanderDescriptor>> {
+    let url = format!("{}/v1/expanders", server_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
@@ -322,7 +311,10 @@ mod tests {
         let res = service_resource("image: nginx\nport: 8080");
         let errs = validate_resources(&[res], &[descriptor()]);
         assert_eq!(errs.len(), 1);
-        assert!(errs[0].contains("spec.domain is required"), "errs: {errs:?}");
+        assert!(
+            errs[0].contains("spec.domain is required"),
+            "errs: {errs:?}"
+        );
     }
 
     #[test]
@@ -336,9 +328,8 @@ mod tests {
 
     #[test]
     fn unknown_field_reports_error() {
-        let res = service_resource(
-            "image: nginx\nport: 8080\ndomain: x.example\ntotally_made_up: 1",
-        );
+        let res =
+            service_resource("image: nginx\nport: 8080\ndomain: x.example\ntotally_made_up: 1");
         let errs = validate_resources(&[res], &[descriptor()]);
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("totally_made_up"), "errs: {errs:?}");
@@ -394,9 +385,7 @@ mod tests {
     fn quoted_number_in_string_field_is_caught() {
         // `port` is declared as "number"; a YAML-quoted "8080" reaches
         // serde as a string.
-        let res = service_resource(
-            "image: nginx\nport: \"8080\"\ndomain: x.example",
-        );
+        let res = service_resource("image: nginx\nport: \"8080\"\ndomain: x.example");
         let errs = validate_resources(&[res], &[descriptor()]);
         assert_eq!(errs.len(), 1, "errs: {errs:?}");
         assert!(errs[0].contains("spec.port expected number"));
@@ -424,9 +413,7 @@ mod tests {
             required: false,
             description: "env vars".into(),
         });
-        let res = service_resource(
-            "image: nginx\nport: 8080\ndomain: x.example\nenv:\n  KEY: VAL",
-        );
+        let res = service_resource("image: nginx\nport: 8080\ndomain: x.example\nenv:\n  KEY: VAL");
         let errs = validate_resources(&[res], &[desc]);
         assert!(errs.is_empty(), "errs: {errs:?}");
     }
@@ -440,9 +427,7 @@ mod tests {
             required: false,
             description: "env vars".into(),
         });
-        let res = service_resource(
-            "image: nginx\nport: 8080\ndomain: x.example\nenv: \"KEY=VAL\"",
-        );
+        let res = service_resource("image: nginx\nport: 8080\ndomain: x.example\nenv: \"KEY=VAL\"");
         let errs = validate_resources(&[res], &[desc]);
         assert_eq!(errs.len(), 1, "errs: {errs:?}");
         assert!(errs[0].contains("spec.env expected map<string,string>"));
@@ -461,11 +446,13 @@ mod tests {
             required: false,
             description: "".into(),
         });
-        let res = service_resource(
-            "image: nginx\nport: 8080\ndomain: x.example\nfuture_field: 30s",
-        );
+        let res =
+            service_resource("image: nginx\nport: 8080\ndomain: x.example\nfuture_field: 30s");
         let errs = validate_resources(&[res], &[desc]);
-        assert!(errs.is_empty(), "unknown declared type must NOT reject: {errs:?}");
+        assert!(
+            errs.is_empty(),
+            "unknown declared type must NOT reject: {errs:?}"
+        );
     }
 
     #[test]
@@ -486,13 +473,17 @@ mod tests {
     fn type_mismatch_doesnt_mask_unknown_field_error() {
         // A wrong-type known field + an unknown field should produce
         // BOTH errors so the operator fixes both at once.
-        let res = service_resource(
-            "image: 42\nport: 8080\ndomain: x.example\nweird_field: foo",
-        );
+        let res = service_resource("image: 42\nport: 8080\ndomain: x.example\nweird_field: foo");
         let errs = validate_resources(&[res], &[descriptor()]);
         assert_eq!(errs.len(), 2, "errs: {errs:?}");
-        assert!(errs.iter().any(|e| e.contains("spec.image expected string")));
-        assert!(errs.iter().any(|e| e.contains("weird_field is not a known field")));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("spec.image expected string"))
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("weird_field is not a known field"))
+        );
     }
 
     // Phase 7bl: deep map<K,V> + array<T> element-type validation.
@@ -545,9 +536,8 @@ mod tests {
             required: false,
             description: "tags".into(),
         });
-        let res = service_resource(
-            "image: nginx\nport: 8080\ndomain: x.example\ntags: not-an-array",
-        );
+        let res =
+            service_resource("image: nginx\nport: 8080\ndomain: x.example\ntags: not-an-array");
         let errs = validate_resources(&[res], &[desc]);
         assert_eq!(errs.len(), 1, "errs: {errs:?}");
         assert!(errs[0].contains("spec.tags expected array<string>"));
@@ -620,7 +610,10 @@ mod tests {
         let errs = validate_resources(&[res], &[desc]);
         assert_eq!(errs.len(), 1, "errs: {errs:?}");
         assert!(errs[0].contains("spec.env expected map<string,string>"));
-        assert!(errs[0].contains("got number at key 'PORT'"), "errs: {errs:?}");
+        assert!(
+            errs[0].contains("got number at key 'PORT'"),
+            "errs: {errs:?}"
+        );
     }
 
     #[test]
@@ -660,10 +653,7 @@ mod tests {
             split_top_level_comma("string,array<number>"),
             vec!["string", "array<number>"]
         );
-        assert_eq!(
-            split_top_level_comma("map<a,b>,c"),
-            vec!["map<a,b>", "c"]
-        );
+        assert_eq!(split_top_level_comma("map<a,b>,c"), vec!["map<a,b>", "c"]);
         assert_eq!(split_top_level_comma(""), vec![""]);
     }
 
@@ -677,12 +667,13 @@ mod tests {
             required: false,
             description: "weird".into(),
         });
-        let res = service_resource(
-            "image: nginx\nport: 8080\ndomain: x.example\nweird:\n  k: v",
-        );
+        let res = service_resource("image: nginx\nport: 8080\ndomain: x.example\nweird:\n  k: v");
         let errs = validate_resources(&[res], &[desc]);
         // Object passes shallow check (the `match value { Object(_) => ... None ... }`
         // path returns None for malformed parts).
-        assert!(errs.is_empty(), "malformed map declaration must not crash: {errs:?}");
+        assert!(
+            errs.is_empty(),
+            "malformed map declaration must not crash: {errs:?}"
+        );
     }
 }

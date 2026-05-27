@@ -130,9 +130,8 @@ impl DnsBackend for CloudflareCli {
             url_encode(fqdn),
         );
         let resp = curl_get(&url, &self.auth_header())?;
-        let body: serde_json::Value = serde_json::from_str(&resp).map_err(|e| {
-            Error::provider("dns.record", format!("list parse: {e}: {resp}"))
-        })?;
+        let body: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| Error::provider("dns.record", format!("list parse: {e}: {resp}")))?;
         let records = body
             .get("result")
             .and_then(|r| r.as_array())
@@ -145,9 +144,21 @@ impl DnsBackend for CloudflareCli {
         if let Some(rec) = records.first() {
             return Ok(Some(DnsRecord {
                 id: rec.get("id").and_then(|v| v.as_str()).unwrap_or("").into(),
-                fqdn: rec.get("name").and_then(|v| v.as_str()).unwrap_or("").into(),
-                record_type: rec.get("type").and_then(|v| v.as_str()).unwrap_or("").into(),
-                value: rec.get("content").and_then(|v| v.as_str()).unwrap_or("").into(),
+                fqdn: rec
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .into(),
+                record_type: rec
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .into(),
+                value: rec
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .into(),
                 // Phase 7cz.17: saturating cast — TTL above u32::MAX is
                 // implausible (>136 yrs), but we'd rather clamp than wrap.
                 ttl: rec
@@ -177,9 +188,8 @@ impl DnsBackend for CloudflareCli {
             "ttl": ttl,
         });
         let resp = curl_post(&url, &self.auth_header(), &payload.to_string())?;
-        let body: serde_json::Value = serde_json::from_str(&resp).map_err(|e| {
-            Error::provider("dns.record", format!("create parse: {e}: {resp}"))
-        })?;
+        let body: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| Error::provider("dns.record", format!("create parse: {e}: {resp}")))?;
         let id = body
             .get("result")
             .and_then(|r| r.get("id"))
@@ -203,9 +213,8 @@ impl DnsBackend for CloudflareCli {
         ttl: u32,
     ) -> Result<()> {
         let zid = self.zone_id(zone)?;
-        let url = format!(
-            "https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{record_id}"
-        );
+        let url =
+            format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{record_id}");
         let payload = serde_json::json!({
             "type": record_type.as_str(),
             "name": fqdn,
@@ -214,9 +223,8 @@ impl DnsBackend for CloudflareCli {
         });
         let resp = curl_put(&url, &self.auth_header(), &payload.to_string())?;
         // Validate that success was indicated.
-        let body: serde_json::Value = serde_json::from_str(&resp).map_err(|e| {
-            Error::provider("dns.record", format!("update parse: {e}: {resp}"))
-        })?;
+        let body: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| Error::provider("dns.record", format!("update parse: {e}: {resp}")))?;
         if body.get("success").and_then(|v| v.as_bool()) != Some(true) {
             return Err(Error::provider(
                 "dns.record",
@@ -228,13 +236,11 @@ impl DnsBackend for CloudflareCli {
 
     fn delete_record(&self, zone: &str, record_id: &str) -> Result<()> {
         let zid = self.zone_id(zone)?;
-        let url = format!(
-            "https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{record_id}"
-        );
+        let url =
+            format!("https://api.cloudflare.com/client/v4/zones/{zid}/dns_records/{record_id}");
         let resp = curl_delete(&url, &self.auth_header())?;
-        let body: serde_json::Value = serde_json::from_str(&resp).map_err(|e| {
-            Error::provider("dns.record", format!("delete parse: {e}: {resp}"))
-        })?;
+        let body: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| Error::provider("dns.record", format!("delete parse: {e}: {resp}")))?;
         if body.get("success").and_then(|v| v.as_bool()) != Some(true) {
             return Err(Error::provider(
                 "dns.record",
@@ -251,31 +257,48 @@ fn curl_get(url: &str, auth: &str) -> Result<String> {
     let mut cmd = Command::new("curl");
     cmd.args([
         "-sS",
-        "--max-time", "20",
+        "--max-time",
+        "20",
         "--fail-with-body",
-        "-H", auth,
-        "-H", "Content-Type: application/json",
+        "-H",
+        auth,
+        "-H",
+        "Content-Type: application/json",
         url,
     ]);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    run_capture_stdout(cmd, b"", DNS_API_TIMEOUT, "dns.record", &format!("curl GET {url}"))
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_capture_stdout(
+        cmd,
+        b"",
+        DNS_API_TIMEOUT,
+        "dns.record",
+        &format!("curl GET {url}"),
+    )
 }
 
 fn curl_request(method: &str, url: &str, auth: &str, body: Option<&str>) -> Result<String> {
     let mut cmd = Command::new("curl");
     cmd.args([
         "-sS",
-        "--max-time", "20",
+        "--max-time",
+        "20",
         "--fail-with-body",
-        "-X", method,
-        "-H", auth,
-        "-H", "Content-Type: application/json",
+        "-X",
+        method,
+        "-H",
+        auth,
+        "-H",
+        "Content-Type: application/json",
     ]);
     if let Some(b) = body {
         cmd.arg("--data").arg(b);
     }
     cmd.arg(url);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     run_capture_stdout(
         cmd,
         b"",
@@ -390,7 +413,11 @@ impl DnsBackend for MockDns {
                 s.next_id += 1;
                 let id = format!("rec-{:x}", s.next_id);
                 s.records.insert(
-                    (zone.to_string(), fqdn.to_string(), record_type.as_str().to_string()),
+                    (
+                        zone.to_string(),
+                        fqdn.to_string(),
+                        record_type.as_str().to_string(),
+                    ),
                     DnsRecord {
                         id: id.clone(),
                         fqdn: fqdn.to_string(),
@@ -479,19 +506,33 @@ mod tests {
     fn mock_round_trip() {
         let m = MockDns::new();
         assert_eq!(
-            m.find_record("example.com", "app.example.com", RecordType::A).unwrap(),
+            m.find_record("example.com", "app.example.com", RecordType::A)
+                .unwrap(),
             None
         );
         let id = m
-            .create_record("example.com", "app.example.com", RecordType::A, "1.2.3.4", 300)
+            .create_record(
+                "example.com",
+                "app.example.com",
+                RecordType::A,
+                "1.2.3.4",
+                300,
+            )
             .unwrap();
         let r = m
             .find_record("example.com", "app.example.com", RecordType::A)
             .unwrap()
             .unwrap();
         assert_eq!(r.value, "1.2.3.4");
-        m.update_record("example.com", &id, "app.example.com", RecordType::A, "5.6.7.8", 60)
-            .unwrap();
+        m.update_record(
+            "example.com",
+            &id,
+            "app.example.com",
+            RecordType::A,
+            "5.6.7.8",
+            60,
+        )
+        .unwrap();
         let r2 = m
             .find_record("example.com", "app.example.com", RecordType::A)
             .unwrap()
@@ -500,7 +541,8 @@ mod tests {
         assert_eq!(r2.ttl, 60);
         m.delete_record("example.com", &id).unwrap();
         assert_eq!(
-            m.find_record("example.com", "app.example.com", RecordType::A).unwrap(),
+            m.find_record("example.com", "app.example.com", RecordType::A)
+                .unwrap(),
             None
         );
     }

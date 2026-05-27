@@ -30,18 +30,17 @@ crate::step_actions!(AcmeAction {
 });
 
 pub use backend::{
-    pick_backend, read_cert_expiry_unix, read_expiry_with_fallback, AcmeBackend,
-    LegoCli, MockAcme,
+    AcmeBackend, LegoCli, MockAcme, pick_backend, read_cert_expiry_unix, read_expiry_with_fallback,
 };
 pub use spec::{AcmeCertSpec, AcmeState, ChallengeKind};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -63,7 +62,9 @@ impl AcmeCertProvider {
     }
 
     pub fn with_backend(backend: Box<dyn AcmeBackend>) -> Self {
-        Self { test_backend: Some(backend) }
+        Self {
+            test_backend: Some(backend),
+        }
     }
 
     fn parse_spec(&self, resource: &Resource) -> Result<AcmeCertSpec> {

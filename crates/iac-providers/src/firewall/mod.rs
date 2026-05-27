@@ -36,12 +36,12 @@ pub use nft::NftablesBackend;
 pub use spec::{Family, FirewallRuleSpec, FirewallState};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -72,15 +72,11 @@ impl FirewallProvider {
     /// the operator.
     pub fn new() -> Self {
         let raw = std::env::var("IAC_FIREWALL_BACKEND").ok();
-        let normalised = raw
-            .as_deref()
-            .map(|s| s.trim().to_ascii_lowercase());
+        let normalised = raw.as_deref().map(|s| s.trim().to_ascii_lowercase());
         let backend: Box<dyn FirewallBackend> = match normalised.as_deref() {
             None | Some("") | Some("iptables") => Box::new(IptablesBackend),
             Some("nft") | Some("nftables") => {
-                tracing::info!(
-                    "firewall provider: nft backend selected via IAC_FIREWALL_BACKEND"
-                );
+                tracing::info!("firewall provider: nft backend selected via IAC_FIREWALL_BACKEND");
                 Box::new(NftablesBackend)
             }
             Some(other) => {
@@ -100,7 +96,10 @@ impl FirewallProvider {
 
     fn parse_spec(&self, resource: &Resource) -> Result<FirewallRuleSpec> {
         FirewallRuleSpec::from_value(&resource.spec).map_err(|e| {
-            Error::validation(resource.id().to_string(), format!("invalid firewall.rule spec: {e}"))
+            Error::validation(
+                resource.id().to_string(),
+                format!("invalid firewall.rule spec: {e}"),
+            )
         })
     }
 }

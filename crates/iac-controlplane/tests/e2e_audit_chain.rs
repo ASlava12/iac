@@ -7,7 +7,7 @@
 // tampering and the verify endpoint surfaces the broken row id.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{RegisterRequest, RegisterResponse};
 use serde::Deserialize;
 use serde_json::json;
@@ -91,10 +91,13 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
         Self {
             addr,
@@ -166,7 +169,10 @@ async fn chain_grows_with_each_audit_event() {
 
     let _ = register_agent(&server, "vm-1").await;
     let tip1 = fetch_tip(&server).await;
-    assert!(tip1.last_id > 0, "tip should advance after first audit event");
+    assert!(
+        tip1.last_id > 0,
+        "tip should advance after first audit event"
+    );
     assert!(!tip1.last_hash.is_empty());
     assert_eq!(tip1.last_hash.len(), 64, "sha256 hex is 64 chars");
 
@@ -194,7 +200,11 @@ async fn endpoints_require_approver_role() {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED, "path={path}");
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "path={path}"
+        );
 
         // Bad token.
         let resp = reqwest::Client::new()
@@ -203,7 +213,11 @@ async fn endpoints_require_approver_role() {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED, "path={path}");
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "path={path}"
+        );
     }
 
     server.shutdown().await;

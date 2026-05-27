@@ -1,16 +1,16 @@
-use super::backend::{normalize_port_spec, ContainerHealthcheck, DockerBackend};
+use super::backend::{ContainerHealthcheck, DockerBackend, normalize_port_spec};
 use super::spec::{
-    env_kv, normalize_volume_spec, parse_health_duration_secs, parse_volume_spec,
-    DockerContainerSpec, DockerHealthcheck, DockerState, RestartPolicy,
+    DockerContainerSpec, DockerHealthcheck, DockerState, RestartPolicy, env_kv,
+    normalize_volume_spec, parse_health_duration_secs, parse_volume_spec,
 };
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 
 pub fn observe(backend: &dyn DockerBackend, spec: &DockerContainerSpec) -> Result<ObservedState> {
@@ -29,7 +29,10 @@ pub fn observe(backend: &dyn DockerBackend, spec: &DockerContainerSpec) -> Resul
     facts.insert("exists".into(), YamlValue::Bool(true));
     facts.insert("running".into(), YamlValue::Bool(info.running));
     facts.insert("status".into(), YamlValue::String(info.status.clone()));
-    facts.insert("image_ref".into(), YamlValue::String(info.image_ref.clone()));
+    facts.insert(
+        "image_ref".into(),
+        YamlValue::String(info.image_ref.clone()),
+    );
     facts.insert("image_id".into(), YamlValue::String(info.image_id.clone()));
     facts.insert(
         "restart_policy".into(),
@@ -55,18 +58,14 @@ pub fn observe(backend: &dyn DockerBackend, spec: &DockerContainerSpec) -> Resul
     // Phase 7ax: surface labels so the diff path can see them.
     spec_value.insert(
         "labels".into(),
-        YamlValue::Sequence(
-            info.labels.iter().cloned().map(YamlValue::String).collect(),
-        ),
+        YamlValue::Sequence(info.labels.iter().cloned().map(YamlValue::String).collect()),
     );
     // Phase 7ay: surface the command override (or `Null` for "image
     // default") so the diff path can compare exact-match.
     spec_value.insert(
         "command".into(),
         match &info.command {
-            Some(cmd) => YamlValue::Sequence(
-                cmd.iter().cloned().map(YamlValue::String).collect(),
-            ),
+            Some(cmd) => YamlValue::Sequence(cmd.iter().cloned().map(YamlValue::String).collect()),
             None => YamlValue::Null,
         },
     );
@@ -82,7 +81,11 @@ pub fn observe(backend: &dyn DockerBackend, spec: &DockerContainerSpec) -> Resul
     spec_value.insert(
         "volumes".into(),
         YamlValue::Sequence(
-            info.volumes.iter().cloned().map(YamlValue::String).collect(),
+            info.volumes
+                .iter()
+                .cloned()
+                .map(YamlValue::String)
+                .collect(),
         ),
     );
     // Phase 7bb: surface attached networks (sorted) so the diff path
@@ -90,7 +93,11 @@ pub fn observe(backend: &dyn DockerBackend, spec: &DockerContainerSpec) -> Resul
     spec_value.insert(
         "networks".into(),
         YamlValue::Sequence(
-            info.networks.iter().cloned().map(YamlValue::String).collect(),
+            info.networks
+                .iter()
+                .cloned()
+                .map(YamlValue::String)
+                .collect(),
         ),
     );
     // Phase 7bo: surface tmpfs target paths so the diff path can compare
@@ -119,7 +126,11 @@ pub fn diff(
     spec: &DockerContainerSpec,
     observed: &ObservedState,
 ) -> Result<Diff> {
-    let exists = observed.facts.get("exists").and_then(YamlValue::as_bool).unwrap_or(false);
+    let exists = observed
+        .facts
+        .get("exists")
+        .and_then(YamlValue::as_bool)
+        .unwrap_or(false);
 
     match (spec.state, exists) {
         (DockerState::Absent, false) => Ok(Diff::no_change()),
@@ -273,8 +284,11 @@ pub fn diff(
                         .collect()
                 })
                 .unwrap_or_default();
-            let desired_labels: Vec<String> =
-                spec.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            let desired_labels: Vec<String> = spec
+                .labels
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect();
             if !env_subset(&desired_labels, &observed_labels) {
                 changes.push(FieldChange {
                     field: "labels".into(),
@@ -315,7 +329,11 @@ pub fn diff(
                     let (src, dst, ro) = parse_volume_spec(s).ok()?;
                     Some(normalize_volume_spec(src, dst, ro))
                 })
-                .chain(spec.mounts.iter().filter_map(super::spec::mount_to_short_form))
+                .chain(
+                    spec.mounts
+                        .iter()
+                        .filter_map(super::spec::mount_to_short_form),
+                )
                 .collect();
             desired_volumes.sort();
             let mut have_volumes = observed_volumes.clone();
@@ -407,9 +425,7 @@ pub fn diff(
                         to: Some(yaml_string_list(&want)),
                         sensitive: false,
                     });
-                    reasons.push(format!(
-                        "network attachment {have:?} -> {want:?}"
-                    ));
+                    reasons.push(format!("network attachment {have:?} -> {want:?}"));
                 }
             }
 
@@ -446,9 +462,7 @@ pub fn diff(
                     .and_then(|m| m.get(YamlValue::String("interval_secs".into())))
                     .and_then(YamlValue::as_u64);
                 if want_interval != have_interval {
-                    hc_diffs.push(format!(
-                        "interval {have_interval:?}s -> {want_interval:?}s"
-                    ));
+                    hc_diffs.push(format!("interval {have_interval:?}s -> {want_interval:?}s"));
                 }
                 let want_timeout = desired_hc
                     .timeout
@@ -459,9 +473,7 @@ pub fn diff(
                     .and_then(|m| m.get(YamlValue::String("timeout_secs".into())))
                     .and_then(YamlValue::as_u64);
                 if want_timeout != have_timeout {
-                    hc_diffs.push(format!(
-                        "timeout {have_timeout:?}s -> {want_timeout:?}s"
-                    ));
+                    hc_diffs.push(format!("timeout {have_timeout:?}s -> {want_timeout:?}s"));
                 }
                 let want_retries = desired_hc.retries.map(u64::from);
                 let have_retries = observed_hc
@@ -469,16 +481,12 @@ pub fn diff(
                     .and_then(|m| m.get(YamlValue::String("retries".into())))
                     .and_then(YamlValue::as_u64);
                 if want_retries != have_retries {
-                    hc_diffs.push(format!(
-                        "retries {have_retries:?} -> {want_retries:?}"
-                    ));
+                    hc_diffs.push(format!("retries {have_retries:?} -> {want_retries:?}"));
                 }
                 if !hc_diffs.is_empty() {
                     changes.push(FieldChange {
                         field: "healthcheck".into(),
-                        from: Some(
-                            observed_hc.cloned().unwrap_or(YamlValue::Null),
-                        ),
+                        from: Some(observed_hc.cloned().unwrap_or(YamlValue::Null)),
                         to: Some(serde_yaml_ng::to_value(desired_hc).unwrap_or(YamlValue::Null)),
                         sensitive: false,
                     });
@@ -515,7 +523,11 @@ pub fn diff(
             }
 
             // Container should be running for state=present.
-            let running = observed.facts.get("running").and_then(YamlValue::as_bool).unwrap_or(false);
+            let running = observed
+                .facts
+                .get("running")
+                .and_then(YamlValue::as_bool)
+                .unwrap_or(false);
             if !running {
                 changes.push(FieldChange {
                     field: "running".into(),
@@ -529,7 +541,12 @@ pub fn diff(
             if changes.is_empty() {
                 Ok(Diff::no_change())
             } else {
-                Ok(Diff { kind: DiffKind::Update, changes, reasons, reversible: true })
+                Ok(Diff {
+                    kind: DiffKind::Update,
+                    changes,
+                    reasons,
+                    reversible: true,
+                })
             }
         }
     }
@@ -643,7 +660,11 @@ pub fn pre_apply(backend: &dyn DockerBackend, spec: &DockerContainerSpec) -> Res
     })
 }
 
-pub fn apply(backend: &dyn DockerBackend, spec: &DockerContainerSpec, step: &Step) -> Result<StepResult> {
+pub fn apply(
+    backend: &dyn DockerBackend,
+    spec: &DockerContainerSpec,
+    step: &Step,
+) -> Result<StepResult> {
     let name = step
         .payload
         .get("name")
@@ -689,7 +710,10 @@ pub fn rollback(
     spec: &DockerContainerSpec,
     checkpoint: &Json,
 ) -> Result<()> {
-    let existed = checkpoint.get("previous_existed").and_then(Json::as_bool).unwrap_or(false);
+    let existed = checkpoint
+        .get("previous_existed")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
     let name = checkpoint
         .get("name")
         .and_then(Json::as_str)
@@ -707,12 +731,22 @@ pub fn rollback(
     let prev_env: Vec<String> = checkpoint
         .get("previous_env")
         .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Json::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let prev_ports: Vec<String> = checkpoint
         .get("previous_ports")
         .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Json::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let prev_restart = checkpoint
         .get("previous_restart_policy")
@@ -725,7 +759,12 @@ pub fn rollback(
     let prev_labels: Vec<String> = checkpoint
         .get("previous_labels")
         .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Json::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     // Phase 7ay: restore the command override. Distinguish three cases:
     //   * `null` (or pre-7ay missing) → None: image default CMD.
@@ -735,14 +774,24 @@ pub fn rollback(
     let prev_command: Option<Vec<String>> = checkpoint
         .get("previous_command")
         .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Json::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .filter(|v: &Vec<String>| !v.is_empty());
     // Phase 7ba: restore mount strings. Pre-7ba checkpoints don't carry
     // this field; fall back to empty so older rollbacks still work.
     let prev_volumes: Vec<String> = checkpoint
         .get("previous_volumes")
         .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Json::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     // Phase 7bb / 7bm: restore network attachments. The first observed
     // non-bridge network becomes the primary `--network`; remaining
@@ -751,7 +800,12 @@ pub fn rollback(
     let prev_networks_all: Vec<String> = checkpoint
         .get("previous_networks")
         .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(Json::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Json::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let mut prev_networks_filtered: Vec<String> = prev_networks_all
         .into_iter()
@@ -787,7 +841,12 @@ pub fn rollback(
                 .get("retries")
                 .and_then(Json::as_u64)
                 .and_then(|n| u32::try_from(n).ok());
-            Some(DockerHealthcheck { command, interval, timeout, retries })
+            Some(DockerHealthcheck {
+                command,
+                interval,
+                timeout,
+                retries,
+            })
         });
 
     let mut env = IndexMap::new();
@@ -890,13 +949,13 @@ mod tests {
                 env: vec![],
                 ports: vec![],
                 restart_policy: "unless-stopped".into(),
-                            labels: vec![],
-                            command: None,
-                            healthcheck: None,
-                            volumes: vec![],
-                            networks: vec![],
+                labels: vec![],
+                command: None,
+                healthcheck: None,
+                volumes: vec![],
+                networks: vec![],
 
-                            tmpfs_mounts: vec![],
+                tmpfs_mounts: vec![],
             },
         );
         let spec = make_spec("web", "nginx:1.27");
@@ -918,13 +977,13 @@ mod tests {
                 env: vec![],
                 ports: vec![],
                 restart_policy: "unless-stopped".into(),
-                            labels: vec![],
-                            command: None,
-                            healthcheck: None,
-                            volumes: vec![],
-                            networks: vec![],
+                labels: vec![],
+                command: None,
+                healthcheck: None,
+                volumes: vec![],
+                networks: vec![],
 
-                            tmpfs_mounts: vec![],
+                tmpfs_mounts: vec![],
             },
         );
         // Local image now has a different digest (e.g. tag was repointed upstream).
@@ -949,13 +1008,13 @@ mod tests {
                 env: vec![],
                 ports: vec!["8080:80/tcp".into()],
                 restart_policy: "unless-stopped".into(),
-                            labels: vec![],
-                            command: None,
-                            healthcheck: None,
-                            volumes: vec![],
-                            networks: vec![],
+                labels: vec![],
+                command: None,
+                healthcheck: None,
+                volumes: vec![],
+                networks: vec![],
 
-                            tmpfs_mounts: vec![],
+                tmpfs_mounts: vec![],
             },
         );
         let mut spec = make_spec("web", "nginx:1.27");
@@ -995,16 +1054,15 @@ mod tests {
             env: IndexMap::new(),
             ports: vec![],
             restart_policy: RestartPolicy::UnlessStopped,
-                    labels: indexmap::IndexMap::new(),
-                    command: None,
-                    healthcheck: None,
-                    volumes: vec![],
-                    network: None,
+            labels: indexmap::IndexMap::new(),
+            command: None,
+            healthcheck: None,
+            volumes: vec![],
+            network: None,
 
-                    extra_networks: vec![],
+            extra_networks: vec![],
 
-
-                    mounts: vec![],
+            mounts: vec![],
         };
         let observed = observe(&backend, &spec).unwrap();
         let d = diff(&backend, &spec, &observed).unwrap();
@@ -1029,34 +1087,37 @@ mod tests {
                 env: vec!["FOO=bar".into()],
                 ports: vec!["8080:80/tcp".into()],
                 restart_policy: "unless-stopped".into(),
-                            labels: vec![],
-                            command: None,
-                            healthcheck: None,
-                            volumes: vec![],
-                            networks: vec![],
+                labels: vec![],
+                command: None,
+                healthcheck: None,
+                volumes: vec![],
+                networks: vec![],
 
-                            tmpfs_mounts: vec![],
+                tmpfs_mounts: vec![],
             },
         );
 
-        let cp = pre_apply(&backend, &DockerContainerSpec {
-            name: "web".into(),
-            image: Some("nginx:2.0".into()),
-            state: DockerState::Present,
-            env: IndexMap::new(),
-            ports: vec![],
-            restart_policy: RestartPolicy::UnlessStopped,
-                    labels: indexmap::IndexMap::new(),
-                    command: None,
-                    healthcheck: None,
-                    volumes: vec![],
-                    network: None,
+        let cp = pre_apply(
+            &backend,
+            &DockerContainerSpec {
+                name: "web".into(),
+                image: Some("nginx:2.0".into()),
+                state: DockerState::Present,
+                env: IndexMap::new(),
+                ports: vec![],
+                restart_policy: RestartPolicy::UnlessStopped,
+                labels: indexmap::IndexMap::new(),
+                command: None,
+                healthcheck: None,
+                volumes: vec![],
+                network: None,
 
-                    extra_networks: vec![],
+                extra_networks: vec![],
 
-
-                    mounts: vec![],
-        }).unwrap();
+                mounts: vec![],
+            },
+        )
+        .unwrap();
 
         // Now upgrade to v2.
         backend.set_image_digest("nginx:2.0", "sha256:v2");
@@ -1067,21 +1128,23 @@ mod tests {
             env: IndexMap::new(),
             ports: vec![],
             restart_policy: RestartPolicy::UnlessStopped,
-                    labels: indexmap::IndexMap::new(),
-                    command: None,
-                    healthcheck: None,
-                    volumes: vec![],
-                    network: None,
+            labels: indexmap::IndexMap::new(),
+            command: None,
+            healthcheck: None,
+            volumes: vec![],
+            network: None,
 
-                    extra_networks: vec![],
+            extra_networks: vec![],
 
-
-                    mounts: vec![],
+            mounts: vec![],
         };
         backend.stop("web").unwrap();
         backend.remove("web", true).unwrap();
         backend.run(&new_spec).unwrap();
-        assert_eq!(backend.inspect_container("web").unwrap().unwrap().image_ref, "nginx:2.0");
+        assert_eq!(
+            backend.inspect_container("web").unwrap().unwrap().image_ref,
+            "nginx:2.0"
+        );
 
         // Rollback to checkpoint.
         rollback(&backend, &new_spec, &cp).unwrap();
@@ -1251,7 +1314,11 @@ mod tests {
         backend.remove("worker", true).unwrap();
         backend.run(&new_spec_with_cmd).unwrap();
         assert_eq!(
-            backend.inspect_container("worker").unwrap().unwrap().command,
+            backend
+                .inspect_container("worker")
+                .unwrap()
+                .unwrap()
+                .command,
             Some(vec!["worker".into(), "--queue=low".into()])
         );
 
@@ -1395,7 +1462,11 @@ mod tests {
         got.sort();
         assert_eq!(
             got,
-            vec!["audit".to_string(), "mon".to_string(), "primary".to_string()]
+            vec![
+                "audit".to_string(),
+                "mon".to_string(),
+                "primary".to_string()
+            ]
         );
         // Verify the connect_network call sequence — both extras hit it.
         let calls = backend.calls();
@@ -1702,19 +1773,13 @@ mod tests {
         // NOT trigger drift. Same set, different order → no diff.
         let backend = MockDocker::new();
         let mut spec = make_spec("web", "nginx:1.27");
-        spec.volumes = vec![
-            "/var/data:/app/data".into(),
-            "/etc/conf:/conf:ro".into(),
-        ];
+        spec.volumes = vec!["/var/data:/app/data".into(), "/etc/conf:/conf:ro".into()];
         backend.set_image_digest("nginx:1.27", "sha256:x");
         backend.run(&spec).unwrap();
 
         // Same volumes, different declaration order.
         let mut spec_reordered = spec.clone();
-        spec_reordered.volumes = vec![
-            "/etc/conf:/conf:ro".into(),
-            "/var/data:/app/data".into(),
-        ];
+        spec_reordered.volumes = vec!["/etc/conf:/conf:ro".into(), "/var/data:/app/data".into()];
         let observed = observe(&backend, &spec_reordered).unwrap();
         let d = diff(&backend, &spec_reordered, &observed).unwrap();
         assert!(
@@ -1796,10 +1861,7 @@ mod tests {
     fn rollback_restores_volumes_from_checkpoint() {
         let backend = MockDocker::new();
         let mut prev_spec = make_spec("web", "nginx:1.0");
-        prev_spec.volumes = vec![
-            "/old/data:/app/data".into(),
-            "myvol:/cache".into(),
-        ];
+        prev_spec.volumes = vec!["/old/data:/app/data".into(), "myvol:/cache".into()];
         backend.set_image_digest("nginx:1.0", "sha256:old");
         backend.run(&prev_spec).unwrap();
 

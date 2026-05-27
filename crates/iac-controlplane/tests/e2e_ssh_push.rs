@@ -23,7 +23,7 @@
 //! 6. Partial result from remote → op partially_applied.
 
 use iac_controlplane::config::SshTargetConfig;
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     OperationStatus, OperationView, SubmitOperationRequest, SubmitOperationResponse,
 };
@@ -172,7 +172,10 @@ impl TestServer {
 
         let mut target_ids = Vec::new();
         for t in &targets {
-            let id = store.upsert_ssh_target(&t.name, &t.environment).await.unwrap();
+            let id = store
+                .upsert_ssh_target(&t.name, &t.environment)
+                .await
+                .unwrap();
             target_ids.push(id);
         }
 
@@ -201,10 +204,13 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
 
         let ssh_shutdown = Arc::new(Notify::new());
@@ -251,7 +257,11 @@ impl TestServer {
         }
     }
 
-    async fn submit(&self, env: &str, resources: Vec<serde_json::Value>) -> SubmitOperationResponse {
+    async fn submit(
+        &self,
+        env: &str,
+        resources: Vec<serde_json::Value>,
+    ) -> SubmitOperationResponse {
         let resp = reqwest::Client::new()
             .post(format!("{}/v1/operations", self.url()))
             .bearer_auth(ADMIN_TOKEN)
@@ -266,7 +276,12 @@ impl TestServer {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "submit: {}", resp.text().await.unwrap());
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "submit: {}",
+            resp.text().await.unwrap()
+        );
         resp.json().await.unwrap()
     }
 
@@ -336,16 +351,15 @@ fn file_resource(name: &str, env: &str, host: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn ssh_targets_register_in_agents_table() {
-    let server = TestServer::spawn(vec![target("edge-01", "edge")], FakeSshBehaviour::Succeed).await;
+    let server =
+        TestServer::spawn(vec![target("edge-01", "edge")], FakeSshBehaviour::Succeed).await;
     use sqlx::Row;
-    let row = sqlx::query(
-        "SELECT id, kind FROM agents WHERE name = ? AND environment = ?",
-    )
-    .bind("edge-01")
-    .bind("edge")
-    .fetch_one(server.store.pool())
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT id, kind FROM agents WHERE name = ? AND environment = ?")
+        .bind("edge-01")
+        .bind("edge")
+        .fetch_one(server.store.pool())
+        .await
+        .unwrap();
     let kind: String = row.try_get("kind").unwrap();
     assert_eq!(kind, "ssh");
     server.shutdown().await;
@@ -353,12 +367,17 @@ async fn ssh_targets_register_in_agents_table() {
 
 #[tokio::test]
 async fn ssh_push_succeeds_when_remote_ok() {
-    let server = TestServer::spawn(vec![target("edge-ok", "edge")], FakeSshBehaviour::Succeed).await;
+    let server =
+        TestServer::spawn(vec![target("edge-ok", "edge")], FakeSshBehaviour::Succeed).await;
     let resp = server
         .submit("edge", vec![file_resource("greet", "edge", "edge-ok")])
         .await;
     let view = server.wait_terminal(&resp.operation_id).await;
-    assert!(matches!(view.status, OperationStatus::Succeeded), "got {:?}", view.status);
+    assert!(
+        matches!(view.status, OperationStatus::Succeeded),
+        "got {:?}",
+        view.status
+    );
     server.shutdown().await;
 }
 
@@ -369,7 +388,11 @@ async fn ssh_push_fails_when_remote_exit_nonzero() {
         .submit("edge", vec![file_resource("greet", "edge", "edge-fail")])
         .await;
     let view = server.wait_terminal(&resp.operation_id).await;
-    assert!(matches!(view.status, OperationStatus::Failed), "got {:?}", view.status);
+    assert!(
+        matches!(view.status, OperationStatus::Failed),
+        "got {:?}",
+        view.status
+    );
     server.shutdown().await;
 }
 
@@ -380,7 +403,10 @@ async fn ssh_push_capabilities_allowlist_rejects_disallowed_kind() {
     // Behaviour doesn't matter — we shouldn't even reach SSH here.
     let server = TestServer::spawn(vec![t], FakeSshBehaviour::Succeed).await;
     let resp = server
-        .submit("edge", vec![file_resource("greet", "edge", "edge-restricted")])
+        .submit(
+            "edge",
+            vec![file_resource("greet", "edge", "edge-restricted")],
+        )
         .await;
     let view = server.wait_terminal(&resp.operation_id).await;
     assert!(matches!(view.status, OperationStatus::Failed));
@@ -396,20 +422,25 @@ async fn ssh_push_capabilities_allowlist_rejects_disallowed_kind() {
 
 #[tokio::test]
 async fn ssh_push_emits_audit_event() {
-    let server = TestServer::spawn(vec![target("edge-audit", "edge")], FakeSshBehaviour::Succeed).await;
+    let server = TestServer::spawn(
+        vec![target("edge-audit", "edge")],
+        FakeSshBehaviour::Succeed,
+    )
+    .await;
     let resp = server
         .submit("edge", vec![file_resource("greet", "edge", "edge-audit")])
         .await;
     let _ = server.wait_terminal(&resp.operation_id).await;
 
     use sqlx::Row;
-    let rows = sqlx::query(
-        "SELECT actor, kind FROM audit_events WHERE kind LIKE 'ssh.push_%'",
-    )
-    .fetch_all(server.store.pool())
-    .await
-    .unwrap();
-    assert!(!rows.is_empty(), "expected at least one ssh.push_* audit event");
+    let rows = sqlx::query("SELECT actor, kind FROM audit_events WHERE kind LIKE 'ssh.push_%'")
+        .fetch_all(server.store.pool())
+        .await
+        .unwrap();
+    assert!(
+        !rows.is_empty(),
+        "expected at least one ssh.push_* audit event"
+    );
     let actor: String = rows[0].try_get("actor").unwrap();
     let kind: String = rows[0].try_get("kind").unwrap();
     assert!(actor.starts_with("ssh-push:edge-audit"), "actor: {actor}");
@@ -419,7 +450,11 @@ async fn ssh_push_emits_audit_event() {
 
 #[tokio::test]
 async fn ssh_push_partial_when_remote_outputs_partial() {
-    let server = TestServer::spawn(vec![target("edge-partial", "edge")], FakeSshBehaviour::Partial).await;
+    let server = TestServer::spawn(
+        vec![target("edge-partial", "edge")],
+        FakeSshBehaviour::Partial,
+    )
+    .await;
     let resp = server
         .submit("edge", vec![file_resource("greet", "edge", "edge-partial")])
         .await;

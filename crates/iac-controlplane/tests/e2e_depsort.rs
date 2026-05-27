@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_core::protocol::v1::{
@@ -19,7 +19,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
-
 
 fn build_agent(workdir: &Path, server_url: &str, name: &str, env: &str) -> Agent {
     let manifests = workdir.join("manifests.d");
@@ -71,7 +70,8 @@ async fn submit(
             requested_by: "alice".into(),
             source_commit: None,
             summary: None,
-            resources, canary: None,
+            resources,
+            canary: None,
         })
         .send()
         .await
@@ -202,7 +202,12 @@ async fn dependency_chain_ordered_correctly() {
 #[tokio::test]
 async fn cycle_rejected_at_submit() {
     let server = TestServer::spawn().await;
-    let _agent = build_agent(&TempDir::new().unwrap().keep(), &server.url(), "vm-x", "ord");
+    let _agent = build_agent(
+        &TempDir::new().unwrap().keep(),
+        &server.url(),
+        "vm-x",
+        "ord",
+    );
 
     let resp = submit(
         &server,
@@ -223,7 +228,12 @@ async fn cycle_rejected_at_submit() {
 #[tokio::test]
 async fn unknown_dependency_rejected_at_submit() {
     let server = TestServer::spawn().await;
-    let _agent = build_agent(&TempDir::new().unwrap().keep(), &server.url(), "vm-u", "ord");
+    let _agent = build_agent(
+        &TempDir::new().unwrap().keep(),
+        &server.url(),
+        "vm-u",
+        "ord",
+    );
 
     let resp = submit(
         &server,

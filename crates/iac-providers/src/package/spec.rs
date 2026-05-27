@@ -10,7 +10,6 @@ pub enum PackageState {
     Absent,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageSpec {
@@ -47,12 +46,17 @@ impl PackageSpec {
         // Restrict to safe characters: shell-out resistance for Phase 0.
         // Apt allows letters, digits, +, -, ., : (epoch in version), but the
         // name itself shouldn't include `:` (architecture suffix is allowed).
-        let bad = self.name.chars().any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '+' | ':')));
+        let bad = self
+            .name
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '+' | ':')));
         if bad {
             return Err(format!("unsafe character in package name: {:?}", self.name));
         }
         if let Some(v) = &self.version {
-            let bad = v.chars().any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '+' | ':' | '~')));
+            let bad = v
+                .chars()
+                .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '+' | ':' | '~')));
             if bad {
                 return Err(format!("unsafe character in version: {v:?}"));
             }
@@ -61,7 +65,10 @@ impl PackageSpec {
             return Err("state=absent forbids version".into());
         }
         if self.backend != "apt" {
-            return Err(format!("unsupported backend {:?}; only 'apt' is implemented in Phase 0", self.backend));
+            return Err(format!(
+                "unsupported backend {:?}; only 'apt' is implemented in Phase 0",
+                self.backend
+            ));
         }
         Ok(())
     }

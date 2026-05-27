@@ -28,12 +28,12 @@ crate::step_actions!(CronAction {
 pub use spec::{CronJobSpec, CronState};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -48,7 +48,10 @@ impl CronProvider {
 
     fn parse_spec(&self, resource: &Resource) -> Result<CronJobSpec> {
         CronJobSpec::from_value(&resource.spec).map_err(|e| {
-            Error::validation(resource.id().to_string(), format!("invalid cron.job spec: {e}"))
+            Error::validation(
+                resource.id().to_string(),
+                format!("invalid cron.job spec: {e}"),
+            )
         })
     }
 }

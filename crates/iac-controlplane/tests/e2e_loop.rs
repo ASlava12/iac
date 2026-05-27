@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_core::protocol::v1::{
@@ -20,7 +20,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
-
 
 fn build_agent(workdir: &Path, server_url: &str, name: &str, env: &str) -> Agent {
     let manifests = workdir.join("manifests.d");
@@ -69,7 +68,8 @@ async fn submit(
             requested_by: "op".into(),
             source_commit: None,
             summary: None,
-            resources, canary: None,
+            resources,
+            canary: None,
         })
         .send()
         .await
@@ -114,7 +114,11 @@ async fn agent_observes_server_submitted_resource_with_no_local_manifest() {
     let token = id_val["token"].as_str().unwrap().to_string();
 
     let ds: DesiredStateBatch = client
-        .get(format!("{}/v1/agents/{}/desired-state", server.url(), agent_id))
+        .get(format!(
+            "{}/v1/agents/{}/desired-state",
+            server.url(),
+            agent_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -128,7 +132,10 @@ async fn agent_observes_server_submitted_resource_with_no_local_manifest() {
     // Next observe — local manifests still empty, but server desired state
     // should drive the cycle. Drift should be detected and pushed.
     let summary = agent.observe_once().await.unwrap();
-    assert_eq!(summary.observed, 1, "agent should have observed the server-managed resource");
+    assert_eq!(
+        summary.observed, 1,
+        "agent should have observed the server-managed resource"
+    );
     assert_eq!(summary.drift_detected, 1);
 
     // Server-side drift list should reflect it.
@@ -194,7 +201,11 @@ async fn newer_operation_supersedes_older_desired_state_per_resource() {
         .unwrap()
         .to_string();
     let ds: DesiredStateBatch = client
-        .get(format!("{}/v1/agents/{}/desired-state", server.url(), agent_id))
+        .get(format!(
+            "{}/v1/agents/{}/desired-state",
+            server.url(),
+            agent_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -202,7 +213,11 @@ async fn newer_operation_supersedes_older_desired_state_per_resource() {
         .json()
         .await
         .unwrap();
-    assert_eq!(ds.items.len(), 1, "expected dedup to one entry per resource");
+    assert_eq!(
+        ds.items.len(),
+        1,
+        "expected dedup to one entry per resource"
+    );
     let content = ds.items[0].resource["spec"]["content"].as_str().unwrap();
     assert_eq!(content, "v2\n");
     assert_eq!(ds.items[0].operation_id, r2.operation_id);
@@ -234,7 +249,11 @@ async fn second_op_routes_to_same_agent_when_only_one_exists_in_env() {
     // Operation should be succeeded.
     let client = reqwest::Client::new();
     let view: OperationView = client
-        .get(format!("{}/v1/operations/{}", server.url(), resp.operation_id))
+        .get(format!(
+            "{}/v1/operations/{}",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await

@@ -1,8 +1,5 @@
 // Phase 7cz.16: tests-only exemption for unwrap/expect/panic.
-#![cfg_attr(
-    test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
-)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod agent;
 pub mod capabilities;

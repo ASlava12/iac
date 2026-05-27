@@ -16,7 +16,6 @@ pub enum CronState {
     Absent,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CronJobSpec {
@@ -62,9 +61,10 @@ impl CronJobSpec {
         validate_name(&self.name).map_err(|e| format!("name: {e}"))?;
         validate_user(&self.user).map_err(|e| format!("user: {e}"))?;
         if let Some(dir) = &self.cron_dir
-            && !dir.is_absolute() {
-                return Err(format!("cron_dir must be absolute, got {}", dir.display()));
-            }
+            && !dir.is_absolute()
+        {
+            return Err(format!("cron_dir must be absolute, got {}", dir.display()));
+        }
         for (k, v) in &self.env {
             validate_env_key(k).map_err(|e| format!("env key {k:?}: {e}"))?;
             if v.contains('\n') {
@@ -101,7 +101,10 @@ impl CronJobSpec {
     /// Final on-disk path for this job. `<cron_dir>/<name>`. The `cron_dir`
     /// override exists for tests; production uses `/etc/cron.d`.
     pub fn config_path(&self) -> PathBuf {
-        let dir = self.cron_dir.clone().unwrap_or_else(|| PathBuf::from("/etc/cron.d"));
+        let dir = self
+            .cron_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/etc/cron.d"));
         dir.join(&self.name)
     }
 }
@@ -113,7 +116,9 @@ fn validate_name(name: &str) -> Result<(), String> {
     // Linux's `run-parts` (which scans `/etc/cron.d`) ignores files whose
     // names contain anything outside `[A-Za-z0-9_-]`. Our restriction is a
     // superset of that with `.` allowed for cosmetic stems.
-    let bad = name.chars().any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')));
+    let bad = name
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')));
     if bad {
         return Err(format!(
             "must match [a-zA-Z0-9._-]+, got {name:?} (run-parts would skip it)"
@@ -129,7 +134,9 @@ fn validate_user(user: &str) -> Result<(), String> {
     if user.is_empty() {
         return Err("must not be empty".into());
     }
-    let bad = user.chars().any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')));
+    let bad = user
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')));
     if bad {
         return Err(format!("must match [a-zA-Z0-9._-]+, got {user:?}"));
     }
@@ -144,7 +151,9 @@ fn validate_env_key(key: &str) -> Result<(), String> {
     if !(first.is_ascii_alphabetic() || first == '_') {
         return Err("must start with [A-Za-z_]".into());
     }
-    let bad = key.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+    let bad = key
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || c == '_'));
     if bad {
         return Err("must match [A-Za-z_][A-Za-z0-9_]*".into());
     }
@@ -178,9 +187,9 @@ fn validate_schedule(schedule: &str) -> Result<(), String> {
         return Err(format!("expected 5 fields, got {}", fields.len()));
     }
     for f in &fields {
-        let bad = f.chars().any(|c| {
-            !(c.is_ascii_alphanumeric() || matches!(c, '*' | ',' | '-' | '/'))
-        });
+        let bad = f
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '*' | ',' | '-' | '/')));
         if bad {
             return Err(format!("field {f:?} contains disallowed characters"));
         }
@@ -226,54 +235,64 @@ command: /usr/bin/true
 
     #[test]
     fn rejects_bad_at_shorthand() {
-        assert!(parse(
-            r#"
+        assert!(
+            parse(
+                r#"
 name: x
 schedule: "@bogus"
 command: /usr/bin/true
 "#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn rejects_wrong_field_count() {
-        assert!(parse(
-            r#"
+        assert!(
+            parse(
+                r#"
 name: x
 schedule: "0 3 * *"
 command: /usr/bin/true
 "#,
-        )
-        .is_err());
-        assert!(parse(
-            r#"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                r#"
 name: x
 schedule: "0 3 * * * *"
 command: /usr/bin/true
 "#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn rejects_unsafe_name() {
-        assert!(parse(
-            r#"
+        assert!(
+            parse(
+                r#"
 name: "../../etc/passwd"
 schedule: "0 3 * * *"
 command: /usr/bin/true
 "#,
-        )
-        .is_err());
-        assert!(parse(
-            r#"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                r#"
 name: "with space"
 schedule: "0 3 * * *"
 command: /usr/bin/true
 "#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -299,14 +318,16 @@ command: |
 
     #[test]
     fn absent_forbids_extras() {
-        assert!(parse(
-            r#"
+        assert!(
+            parse(
+                r#"
 name: x
 state: absent
 schedule: "0 3 * * *"
 "#,
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]

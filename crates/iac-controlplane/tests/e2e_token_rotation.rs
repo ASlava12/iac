@@ -11,8 +11,8 @@
 //! through grandfathered NULL `token_expires_at` for existing agents
 //! and a None default for the config field.
 
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
-use iac_core::protocol::v1::{HeartbeatRequest, RegisterRequest, RegisterResponse, AgentHealth};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
+use iac_core::protocol::v1::{AgentHealth, HeartbeatRequest, RegisterRequest, RegisterResponse};
 use reqwest::StatusCode;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -81,12 +81,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, store, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            store,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -118,10 +127,7 @@ async fn register_via_api(server: &TestServer) -> RegisterResponse {
 
 async fn heartbeat(server: &TestServer, agent_id: &str, token: &str) -> StatusCode {
     reqwest::Client::new()
-        .post(format!(
-            "{}/v1/agents/{agent_id}/heartbeat",
-            server.url()
-        ))
+        .post(format!("{}/v1/agents/{agent_id}/heartbeat", server.url()))
         .bearer_auth(token)
         .json(&HeartbeatRequest {
             status: AgentHealth::Healthy,
@@ -184,8 +190,7 @@ async fn token_rejected_after_expiry() {
     let creds = register_via_api(&server).await;
 
     // Backdate expires_at to 1 hour ago.
-    let past = (jiff::Timestamp::now() - jiff::SignedDuration::from_secs(3600))
-        .to_string();
+    let past = (jiff::Timestamp::now() - jiff::SignedDuration::from_secs(3600)).to_string();
     sqlx::query("UPDATE agents SET token_expires_at = ? WHERE id = ?")
         .bind(&past)
         .bind(&creds.agent_id)
@@ -270,8 +275,7 @@ async fn rotate_with_expired_token_rejected() {
     let creds = register_via_api(&server).await;
 
     // Backdate expires_at.
-    let past = (jiff::Timestamp::now() - jiff::SignedDuration::from_secs(3600))
-        .to_string();
+    let past = (jiff::Timestamp::now() - jiff::SignedDuration::from_secs(3600)).to_string();
     sqlx::query("UPDATE agents SET token_expires_at = ? WHERE id = ?")
         .bind(&past)
         .bind(&creds.agent_id)
@@ -313,7 +317,10 @@ async fn rotation_extends_expiry_to_new_ttl() {
         .fetch_one(server.store.pool())
         .await
         .unwrap();
-    let original_exp: String = row.try_get::<Option<String>, _>("token_expires_at").unwrap().unwrap();
+    let original_exp: String = row
+        .try_get::<Option<String>, _>("token_expires_at")
+        .unwrap()
+        .unwrap();
     let original_ts: jiff::Timestamp = original_exp.parse().unwrap();
 
     // Wait a tick (test only verifies "extended", not exact delta).
@@ -338,7 +345,10 @@ async fn rotation_extends_expiry_to_new_ttl() {
         .fetch_one(server.store.pool())
         .await
         .unwrap();
-    let new_exp: String = row.try_get::<Option<String>, _>("token_expires_at").unwrap().unwrap();
+    let new_exp: String = row
+        .try_get::<Option<String>, _>("token_expires_at")
+        .unwrap()
+        .unwrap();
     let new_ts: jiff::Timestamp = new_exp.parse().unwrap();
     assert!(
         new_ts > original_ts,

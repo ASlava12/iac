@@ -15,18 +15,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use iac_providers::{
-    acme::AcmeCertSpec,
-    compose::DockerComposeSpec,
-    cron::CronJobSpec,
-    dns::DnsRecordSpec,
-    docker::DockerContainerSpec,
-    file::FileSpec,
-    firewall::FirewallRuleSpec,
-    monitoring::MonitoringCheckSpec,
-    nginx::NginxVhostSpec,
-    package::PackageSpec,
-    sysctl::SysctlSettingSpec,
-    systemd::SystemdUnitSpec,
+    acme::AcmeCertSpec, compose::DockerComposeSpec, cron::CronJobSpec, dns::DnsRecordSpec,
+    docker::DockerContainerSpec, file::FileSpec, firewall::FirewallRuleSpec,
+    monitoring::MonitoringCheckSpec, nginx::NginxVhostSpec, package::PackageSpec,
+    sysctl::SysctlSettingSpec, systemd::SystemdUnitSpec,
 };
 use proptest::prelude::*;
 use serde_yaml_ng::Value as YamlValue;
@@ -58,8 +50,7 @@ fn yaml_value_strategy() -> impl Strategy<Value = YamlValue> {
         8,  // children per inner node
         |inner| {
             prop_oneof![
-                proptest::collection::vec(inner.clone(), 0..6)
-                    .prop_map(YamlValue::Sequence),
+                proptest::collection::vec(inner.clone(), 0..6).prop_map(YamlValue::Sequence),
                 proptest::collection::vec(
                     ("[a-z_][a-z0-9_]{0,10}".prop_map(YamlValue::String), inner),
                     0..6,

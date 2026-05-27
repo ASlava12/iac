@@ -11,7 +11,6 @@ pub enum FileState {
     Absent,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileSpec {
@@ -42,7 +41,10 @@ impl FileSpec {
 
     fn validate(&self) -> Result<(), String> {
         if !self.path.is_absolute() {
-            return Err(format!("path must be absolute, got {}", self.path.display()));
+            return Err(format!(
+                "path must be absolute, got {}",
+                self.path.display()
+            ));
         }
         match self.state {
             FileState::Absent => {

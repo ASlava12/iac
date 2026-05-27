@@ -24,12 +24,12 @@ pub use backend::{CheckBackend, CheckOutcome, MockCheck, StdNetBackend};
 pub use spec::{CheckState, CheckType, MonitoringCheckSpec};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -47,7 +47,9 @@ impl Default for MonitoringCheckProvider {
 
 impl MonitoringCheckProvider {
     pub fn new() -> Self {
-        Self { backend: Box::new(StdNetBackend) }
+        Self {
+            backend: Box::new(StdNetBackend),
+        }
     }
 
     pub fn with_backend(backend: Box<dyn CheckBackend>) -> Self {

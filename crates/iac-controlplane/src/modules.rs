@@ -23,7 +23,7 @@
 
 use crate::error::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
 /// One operator-defined composite expander loaded from `[[modules]]`
@@ -96,7 +96,11 @@ impl Module {
         if self.name.trim().is_empty() {
             return Err("module name must not be empty".into());
         }
-        if !self.name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        if !self
+            .name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
             return Err(format!(
                 "module name {:?} must be alphanumeric with optional '-' or '_'",
                 self.name
@@ -199,15 +203,11 @@ pub fn expand_module(module: &Module, raw: &Value) -> ApiResult<Vec<Value>> {
     let metadata = raw
         .get("metadata")
         .and_then(Value::as_object)
-        .ok_or_else(|| {
-            ApiError::BadRequest(format!("{}: metadata required", module.name))
-        })?;
+        .ok_or_else(|| ApiError::BadRequest(format!("{}: metadata required", module.name)))?;
     let name = metadata
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            ApiError::BadRequest(format!("{}: metadata.name required", module.name))
-        })?
+        .ok_or_else(|| ApiError::BadRequest(format!("{}: metadata.name required", module.name)))?
         .to_string();
     let environment = metadata
         .get("environment")
@@ -245,11 +245,7 @@ pub fn expand_module(module: &Module, raw: &Value) -> ApiResult<Vec<Value>> {
 
     // Reject unknown spec fields — operators get a clear error
     // instead of a silently ignored typo.
-    let known: BTreeSet<&str> = module
-        .parameters
-        .iter()
-        .map(|p| p.name.as_str())
-        .collect();
+    let known: BTreeSet<&str> = module.parameters.iter().map(|p| p.name.as_str()).collect();
     for got in spec.keys() {
         if !known.contains(got.as_str()) {
             return Err(ApiError::BadRequest(format!(
@@ -259,9 +255,8 @@ pub fn expand_module(module: &Module, raw: &Value) -> ApiResult<Vec<Value>> {
         }
     }
 
-    let rendered = render_template(&module.template, &vars).map_err(|e| {
-        ApiError::BadRequest(format!("{}: template render: {e}", module.name))
-    })?;
+    let rendered = render_template(&module.template, &vars)
+        .map_err(|e| ApiError::BadRequest(format!("{}: template render: {e}", module.name)))?;
     let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&rendered)
         .map_err(|e| ApiError::BadRequest(format!("{}: template YAML: {e}", module.name)))?;
     let seq = parsed.as_sequence().ok_or_else(|| {
@@ -282,19 +277,18 @@ pub fn expand_module(module: &Module, raw: &Value) -> ApiResult<Vec<Value>> {
         })?;
         // Annotate with composite-of so the audit log shows where the
         // primitive came from. Phase 7a's built-ins do the same.
-        let meta = json_item
-            .as_object_mut()
-            .and_then(|m| m.entry("metadata").or_insert_with(|| json!({})).as_object_mut());
+        let meta = json_item.as_object_mut().and_then(|m| {
+            m.entry("metadata")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+        });
         if let Some(m) = meta {
             let annotations = m
                 .entry("annotations")
                 .or_insert_with(|| json!({}))
                 .as_object_mut();
             if let Some(a) = annotations {
-                a.insert(
-                    "iac.example/composite-of".into(),
-                    json!(module.name),
-                );
+                a.insert("iac.example/composite-of".into(), json!(module.name));
             }
         }
         out.push(json_item);
@@ -538,7 +532,10 @@ mod tests {
         let err = expand_module(&m, &raw).unwrap_err();
         match err {
             ApiError::BadRequest(msg) => {
-                assert!(msg.contains("YAML sequence") || msg.contains("template YAML"), "msg: {msg}")
+                assert!(
+                    msg.contains("YAML sequence") || msg.contains("template YAML"),
+                    "msg: {msg}"
+                )
             }
             other => panic!("expected BadRequest, got {other:?}"),
         }

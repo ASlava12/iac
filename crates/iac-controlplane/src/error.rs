@@ -1,7 +1,7 @@
 use axum::{
-    http::{header, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    http::{HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::Serialize;
 
@@ -19,37 +19,55 @@ pub struct RateLimitBucket {
 
 impl RateLimitBucket {
     pub fn env(name: impl Into<String>) -> Self {
-        Self { r#type: "env".into(), name: name.into() }
+        Self {
+            r#type: "env".into(),
+            name: name.into(),
+        }
     }
     pub fn policy(name: impl Into<String>) -> Self {
-        Self { r#type: "policy".into(), name: name.into() }
+        Self {
+            r#type: "policy".into(),
+            name: name.into(),
+        }
     }
     /// Phase 7bh: per-agent bucket. Limits how many `heartbeat` /
     /// `observations` / `drift` requests a single agent can make per
     /// 60-second window — protection against a misbehaving agent
     /// flooding the server.
     pub fn agent(name: impl Into<String>) -> Self {
-        Self { r#type: "agent".into(), name: name.into() }
+        Self {
+            r#type: "agent".into(),
+            name: name.into(),
+        }
     }
     /// Phase 7co (security fix #4.2): per-username bucket on
     /// `POST /v1/auth/login`. Caps online password-guess attempts and
     /// blunts Argon2-CPU-DoS. Combined with `client` bucket (per-IP)
     /// makes brute-force across-many-accounts also infeasible.
     pub fn login_user(name: impl Into<String>) -> Self {
-        Self { r#type: "login_user".into(), name: name.into() }
+        Self {
+            r#type: "login_user".into(),
+            name: name.into(),
+        }
     }
     /// Phase 7co: per-client bucket. Today, "client" is the
     /// authenticated identity for normal endpoints, but for unauth
     /// endpoints (login!) we use the source IP. Future: extract from
     /// `X-Forwarded-For` when behind a trusted proxy.
     pub fn client(name: impl Into<String>) -> Self {
-        Self { r#type: "client".into(), name: name.into() }
+        Self {
+            r#type: "client".into(),
+            name: name.into(),
+        }
     }
     /// Phase 9-F8: per-IP bucket on `POST /v1/agents/register`. Kept
     /// distinct from `client` so register storms and login attacks
     /// don't share a counter (and so dashboards can split them).
     pub fn register_ip(name: impl Into<String>) -> Self {
-        Self { r#type: "register_ip".into(), name: name.into() }
+        Self {
+            r#type: "register_ip".into(),
+            name: name.into(),
+        }
     }
 }
 
@@ -78,7 +96,10 @@ pub enum ApiError {
     /// caller; `retry_after_secs` populates the response header so
     /// pipelines can pause without polling.
     #[error("service unavailable: {reason}")]
-    ServiceUnavailable { reason: String, retry_after_secs: u64 },
+    ServiceUnavailable {
+        reason: String,
+        retry_after_secs: u64,
+    },
     #[error("internal error: {0}")]
     Internal(String),
     #[error(transparent)]
@@ -111,13 +132,22 @@ impl IntoResponse for ApiError {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", None, None),
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden", None, None),
             Self::Conflict(msg) => (StatusCode::CONFLICT, "conflict", Some(msg.clone()), None),
-            Self::BadRequest(msg) => {
-                (StatusCode::BAD_REQUEST, "bad_request", Some(msg.clone()), None)
-            }
-            Self::PayloadTooLarge => {
-                (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", None, None)
-            }
-            Self::TooManyRequests { bucket, retry_after_secs } => {
+            Self::BadRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                Some(msg.clone()),
+                None,
+            ),
+            Self::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                None,
+                None,
+            ),
+            Self::TooManyRequests {
+                bucket,
+                retry_after_secs,
+            } => {
                 bucket_field = Some(bucket.clone());
                 (
                     StatusCode::TOO_MANY_REQUESTS,
@@ -132,7 +162,10 @@ impl IntoResponse for ApiError {
                     Some(*retry_after_secs),
                 )
             }
-            Self::ServiceUnavailable { reason, retry_after_secs } => (
+            Self::ServiceUnavailable {
+                reason,
+                retry_after_secs,
+            } => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "service_unavailable",
                 Some(reason.clone()),
@@ -168,7 +201,12 @@ impl IntoResponse for ApiError {
             }
             Self::Json(e) => {
                 tracing::error!(error = %e, "json error");
-                (StatusCode::BAD_REQUEST, "bad_json", Some(e.to_string()), None)
+                (
+                    StatusCode::BAD_REQUEST,
+                    "bad_json",
+                    Some(e.to_string()),
+                    None,
+                )
             }
         };
         let body = Json(ErrorBody {

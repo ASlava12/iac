@@ -5,11 +5,11 @@
 // who genuinely need the version string can read it from
 // `/v1/admin/build-info` (gated behind `Viewer`).
 
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::error::ApiResult;
 use crate::identity::Role;
 use crate::server::AppState;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -37,5 +37,7 @@ async fn build_info(
     BearerToken(token): BearerToken,
 ) -> ApiResult<Json<BuildInfo>> {
     require_role(&state, &token, Role::Viewer).await?;
-    Ok(Json(BuildInfo { version: env!("CARGO_PKG_VERSION") }))
+    Ok(Json(BuildInfo {
+        version: env!("CARGO_PKG_VERSION"),
+    }))
 }

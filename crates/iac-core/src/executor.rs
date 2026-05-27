@@ -83,8 +83,14 @@ pub struct VerifySummary {
 impl From<&VerifyOutcome> for VerifySummary {
     fn from(v: &VerifyOutcome) -> Self {
         match v {
-            VerifyOutcome::Match => Self { matched: true, mismatch: None },
-            VerifyOutcome::Mismatch(c) => Self { matched: false, mismatch: Some(c.clone()) },
+            VerifyOutcome::Match => Self {
+                matched: true,
+                mismatch: None,
+            },
+            VerifyOutcome::Mismatch(c) => Self {
+                matched: false,
+                mismatch: Some(c.clone()),
+            },
         }
     }
 }
@@ -139,8 +145,16 @@ impl<'a> std::fmt::Debug for Executor<'a> {
 }
 
 impl<'a> Executor<'a> {
-    pub fn new(registry: &'a ProviderRegistry, state_dir: PathBuf, actor: impl Into<String>) -> Self {
-        Self { registry, state_dir, actor: actor.into() }
+    pub fn new(
+        registry: &'a ProviderRegistry,
+        state_dir: PathBuf,
+        actor: impl Into<String>,
+    ) -> Self {
+        Self {
+            registry,
+            state_dir,
+            actor: actor.into(),
+        }
     }
 
     /// Compute a plan without making any host changes.
@@ -166,7 +180,10 @@ impl<'a> Executor<'a> {
         }
         op.finished_at = Some(Timestamp::now());
         op.status = OperationStatus::Succeeded;
-        Ok(PlanResult { operation: op, items })
+        Ok(PlanResult {
+            operation: op,
+            items,
+        })
     }
 
     /// Apply the resources to the host. Stops the resource on the first failed
@@ -201,7 +218,10 @@ impl<'a> Executor<'a> {
 
         // Persist final operation + plan-like result for audit.
         let op_dir = self.operation_dir(&op);
-        let result = ApplyResult { operation: op, items };
+        let result = ApplyResult {
+            operation: op,
+            items,
+        };
         write_json(&op_dir.join("operation.json"), &result.operation)?;
         write_json(&op_dir.join("apply-result.json"), &result)?;
 
@@ -230,7 +250,10 @@ impl<'a> Executor<'a> {
             return Ok(());
         }
         let mut entries: Vec<PathBuf> = fs::read_dir(&ops_root)
-            .map_err(|e| Error::Io { path: ops_root.clone(), source: e })?
+            .map_err(|e| Error::Io {
+                path: ops_root.clone(),
+                source: e,
+            })?
             .filter_map(|r| r.ok())
             .filter(|e| e.file_type().ok().is_some_and(|t| t.is_dir()))
             .map(|e| e.path())
@@ -278,7 +301,10 @@ impl<'a> Executor<'a> {
             let workspace = self.checkpoint_workspace(op, &resource.id(), &step);
             ensure_dir(&workspace)?;
 
-            let ctx = ApplyContext { operation_id: op.id, workspace: workspace.clone() };
+            let ctx = ApplyContext {
+                operation_id: op.id,
+                workspace: workspace.clone(),
+            };
 
             let mut s = step;
             s.started_at = Some(Timestamp::now());
@@ -310,8 +336,12 @@ impl<'a> Executor<'a> {
             let failed = result.status == StepStatus::Failed;
             records.push(StepRecord { step: s, result });
             if failed {
-                last_error =
-                    Some(records.last().and_then(|r| r.result.error.clone()).unwrap_or_default());
+                last_error = Some(
+                    records
+                        .last()
+                        .and_then(|r| r.result.error.clone())
+                        .unwrap_or_default(),
+                );
                 break;
             }
         }
@@ -335,7 +365,11 @@ impl<'a> Executor<'a> {
         Ok(ApplyItem {
             resource_id: resource.id(),
             kind: resource.kind.clone(),
-            status: if summary.matched { ItemStatus::Succeeded } else { ItemStatus::Failed },
+            status: if summary.matched {
+                ItemStatus::Succeeded
+            } else {
+                ItemStatus::Failed
+            },
             steps: records,
             verify: Some(summary),
             error: None,
@@ -344,7 +378,10 @@ impl<'a> Executor<'a> {
 
     /// Rollback all checkpoints for an operation, in reverse order.
     pub fn rollback(&self, operation_id: ulid::Ulid) -> Result<()> {
-        let op_dir = self.state_dir.join("operations").join(operation_id.to_string());
+        let op_dir = self
+            .state_dir
+            .join("operations")
+            .join(operation_id.to_string());
         if !op_dir.exists() {
             return Err(Error::Checkpoint {
                 resource: format!("operation {operation_id}"),
@@ -358,15 +395,30 @@ impl<'a> Executor<'a> {
         let mut checkpoints: Vec<(PathBuf, Checkpoint, Resource)> = Vec::new();
         // We don't have the original Resource stored separately — for Phase 0
         // we reconstruct minimally from the checkpoint's resource_id.
-        for resource_dir in fs::read_dir(&cp_root).map_err(|e| Error::Io { path: cp_root.clone(), source: e })? {
-            let resource_dir = resource_dir.map_err(|e| Error::Io { path: cp_root.clone(), source: e })?;
-            for step_dir in fs::read_dir(resource_dir.path()).map_err(|e| Error::Io { path: resource_dir.path(), source: e })? {
-                let step_dir = step_dir.map_err(|e| Error::Io { path: resource_dir.path(), source: e })?;
+        for resource_dir in fs::read_dir(&cp_root).map_err(|e| Error::Io {
+            path: cp_root.clone(),
+            source: e,
+        })? {
+            let resource_dir = resource_dir.map_err(|e| Error::Io {
+                path: cp_root.clone(),
+                source: e,
+            })?;
+            for step_dir in fs::read_dir(resource_dir.path()).map_err(|e| Error::Io {
+                path: resource_dir.path(),
+                source: e,
+            })? {
+                let step_dir = step_dir.map_err(|e| Error::Io {
+                    path: resource_dir.path(),
+                    source: e,
+                })?;
                 let cp_path = step_dir.path().join("checkpoint.json");
                 if !cp_path.exists() {
                     continue;
                 }
-                let bytes = fs::read(&cp_path).map_err(|e| Error::Io { path: cp_path.clone(), source: e })?;
+                let bytes = fs::read(&cp_path).map_err(|e| Error::Io {
+                    path: cp_path.clone(),
+                    source: e,
+                })?;
                 let cp: Checkpoint = serde_json::from_slice(&bytes)?;
                 let resource = synthesize_resource(&cp);
                 checkpoints.push((step_dir.path(), cp, resource));
@@ -427,16 +479,28 @@ fn synthesize_resource(cp: &Checkpoint) -> Resource {
 }
 
 fn ensure_dir(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(|e| Error::Io { path: path.into(), source: e })
+    fs::create_dir_all(path).map_err(|e| Error::Io {
+        path: path.into(),
+        source: e,
+    })
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value)?;
     let parent = path.parent().unwrap_or(Path::new("."));
     ensure_dir(parent)?;
-    let tmp = parent.join(format!(".{}.tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("out")));
-    fs::write(&tmp, &bytes).map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
-    fs::rename(&tmp, path).map_err(|e| Error::Io { path: path.into(), source: e })?;
+    let tmp = parent.join(format!(
+        ".{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("out")
+    ));
+    fs::write(&tmp, &bytes).map_err(|e| Error::Io {
+        path: tmp.clone(),
+        source: e,
+    })?;
+    fs::rename(&tmp, path).map_err(|e| Error::Io {
+        path: path.into(),
+        source: e,
+    })?;
     Ok(())
 }
 

@@ -114,9 +114,7 @@ fn validate_value(value: &str) -> Result<(), String> {
         // Sysctl values are written verbatim to /proc/sys/<key>.
         // Newlines / NULs in the value would either truncate or
         // confuse the kernel's value parser.
-        return Err(
-            "value must not contain control characters (NUL, LF, CR)".into(),
-        );
+        return Err("value must not contain control characters (NUL, LF, CR)".into());
     }
     if value.len() > 4096 {
         return Err(format!(
@@ -154,7 +152,10 @@ mod tests {
     fn rejects_missing_value() {
         // value is now required (no Absent state in v1).
         let err = parse("key: net.ipv4.ip_forward").unwrap_err();
-        assert!(err.contains("value") || err.contains("missing"), "got: {err}");
+        assert!(
+            err.contains("value") || err.contains("missing"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -204,7 +205,10 @@ mod tests {
     #[test]
     fn rejects_unknown_field() {
         let err = parse("key: a.b\nvalue: '1'\nbogus: 1").unwrap_err();
-        assert!(err.contains("bogus") || err.contains("unknown"), "got: {err}");
+        assert!(
+            err.contains("bogus") || err.contains("unknown"),
+            "got: {err}"
+        );
     }
 
     #[test]

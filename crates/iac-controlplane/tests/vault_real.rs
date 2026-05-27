@@ -87,20 +87,16 @@ impl VaultContainer {
         let url = format!("{}/v1/sys/health", self.addr());
         while Instant::now() < deadline {
             if let Ok(resp) = client.get(&url).send().await
-                && resp.status().is_success() {
-                    return;
-                }
+                && resp.status().is_success()
+            {
+                return;
+            }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         panic!("vault {} did not become ready within 30s", self.name);
     }
 
-    async fn write_kv2(
-        &self,
-        client: &reqwest::Client,
-        path: &str,
-        body: serde_json::Value,
-    ) {
+    async fn write_kv2(&self, client: &reqwest::Client, path: &str, body: serde_json::Value) {
         let url = format!("{}/v1/{}", self.addr(), path);
         let resp = client
             .post(&url)
@@ -154,8 +150,8 @@ async fn vault_round_trip_resolves_kv_v2_secret() {
     // Phase 7cs.1: VaultResolver::new refuses plain http:// (Vault
     // token leaks otherwise). The dockerized Vault we spin up here
     // listens on http; use the test-only constructor.
-    let resolver = VaultResolver::new_allow_insecure(vault.addr(), ROOT_TOKEN)
-        .expect("build resolver");
+    let resolver =
+        VaultResolver::new_allow_insecure(vault.addr(), ROOT_TOKEN).expect("build resolver");
 
     let pw = resolver
         .resolve("secret/data/myapp/db", Some("password"))

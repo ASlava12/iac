@@ -74,7 +74,10 @@ impl PluginRuntime for ExternalRuntime {
         // yet, the host treats the empty list as "no capabilities
         // advertised", which is the right fail-closed behaviour.
         CapabilityKeysStrategy::Templates(
-            self.handle.hello().map(|h| h.capability_keys).unwrap_or_default(),
+            self.handle
+                .hello()
+                .map(|h| h.capability_keys)
+                .unwrap_or_default(),
         )
     }
 }
@@ -92,7 +95,7 @@ mod tests {
     use iac_core::diff::DiffKind;
     use iac_core::operation::StepStatus;
     use iac_core::provider::{ApplyContext, Provider};
-    use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+    use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
     use indexmap::IndexMap;
     use serde_yaml_ng::Value as YamlValue;
     use std::io::Write;

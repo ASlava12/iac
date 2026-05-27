@@ -10,7 +10,7 @@
 
 use iac_controlplane::config::RetryAfterFormat;
 use iac_controlplane::rate_limit::{RateLimitConfig, RateLimiter};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{RegisterRequest, SubmitOperationRequest};
 use reqwest::StatusCode;
 use serde_json::json;
@@ -43,7 +43,8 @@ impl TestServer {
             // 1 op per minute → second submit blocks with 429.
             rate_limit: RateLimitConfig {
                 operations_per_minute: Some(1),
-                agent_requests_per_minute: None, ..Default::default()
+                agent_requests_per_minute: None,
+                ..Default::default()
             },
             maintenance_windows: vec![],
             recurring_maintenance_windows: vec![],
@@ -82,12 +83,20 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -131,7 +140,8 @@ impl TestServer {
                         "state": "present",
                         "content": "x"
                     }
-                })], canary: None,
+                })],
+                canary: None,
             })
             .send()
             .await

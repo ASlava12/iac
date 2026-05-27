@@ -9,7 +9,7 @@
 //! control-plane behind a TLS-terminating reverse proxy (or only run on
 //! trusted networks).
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 

@@ -85,9 +85,7 @@ pub fn build_rustls_config(cfg: &TlsConfig) -> ApiResult<Arc<RustlsServerConfig>
 
     let builder = if cfg.requires_client_cert() {
         let ca_path = cfg.client_ca_file.as_deref().ok_or_else(|| {
-            ApiError::Internal(
-                "tls.client_ca_file required when mode = mutual".into(),
-            )
+            ApiError::Internal("tls.client_ca_file required when mode = mutual".into())
         })?;
         let ca_certs = load_certs(ca_path)?;
         let mut roots = RootCertStore::empty();
@@ -288,8 +286,7 @@ mod tests {
         // Generate just the server bits; deliberately omit the
         // client CA file path. Build should fail with a clear
         // message.
-        let pki =
-            generate_self_signed_pki(&["localhost"], &[], &[]).expect("pki gen");
+        let pki = generate_self_signed_pki(&["localhost"], &[], &[]).expect("pki gen");
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("srv.pem"), &pki.server_cert_pem).unwrap();
         std::fs::write(dir.path().join("srv.key"), &pki.server_key_pem).unwrap();

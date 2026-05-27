@@ -1,16 +1,16 @@
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::depsort::topo_sort_by_depends_on;
 use crate::error::{ApiError, ApiResult};
 use crate::expansion::expand_resources;
 use crate::identity::Role;
-use crate::policy::{evaluate, OperationFacts};
+use crate::policy::{OperationFacts, evaluate};
 use crate::server::AppState;
 use crate::store::ResourceForRouting;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::HeaderMap,
     routing::{get, post},
-    Json, Router,
 };
 
 /// Phase 7j: header an admin sets to bypass an active maintenance
@@ -37,10 +37,7 @@ pub fn router() -> Router<AppState> {
         // that re-applies prior desired state for every resource in
         // the target op. Goes through normal create_operation pipeline
         // (policy / approval / canary).
-        .route(
-            "/v1/operations/{operation_id}/rollback",
-            post(rollback_op),
-        )
+        .route("/v1/operations/{operation_id}/rollback", post(rollback_op))
 }
 
 async fn submit(
@@ -71,10 +68,7 @@ async fn submit(
     // need the escape valve for incident response (deploy a fix during
     // a freeze); the audit log captures every bypass for review.
     use std::sync::atomic::Ordering::Relaxed;
-    state
-        .maintenance_metrics
-        .checks_total
-        .fetch_add(1, Relaxed);
+    state.maintenance_metrics.checks_total.fetch_add(1, Relaxed);
     let bypass_requested = headers
         .get(MAINT_BYPASS_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -93,15 +87,17 @@ async fn submit(
         // a window happened to be open. Cheap and useful.
         state
             .store
-            .record_audit(crate::store::AuditRecord::new(
-                &identity.audit_actor(),
-                "operation.maintenance_bypass",
+            .record_audit(
+                crate::store::AuditRecord::new(
+                    &identity.audit_actor(),
+                    "operation.maintenance_bypass",
+                )
+                .severity("warning")
+                .payload(serde_json::json!({
+                    "environment": req.environment,
+                    "requested_by": req.requested_by,
+                })),
             )
-            .severity("warning")
-            .payload(serde_json::json!({
-                "environment": req.environment,
-                "requested_by": req.requested_by,
-            })))
             .await?;
     } else {
         let now = jiff::Timestamp::now();
@@ -165,8 +161,7 @@ async fn submit(
     }
     if any_ref && !registry_present {
         return Err(ApiError::BadRequest(
-            "secret reference present but no resolver is configured on the server"
-                .into(),
+            "secret reference present but no resolver is configured on the server".into(),
         ));
     }
     // Eager pre-flight: if there ARE refs, smoke-test that they all
@@ -264,7 +259,10 @@ async fn submit(
         unrouted: outcome
             .unrouted
             .into_iter()
-            .map(|(rid, reason)| UnroutedResource { resource_id: rid, reason })
+            .map(|(rid, reason)| UnroutedResource {
+                resource_id: rid,
+                reason,
+            })
             .collect(),
         blast_radius,
     }))
@@ -376,7 +374,12 @@ async fn list_ops(
 ) -> ApiResult<Json<Vec<OperationListItem>>> {
     require_role(&state, &token, Role::Viewer).await?;
     let limit = q.limit.unwrap_or(50);
-    Ok(Json(state.store.list_operations(q.status.as_deref(), limit).await?))
+    Ok(Json(
+        state
+            .store
+            .list_operations(q.status.as_deref(), limit)
+            .await?,
+    ))
 }
 
 /// Phase 7ci: rollback handler. Builds a new operation whose
@@ -493,7 +496,10 @@ async fn get_op_desired_state(
 /// Phase 7be: visibility raised to `pub(crate)` so the drift-revert path
 /// can re-route a stored desired-state through the same logic without
 /// duplicating field-extraction.
-pub(crate) fn extract_routing(raw: &serde_json::Value, op_env: &str) -> ApiResult<ResourceForRouting> {
+pub(crate) fn extract_routing(
+    raw: &serde_json::Value,
+    op_env: &str,
+) -> ApiResult<ResourceForRouting> {
     let kind = raw
         .get("kind")
         .and_then(|v| v.as_str())

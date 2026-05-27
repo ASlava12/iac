@@ -4,19 +4,17 @@
 //! provision teammates on the fly. Every mutation records an audit event so
 //! "who created `bob`" / "who removed `alice`'s approver role" is answerable.
 
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::error::{ApiError, ApiResult};
 use crate::identity::{Identity, Role};
 use crate::server::AppState;
 use crate::store::{AuditRecord, CreateUser};
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, patch, post},
-    Json, Router,
 };
-use iac_core::protocol::v1::{
-    CreateUserRequest, CreateUserResponse, UpdateUserRequest, UserView,
-};
+use iac_core::protocol::v1::{CreateUserRequest, CreateUserResponse, UpdateUserRequest, UserView};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -40,7 +38,15 @@ async fn create_user(
             roles: roles.clone(),
         })
         .await?;
-    record_user_audit(&state, &identity, "user.created", &user_id, &req.username, &roles).await?;
+    record_user_audit(
+        &state,
+        &identity,
+        "user.created",
+        &user_id,
+        &req.username,
+        &roles,
+    )
+    .await?;
     Ok(Json(CreateUserResponse { user_id }))
 }
 
@@ -87,7 +93,10 @@ async fn update_user(
         }
     }
     if let Some(new_password) = &req.password {
-        state.store.set_user_password(&user_id, new_password).await?;
+        state
+            .store
+            .set_user_password(&user_id, new_password)
+            .await?;
         applied.push("password");
     }
     if applied.is_empty() {

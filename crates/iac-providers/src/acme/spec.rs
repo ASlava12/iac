@@ -66,10 +66,7 @@ fn is_loopback_host(host: &str) -> bool {
     // String-only check — we don't want to do DNS at config-load
     // time. The set of loopback shapes is bounded: localhost,
     // 127.0.0.0/8, ::1.
-    host == "localhost"
-        || host == "::1"
-        || host == "[::1]"
-        || host.starts_with("127.")
+    host == "localhost" || host == "::1" || host == "[::1]" || host.starts_with("127.")
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
@@ -98,8 +95,7 @@ pub enum ChallengeKind {
 
 impl AcmeCertSpec {
     pub fn from_value(v: &YamlValue) -> Result<Self, String> {
-        let spec: Self = serde_yaml_ng::from_value(v.clone())
-            .map_err(|e| format!("parse: {e}"))?;
+        let spec: Self = serde_yaml_ng::from_value(v.clone()).map_err(|e| format!("parse: {e}"))?;
         spec.validate()?;
         Ok(spec)
     }
@@ -133,31 +129,30 @@ impl AcmeCertSpec {
         }
         match self.challenge {
             ChallengeKind::Http01 => {
-                let webroot = self.webroot.as_ref().ok_or_else(|| {
-                    "challenge=http-01 requires webroot".to_string()
-                })?;
+                let webroot = self
+                    .webroot
+                    .as_ref()
+                    .ok_or_else(|| "challenge=http-01 requires webroot".to_string())?;
                 if !webroot.is_absolute() {
-                    return Err(format!(
-                        "webroot {} must be absolute",
-                        webroot.display()
-                    ));
+                    return Err(format!("webroot {} must be absolute", webroot.display()));
                 }
                 // Wildcard domains don't work with HTTP-01 — the ACME
                 // server would have to fetch from the literal '*.x.com'
                 // hostname, which doesn't resolve. Catch this here.
                 for d in &self.domains {
                     if d.starts_with('*') {
-                        return Err(format!(
-                            "wildcard domain {d:?} requires challenge=dns-01-*"
-                        ));
+                        return Err(format!("wildcard domain {d:?} requires challenge=dns-01-*"));
                     }
                 }
             }
             ChallengeKind::Dns01Cloudflare => {
-                if self.cloudflare_api_token.as_deref().unwrap_or("").is_empty() {
-                    return Err(
-                        "challenge=dns-01-cloudflare requires cloudflare_api_token".into(),
-                    );
+                if self
+                    .cloudflare_api_token
+                    .as_deref()
+                    .unwrap_or("")
+                    .is_empty()
+                {
+                    return Err("challenge=dns-01-cloudflare requires cloudflare_api_token".into());
                 }
             }
         }
@@ -167,9 +162,7 @@ impl AcmeCertSpec {
         // when the host is loopback (dev fixtures: Pebble, step-ca).
         if let Some(url) = &self.server_url {
             if self.staging {
-                return Err(
-                    "server_url and staging=true are mutually exclusive".into(),
-                );
+                return Err("server_url and staging=true are mutually exclusive".into());
             }
             if let Some(rest) = url.strip_prefix("https://") {
                 if rest.is_empty() {
@@ -204,7 +197,9 @@ impl AcmeCertSpec {
 
     pub fn primary_domain(&self) -> &str {
         // Validation already guarantees domains is non-empty.
-        self.domains[0].trim_start_matches('*').trim_start_matches('.')
+        self.domains[0]
+            .trim_start_matches('*')
+            .trim_start_matches('.')
     }
 }
 
@@ -229,7 +224,10 @@ webroot: /var/www/html
         );
         let s = AcmeCertSpec::from_value(&v).unwrap();
         assert_eq!(s.primary_domain(), "example.com");
-        assert_eq!(s.cert_file().to_string_lossy(), "/etc/iac/certs/example.com/example.com.crt");
+        assert_eq!(
+            s.cert_file().to_string_lossy(),
+            "/etc/iac/certs/example.com/example.com.crt"
+        );
         assert_eq!(s.renew_window_days, 30);
         assert_eq!(s.state, AcmeState::Present);
     }

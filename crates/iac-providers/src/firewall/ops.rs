@@ -3,13 +3,13 @@
 use super::backend::FirewallBackend;
 use super::spec::{Family, FirewallRuleSpec, FirewallState};
 use iac_core::{
+    Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 
 pub fn observe(backend: &dyn FirewallBackend, spec: &FirewallRuleSpec) -> Result<ObservedState> {
@@ -136,7 +136,11 @@ pub fn diff(spec: &FirewallRuleSpec, observed: &ObservedState) -> Diff {
             cmp_str!("chain", get_str("chain"), Some(spec.chain.clone()));
             cmp_str!("protocol", get_str("protocol"), Some(spec.protocol.clone()));
             cmp_str!("source", get_str("source"), spec.source.clone());
-            cmp_str!("destination", get_str("destination"), spec.destination.clone());
+            cmp_str!(
+                "destination",
+                get_str("destination"),
+                spec.destination.clone()
+            );
             cmp_str!("action", get_str("action"), Some(spec.action.clone()));
 
             let observed_port = get_num("port").map(|p| p as u16);
@@ -147,11 +151,7 @@ pub fn diff(spec: &FirewallRuleSpec, observed: &ObservedState) -> Diff {
                     to: spec.port.map(|p| YamlValue::Number(p.into())),
                     sensitive: false,
                 });
-                reasons.push(format!(
-                    "port {:?} -> {:?}",
-                    observed_port,
-                    spec.port
-                ));
+                reasons.push(format!("port {:?} -> {:?}", observed_port, spec.port));
             }
 
             if changes.is_empty() {
@@ -213,16 +213,26 @@ pub fn apply(
     match super::FirewallAction::parse(&step.action)? {
         super::FirewallAction::Upsert => {
             backend.ensure_present(spec)?;
-            Ok(StepResult::ok(format!("upserted firewall rule {}", spec.name)))
+            Ok(StepResult::ok(format!(
+                "upserted firewall rule {}",
+                spec.name
+            )))
         }
         super::FirewallAction::Delete => {
             backend.ensure_absent(&spec.name, &spec.table, &spec.chain, spec.family)?;
-            Ok(StepResult::ok(format!("deleted firewall rule {}", spec.name)))
+            Ok(StepResult::ok(format!(
+                "deleted firewall rule {}",
+                spec.name
+            )))
         }
     }
 }
 
-pub fn rollback(backend: &dyn FirewallBackend, spec: &FirewallRuleSpec, checkpoint: &Json) -> Result<()> {
+pub fn rollback(
+    backend: &dyn FirewallBackend,
+    spec: &FirewallRuleSpec,
+    checkpoint: &Json,
+) -> Result<()> {
     let prev = checkpoint.get("previous");
     match prev {
         Some(Json::Null) | None => {
@@ -262,10 +272,7 @@ pub fn rollback(backend: &dyn FirewallBackend, spec: &FirewallRuleSpec, checkpoi
                     .get("port")
                     .and_then(Json::as_u64)
                     .and_then(|n| u16::try_from(n).ok()),
-                source: p
-                    .get("source")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                source: p.get("source").and_then(Json::as_str).map(str::to_string),
                 destination: p
                     .get("destination")
                     .and_then(Json::as_str)

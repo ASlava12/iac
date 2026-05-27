@@ -7,17 +7,16 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
+use iac_core::ResourceId;
 use iac_core::diff::{Diff, DiffKind};
 use iac_core::protocol::v1::{
     AuditEvent, DriftAcceptRequest, DriftBatch, DriftIgnoreRequest, DriftItem, DriftSummary,
     RegisterRequest, RegisterResponse, SubmitOperationRequest, SubmitOperationResponse,
 };
-use iac_core::ResourceId;
 use reqwest::StatusCode;
 use serde_json::json;
-
 
 async fn fetch_audit(server: &TestServer, qs: &str) -> Vec<AuditEvent> {
     reqwest::Client::new()
@@ -82,7 +81,8 @@ async fn operation_submission_records_admin_audit() {
             "kind": "file",
             "metadata": { "name": "x", "environment": "audit" },
             "spec": { "path": "/tmp/x", "mode": "0644", "content": "y\n" }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let submit: SubmitOperationResponse = reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -99,7 +99,10 @@ async fn operation_submission_records_admin_audit() {
     assert_eq!(events.len(), 1);
     let e = &events[0];
     assert_eq!(e.actor, "admin");
-    assert_eq!(e.operation_id.as_deref(), Some(submit.operation_id.as_str()));
+    assert_eq!(
+        e.operation_id.as_deref(),
+        Some(submit.operation_id.as_str())
+    );
     assert_eq!(e.payload["requested_by"], "alice");
     assert_eq!(e.payload["source_commit"], "deadbeef");
     assert_eq!(e.payload["resource_count"], 1);
@@ -137,7 +140,11 @@ async fn drift_accept_and_ignore_record_audit_with_payload() {
         },
     };
     reqwest::Client::new()
-        .post(format!("{}/v1/agents/{}/drift", server.url(), creds.agent_id))
+        .post(format!(
+            "{}/v1/agents/{}/drift",
+            server.url(),
+            creds.agent_id
+        ))
         .bearer_auth(&creds.token)
         .json(&DriftBatch { items: vec![item] })
         .send()
@@ -158,7 +165,9 @@ async fn drift_accept_and_ignore_record_audit_with_payload() {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/drift/{id1}/accept", server.url()))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftAcceptRequest { reason: "manual hotfix".into() })
+        .json(&DriftAcceptRequest {
+            reason: "manual hotfix".into(),
+        })
         .send()
         .await
         .unwrap();
@@ -177,7 +186,11 @@ async fn drift_accept_and_ignore_record_audit_with_payload() {
         diff: Diff::no_change(),
     };
     reqwest::Client::new()
-        .post(format!("{}/v1/agents/{}/drift", server.url(), creds.agent_id))
+        .post(format!(
+            "{}/v1/agents/{}/drift",
+            server.url(),
+            creds.agent_id
+        ))
         .bearer_auth(&creds.token)
         .json(&DriftBatch { items: vec![item] })
         .send()
@@ -200,7 +213,10 @@ async fn drift_accept_and_ignore_record_audit_with_payload() {
     let resp = reqwest::Client::new()
         .post(format!("{}/v1/drift/{id2}/ignore", server.url()))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&DriftIgnoreRequest { until: until.clone(), reason: None })
+        .json(&DriftIgnoreRequest {
+            until: until.clone(),
+            reason: None,
+        })
         .send()
         .await
         .unwrap();
@@ -273,7 +289,8 @@ async fn audit_filters_compose() {
                         "content": "y\n",
                         "hostSelector": { "name": "agent-a" }
                     }
-                })], canary: None,
+                })],
+                canary: None,
             })
             .send()
             .await
@@ -290,7 +307,11 @@ async fn audit_filters_compose() {
 
     // Filter by operation_id of the first op.
     let op_events = fetch_audit(&server, &format!("operation_id={}", op_ids[0])).await;
-    assert!(op_events.iter().all(|e| e.operation_id.as_deref() == Some(op_ids[0].as_str())));
+    assert!(
+        op_events
+            .iter()
+            .all(|e| e.operation_id.as_deref() == Some(op_ids[0].as_str()))
+    );
     assert!(!op_events.is_empty());
 
     // Filter by kind.

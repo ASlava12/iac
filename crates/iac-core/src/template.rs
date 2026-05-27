@@ -87,17 +87,16 @@ where
 ///
 /// Scalars: `String`, `Number`, `Bool`. Anything else (mappings,
 /// sequences, null, tagged) → [`TemplateError::NotScalar`].
-pub fn render_yaml_top_scalars(
-    template: &str,
-    spec: &YamlValue,
-) -> Result<String, TemplateError> {
+pub fn render_yaml_top_scalars(template: &str, spec: &YamlValue) -> Result<String, TemplateError> {
     let map = spec.as_mapping();
-    render(template, |key| match map.and_then(|m| m.get(YamlValue::String(key.into()))) {
-        None => Err(TemplateError::MissingKey(key.into())),
-        Some(YamlValue::String(s)) => Ok(Some(s.clone())),
-        Some(YamlValue::Number(n)) => Ok(Some(n.to_string())),
-        Some(YamlValue::Bool(b)) => Ok(Some(b.to_string())),
-        Some(_) => Ok(None),
+    render(template, |key| {
+        match map.and_then(|m| m.get(YamlValue::String(key.into()))) {
+            None => Err(TemplateError::MissingKey(key.into())),
+            Some(YamlValue::String(s)) => Ok(Some(s.clone())),
+            Some(YamlValue::Number(n)) => Ok(Some(n.to_string())),
+            Some(YamlValue::Bool(b)) => Ok(Some(b.to_string())),
+            Some(_) => Ok(None),
+        }
     })
 }
 
@@ -153,12 +152,14 @@ mod tests {
     #[test]
     fn substitutes_multiple_vars_back_to_back() {
         let out = render("{{ a }}-{{ b }}", |k| {
-            Ok(Some(match k {
-                "a" => "1",
-                "b" => "2",
-                _ => panic!(),
-            }
-            .into()))
+            Ok(Some(
+                match k {
+                    "a" => "1",
+                    "b" => "2",
+                    _ => panic!(),
+                }
+                .into(),
+            ))
         })
         .unwrap();
         assert_eq!(out, "1-2");
@@ -182,10 +183,7 @@ mod tests {
 
     #[test]
     fn missing_key_propagates() {
-        let err = render("{{ nope }}", |k| {
-            Err(TemplateError::MissingKey(k.into()))
-        })
-        .unwrap_err();
+        let err = render("{{ nope }}", |k| Err(TemplateError::MissingKey(k.into()))).unwrap_err();
         assert!(matches!(err, TemplateError::MissingKey(k) if k == "nope"));
     }
 
@@ -230,8 +228,10 @@ mod tests {
 
     #[test]
     fn json_top_scalars_renders_string_number_bool() {
-        let m: JsonMap<String, JsonValue> =
-            json!({"n": "abc", "i": 7, "b": false}).as_object().unwrap().clone();
+        let m: JsonMap<String, JsonValue> = json!({"n": "abc", "i": 7, "b": false})
+            .as_object()
+            .unwrap()
+            .clone();
         let out = render_json_top_scalars("{{ n }}/{{ i }}/{{ b }}", &m).unwrap();
         assert_eq!(out, "abc/7/false");
     }
@@ -240,16 +240,17 @@ mod tests {
     fn json_top_scalars_treats_null_as_empty_string() {
         // Legacy behaviour from controlplane::modules. The downstream
         // YAML parser surfaces missing-required-field as a real error.
-        let m: JsonMap<String, JsonValue> =
-            json!({"x": null}).as_object().unwrap().clone();
+        let m: JsonMap<String, JsonValue> = json!({"x": null}).as_object().unwrap().clone();
         let out = render_json_top_scalars("[{{ x }}]", &m).unwrap();
         assert_eq!(out, "[]");
     }
 
     #[test]
     fn json_top_scalars_rejects_array_object() {
-        let m: JsonMap<String, JsonValue> =
-            json!({"arr": [1, 2], "obj": {"k": "v"}}).as_object().unwrap().clone();
+        let m: JsonMap<String, JsonValue> = json!({"arr": [1, 2], "obj": {"k": "v"}})
+            .as_object()
+            .unwrap()
+            .clone();
         let err = render_json_top_scalars("{{ arr }}", &m).unwrap_err();
         assert!(matches!(err, TemplateError::NotScalar(k) if k == "arr"));
         let err = render_json_top_scalars("{{ obj }}", &m).unwrap_err();

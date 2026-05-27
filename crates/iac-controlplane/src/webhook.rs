@@ -18,7 +18,7 @@
 //! retry — same rationale. If you need at-least-once, plug the audit
 //! log into a real bus.
 
-use crate::store::{sql, Store};
+use crate::store::{Store, sql};
 use iac_core::protocol::v1::AuditEvent;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -161,7 +161,10 @@ fn is_private_or_metadata_host(host: &str) -> bool {
     // names — operators must trust their resolver). The reverse:
     // an attacker who controls DNS for an operator-supplied host
     // can still SSRF; that's a perimeter concern, not config-load.
-    matches!(lower.as_str(), "localhost" | "ip6-localhost" | "ip6-loopback")
+    matches!(
+        lower.as_str(),
+        "localhost" | "ip6-localhost" | "ip6-loopback"
+    )
 }
 
 fn is_ipv6_private(ip: &std::net::Ipv6Addr) -> bool {
@@ -534,8 +537,7 @@ impl WebhookDispatcher {
         // can't accidentally double-emit `v1=`.
         for w in &mut config.webhooks {
             let mut filtered: Vec<String> = Vec::with_capacity(w.signing_versions.len());
-            let mut seen: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
+            let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
             for v in &w.signing_versions {
                 if v != "v1" && v != "v2" {
                     tracing::warn!(
@@ -673,13 +675,12 @@ impl WebhookDispatcher {
     ///   3. `0` if `backfill=true`, else `MAX(audit_events.id)` —
     ///      first-boot semantics.
     pub async fn initialize(&self, store: &Store) {
-        let max_id: i64 = sqlx::query_as::<_, (i64,)>(&sql(
-            "SELECT COALESCE(MAX(id), 0) FROM audit_events",
-        ))
-        .fetch_one(store.pool())
-        .await
-        .map(|(id,)| id)
-        .unwrap_or(0);
+        let max_id: i64 =
+            sqlx::query_as::<_, (i64,)>(&sql("SELECT COALESCE(MAX(id), 0) FROM audit_events"))
+                .fetch_one(store.pool())
+                .await
+                .map(|(id,)| id)
+                .unwrap_or(0);
         let legacy: Option<i64> = sqlx::query_as::<_, (i64,)>(&sql(
             "SELECT last_seen_id FROM webhook_cursor WHERE key = 'audit'",
         ))
@@ -730,12 +731,7 @@ impl WebhookDispatcher {
     /// keyed on `webhook_name`. Best-effort: failure logs but doesn't
     /// fail dispatch — the in-memory map is still authoritative for
     /// this process; restart-survival is the cost.
-    async fn persist_backoff(
-        &self,
-        store: &Store,
-        webhook: &WebhookConfig,
-        retry_secs: u64,
-    ) {
+    async fn persist_backoff(&self, store: &Store, webhook: &WebhookConfig, retry_secs: u64) {
         let now = jiff::Timestamp::now();
         let deadline_unix = now.as_second().saturating_add(retry_secs as i64);
         let updated_at = now.to_string();
@@ -903,11 +899,9 @@ impl WebhookDispatcher {
         } else {
             self.config.backfill_batch_size
         };
-        let rows = match sqlx::query(&sql(
-            "SELECT id, timestamp, actor, kind, severity,
+        let rows = match sqlx::query(&sql("SELECT id, timestamp, actor, kind, severity,
                     operation_id, agent_id, resource_id, drift_id, payload_json
-             FROM audit_events WHERE id > ? ORDER BY id LIMIT ?",
-        ))
+             FROM audit_events WHERE id > ? ORDER BY id LIMIT ?"))
         .bind(cursor)
         .bind(i64::from(batch_size))
         .fetch_all(store.pool())
@@ -957,8 +951,7 @@ impl WebhookDispatcher {
         // webhook's tick. Each call grabs a permit from the shared
         // semaphore so the total number of concurrent HTTP requests
         // across the dispatcher is capped.
-        let matching: Vec<&AuditEvent> =
-            events.iter().filter(|e| webhook.matches(e)).collect();
+        let matching: Vec<&AuditEvent> = events.iter().filter(|e| webhook.matches(e)).collect();
         let dispatched = matching.len();
         if !matching.is_empty() {
             let futures = matching
@@ -1012,12 +1005,7 @@ impl WebhookDispatcher {
     /// The per-receiver counter and the global counter answer
     /// different questions (per-receiver: "is THIS hook backed up?",
     /// global: "is the dispatcher overloaded?") so both are kept.
-    async fn fire_with_permit(
-        &self,
-        store: &Store,
-        webhook: &WebhookConfig,
-        event: &AuditEvent,
-    ) {
+    async fn fire_with_permit(&self, store: &Store, webhook: &WebhookConfig, event: &AuditEvent) {
         use std::sync::atomic::Ordering::Relaxed;
         // Phase 7ac: measure (global) semaphore acquisition delay.
         let acquire_start = std::time::Instant::now();
@@ -1192,8 +1180,8 @@ impl WebhookDispatcher {
                     .map(|s| s.min(MAX_BACKOFF_SECS))
                     .unwrap_or(0);
                 if retry_secs > 0 {
-                    let deadline = std::time::Instant::now()
-                        + std::time::Duration::from_secs(retry_secs);
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(retry_secs);
                     self.backoff_until
                         .lock()
                         .await
@@ -1315,7 +1303,11 @@ pub fn parse_signature_header_versioned(header: &str) -> Option<ParsedSignatureH
             _ => {} // unknown key, ignore
         }
     }
-    Some(ParsedSignatureHeader { timestamp: t?, v1, v2 })
+    Some(ParsedSignatureHeader {
+        timestamp: t?,
+        v1,
+        v2,
+    })
 }
 
 /// Phase 7bp: assemble the `X-Iac-Signature` header value from a list
@@ -1368,8 +1360,8 @@ pub fn verify_signed_payload(
         "{timestamp}.{}",
         std::str::from_utf8(body).map_err(|_| "non-utf8 body")?
     );
-    let expected = compute_hmac_sha256(secret, signed_payload.as_bytes())
-        .ok_or("hmac compute failed")?;
+    let expected =
+        compute_hmac_sha256(secret, signed_payload.as_bytes()).ok_or("hmac compute failed")?;
     if !ct_eq(sig_hex.as_bytes(), expected.as_bytes()) {
         return Err("signature mismatch");
     }
@@ -1397,16 +1389,15 @@ pub fn verify_signed_payload_v2(
     now: i64,
     tolerance_secs: i64,
 ) -> Result<(), &'static str> {
-    let parsed = parse_signature_header_versioned(header)
-        .ok_or("malformed signature header")?;
+    let parsed = parse_signature_header_versioned(header).ok_or("malformed signature header")?;
     if (now - parsed.timestamp).abs() > tolerance_secs {
         return Err("timestamp outside tolerance");
     }
     let sig_hex = parsed.v2.ok_or("v2 signature missing")?;
     let body_str = std::str::from_utf8(body).map_err(|_| "non-utf8 body")?;
     let signed_payload = format!("{}.{url}.{body_str}", parsed.timestamp);
-    let expected = compute_hmac_sha256(secret, signed_payload.as_bytes())
-        .ok_or("hmac compute failed")?;
+    let expected =
+        compute_hmac_sha256(secret, signed_payload.as_bytes()).ok_or("hmac compute failed")?;
     if !ct_eq(sig_hex.as_bytes(), expected.as_bytes()) {
         return Err("signature mismatch");
     }
@@ -1531,7 +1522,10 @@ mod tests {
             "http://[fd00:ec2::254]/",
         ] {
             let err = validate_webhook_url(url, true, false).unwrap_err();
-            assert!(err.contains("private") || err.contains("metadata"), "{url}: {err}");
+            assert!(
+                err.contains("private") || err.contains("metadata"),
+                "{url}: {err}"
+            );
         }
     }
 
@@ -1746,8 +1740,7 @@ mod tests {
         let sig = compute_hmac_sha256(secret, signed.as_bytes()).unwrap();
         let header = format!("t={signed_at},v1={sig}");
         // 10 minutes later, 5min tolerance → reject.
-        let err = verify_signed_payload(secret, body, &header, signed_at + 600, 300)
-            .unwrap_err();
+        let err = verify_signed_payload(secret, body, &header, signed_at + 600, 300).unwrap_err();
         assert!(err.contains("tolerance"), "got: {err}");
     }
 
@@ -1773,8 +1766,7 @@ mod tests {
         let signed = format!("{now}.{{}}");
         let sig = compute_hmac_sha256(secret, signed.as_bytes()).unwrap();
         let header = format!("t={now},v1={sig}");
-        let err = verify_signed_payload(b"wrong-secret", body, &header, now, 300)
-            .unwrap_err();
+        let err = verify_signed_payload(b"wrong-secret", body, &header, now, 300).unwrap_err();
         assert!(err.contains("mismatch"), "got: {err}");
     }
 
@@ -1793,8 +1785,7 @@ mod tests {
         // (stale) signature.
         let forged_t = original_t + 1_000_000;
         let forged_header = format!("t={forged_t},v1={original_sig}");
-        let err = verify_signed_payload(secret, body, &forged_header, forged_t, 300)
-            .unwrap_err();
+        let err = verify_signed_payload(secret, body, &forged_header, forged_t, 300).unwrap_err();
         assert!(err.contains("mismatch"), "got: {err}");
     }
 

@@ -6,13 +6,13 @@
 
 mod common;
 
-use common::{client, TestServer};
+use common::{TestServer, client};
+use iac_core::ResourceId;
 use iac_core::diff::{Diff, DiffKind};
 use iac_core::protocol::v1::{
     AgentHealth, AgentSummary, DriftAck, DriftBatch, DriftItem, DriftSummary, HeartbeatRequest,
     ObservationAck, ObservationBatch, ObservationItem, RegisterRequest, RegisterResponse,
 };
-use iac_core::ResourceId;
 use reqwest::StatusCode;
 use serde_json::json;
 
@@ -27,14 +27,23 @@ async fn register(server: &TestServer, name: &str, env: &str) -> RegisterRespons
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "register failed: {}", resp.text().await.unwrap());
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "register failed: {}",
+        resp.text().await.unwrap()
+    );
     resp.json().await.unwrap()
 }
 
 #[tokio::test]
 async fn health_endpoint_ok() {
     let server = TestServer::spawn().await;
-    let resp = client().get(server.endpoint("/v1/health")).send().await.unwrap();
+    let resp = client()
+        .get(server.endpoint("/v1/health"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
@@ -176,7 +185,9 @@ async fn drift_push_then_list_then_autoclose() {
     let resp = client()
         .post(server.endpoint(&format!("/v1/agents/{}/drift", creds.agent_id)))
         .bearer_auth(&creds.token)
-        .json(&DriftBatch { items: vec![drift_for(&r1), drift_for(&r2)] })
+        .json(&DriftBatch {
+            items: vec![drift_for(&r1), drift_for(&r2)],
+        })
         .send()
         .await
         .unwrap();
@@ -185,7 +196,12 @@ async fn drift_push_then_list_then_autoclose() {
     assert_eq!(ack.accepted, 2);
 
     // List → 2 open.
-    let resp = client().get(server.endpoint("/v1/drift")).bearer_auth("test-admin").send().await.unwrap();
+    let resp = client()
+        .get(server.endpoint("/v1/drift"))
+        .bearer_auth("test-admin")
+        .send()
+        .await
+        .unwrap();
     let rows: Vec<DriftSummary> = resp.json().await.unwrap();
     assert_eq!(rows.len(), 2);
 
@@ -193,13 +209,20 @@ async fn drift_push_then_list_then_autoclose() {
     let resp = client()
         .post(server.endpoint(&format!("/v1/agents/{}/drift", creds.agent_id)))
         .bearer_auth(&creds.token)
-        .json(&DriftBatch { items: vec![drift_for(&r1)] })
+        .json(&DriftBatch {
+            items: vec![drift_for(&r1)],
+        })
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let resp = client().get(server.endpoint("/v1/drift")).bearer_auth("test-admin").send().await.unwrap();
+    let resp = client()
+        .get(server.endpoint("/v1/drift"))
+        .bearer_auth("test-admin")
+        .send()
+        .await
+        .unwrap();
     let rows: Vec<DriftSummary> = resp.json().await.unwrap();
     assert_eq!(rows.len(), 1);
     assert!(rows[0].resource_id.contains("/a"));
@@ -213,7 +236,12 @@ async fn drift_push_then_list_then_autoclose() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let resp = client().get(server.endpoint("/v1/drift")).bearer_auth("test-admin").send().await.unwrap();
+    let resp = client()
+        .get(server.endpoint("/v1/drift"))
+        .bearer_auth("test-admin")
+        .send()
+        .await
+        .unwrap();
     let rows: Vec<DriftSummary> = resp.json().await.unwrap();
     assert_eq!(rows.len(), 0);
 

@@ -6,7 +6,10 @@ use walkdir::WalkDir;
 
 /// Load a single YAML file. Supports multi-document streams (`---` separated).
 pub fn load_file(path: &Path) -> Result<Vec<Resource>> {
-    let bytes = std::fs::read(path).map_err(|e| Error::Io { path: path.into(), source: e })?;
+    let bytes = std::fs::read(path).map_err(|e| Error::Io {
+        path: path.into(),
+        source: e,
+    })?;
     let text = std::str::from_utf8(&bytes)
         .map_err(|e| Error::manifest(path, format!("not valid utf-8: {e}")))?;
     parse_documents(path, text)
@@ -18,15 +21,22 @@ pub fn load_file(path: &Path) -> Result<Vec<Resource>> {
 pub fn parse_documents(path: &Path, text: &str) -> Result<Vec<Resource>> {
     let mut out = Vec::new();
     for (idx, doc) in serde_yaml_ng::Deserializer::from_str(text).enumerate() {
-        let value = serde_yaml_ng::Value::deserialize(doc)
-            .map_err(|e| Error::Yaml { path: path.into(), source: e })?;
+        let value = serde_yaml_ng::Value::deserialize(doc).map_err(|e| Error::Yaml {
+            path: path.into(),
+            source: e,
+        })?;
         // Skip empty documents (e.g. trailing `---\n`).
         if value.is_null() {
             continue;
         }
-        let mut resource: Resource = serde_yaml_ng::from_value(value)
-            .map_err(|e| Error::Yaml { path: path.into(), source: e })?;
-        resource.source = SourceLocation { file: path.to_path_buf(), document_index: idx };
+        let mut resource: Resource = serde_yaml_ng::from_value(value).map_err(|e| Error::Yaml {
+            path: path.into(),
+            source: e,
+        })?;
+        resource.source = SourceLocation {
+            file: path.to_path_buf(),
+            document_index: idx,
+        };
         resource.validate_shape()?;
         out.push(resource);
     }
@@ -64,7 +74,11 @@ pub fn load_directory(root: &Path) -> Result<Vec<Resource>> {
     if !errors.is_empty() {
         return Err(Error::manifest(
             PathBuf::from(root),
-            format!("{} file(s) failed to load:\n  - {}", errors.len(), errors.join("\n  - ")),
+            format!(
+                "{} file(s) failed to load:\n  - {}",
+                errors.len(),
+                errors.join("\n  - ")
+            ),
         ));
     }
     Ok(out)
@@ -72,7 +86,10 @@ pub fn load_directory(root: &Path) -> Result<Vec<Resource>> {
 
 /// Convenience: file or directory.
 pub fn load_path(path: &Path) -> Result<Vec<Resource>> {
-    let meta = std::fs::metadata(path).map_err(|e| Error::Io { path: path.into(), source: e })?;
+    let meta = std::fs::metadata(path).map_err(|e| Error::Io {
+        path: path.into(),
+        source: e,
+    })?;
     if meta.is_dir() {
         load_directory(path)
     } else {

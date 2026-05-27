@@ -1,14 +1,12 @@
 // Phase 7cz.16: tests-only exemption for unwrap/expect/panic.
-#![cfg_attr(
-    test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
-)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use iac_core::{
+    Resource,
     executor::{ApplyResult, Executor, PlanResult},
-    manifest, Resource,
+    manifest,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -223,9 +221,7 @@ enum Command {
         fail_fast: bool,
     },
     /// Observe current state of the resources in the manifest.
-    Observe {
-        path: PathBuf,
-    },
+    Observe { path: PathBuf },
     /// Roll back a previously applied operation by id.
     ///
     /// Without `--server` (legacy local mode): re-runs the prior local
@@ -575,18 +571,23 @@ fn main() -> ExitCode {
 }
 
 fn init_tracing(verbosity: u8) {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
     let filter = match verbosity {
         0 => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         1 => EnvFilter::new("info"),
         _ => EnvFilter::new("debug"),
     };
-    let _ = fmt().with_env_filter(filter).with_writer(std::io::stderr).try_init();
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
     let state_dir = resolve_state_dir(cli.state_dir.as_deref())?;
-    let actor = cli.actor.unwrap_or_else(|| std::env::var("USER").unwrap_or_else(|_| "unknown".into()));
+    let actor = cli
+        .actor
+        .unwrap_or_else(|| std::env::var("USER").unwrap_or_else(|_| "unknown".into()));
 
     match cli.command {
         Command::Version => {
@@ -617,7 +618,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             &actor,
         ),
         Command::History { limit } => cmd_history(&state_dir, limit, cli.format),
-        Command::Login { server, user, password } => cmd_login(&server, &user, password.as_deref()),
+        Command::Login {
+            server,
+            user,
+            password,
+        } => cmd_login(&server, &user, password.as_deref()),
         Command::Logout { server } => cmd_logout(&server),
         Command::Creds { action } => cmd_creds(action, cli.format),
         Command::Users { server, action } => cmd_users(&server, action, cli.format),
@@ -844,12 +849,26 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Agents { server, action } => cmd_agents(&server, action, cli.format),
         Command::Ops { server, action } => cmd_ops(&server, action, cli.format),
         Command::Drift { server, action } => cmd_drift(&server, action, cli.format),
-        Command::Approve { server, operation_id, reason } => {
-            cmd_op_approval(&server, &operation_id, ApprovalAction::Approve, reason.as_deref())
-        }
-        Command::Reject { server, operation_id, reason } => {
-            cmd_op_approval(&server, &operation_id, ApprovalAction::Reject, Some(&reason))
-        }
+        Command::Approve {
+            server,
+            operation_id,
+            reason,
+        } => cmd_op_approval(
+            &server,
+            &operation_id,
+            ApprovalAction::Approve,
+            reason.as_deref(),
+        ),
+        Command::Reject {
+            server,
+            operation_id,
+            reason,
+        } => cmd_op_approval(
+            &server,
+            &operation_id,
+            ApprovalAction::Reject,
+            Some(&reason),
+        ),
         Command::Audit {
             server,
             limit,
@@ -894,7 +913,11 @@ fn cmd_users(server_url: &str, action: UsersAction, format: OutputFormat) -> Res
             .build()?;
 
         match action {
-            UsersAction::Create { user, roles, password } => {
+            UsersAction::Create {
+                user,
+                roles,
+                password,
+            } => {
                 let pw = read_password_for(&format!("password for new user {user}"), password)?;
                 let resp = client
                     .post(format!("{server}/v1/users"))
@@ -949,7 +972,10 @@ fn cmd_users(server_url: &str, action: UsersAction, format: OutputFormat) -> Res
                     server,
                     &token,
                     &user_id,
-                    UpdateUserRequest { roles: Some(roles), ..Default::default() },
+                    UpdateUserRequest {
+                        roles: Some(roles),
+                        ..Default::default()
+                    },
                     "roles updated",
                 )
                 .await
@@ -970,7 +996,10 @@ fn cmd_users(server_url: &str, action: UsersAction, format: OutputFormat) -> Res
                     server,
                     &token,
                     &user_id,
-                    UpdateUserRequest { disabled: Some(false), ..Default::default() },
+                    UpdateUserRequest {
+                        disabled: Some(false),
+                        ..Default::default()
+                    },
                     "enabled",
                 )
                 .await
@@ -982,7 +1011,10 @@ fn cmd_users(server_url: &str, action: UsersAction, format: OutputFormat) -> Res
                     server,
                     &token,
                     &user_id,
-                    UpdateUserRequest { password: Some(pw), ..Default::default() },
+                    UpdateUserRequest {
+                        password: Some(pw),
+                        ..Default::default()
+                    },
                     "password reset",
                 )
                 .await
@@ -1015,9 +1047,10 @@ fn read_password_for(prompt: &str, explicit: Option<String>) -> Result<String> {
         return Ok(p);
     }
     if let Ok(p) = std::env::var("IAC_PASSWORD")
-        && !p.is_empty() {
-            return Ok(p);
-        }
+        && !p.is_empty()
+    {
+        return Ok(p);
+    }
     rpassword::prompt_password(format!("{prompt}: ")).context("reading password")
 }
 
@@ -1189,7 +1222,9 @@ fn cmd_op_approval(
                 client
                     .post(format!("{server}/v1/operations/{operation_id}/reject"))
                     .bearer_auth(&token)
-                    .json(&OperationRejectRequest { reason: reason.to_string() })
+                    .json(&OperationRejectRequest {
+                        reason: reason.to_string(),
+                    })
                     .send()
                     .await?
             }
@@ -1203,6 +1238,7 @@ fn cmd_op_approval(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_audit(
     server_url: &str,
     limit: i64,
@@ -1253,7 +1289,11 @@ fn cmd_audit(
             // Initial page in oldest-first order so the operator
             // sees recent history before live events start
             // streaming.
-            let resp = client.get(build_url(None, limit)).bearer_auth(&token).send().await?;
+            let resp = client
+                .get(build_url(None, limit))
+                .bearer_auth(&token)
+                .send()
+                .await?;
             check_status(&resp)?;
             let mut events: Vec<AuditEvent> = resp.json().await?;
             events.sort_by_key(|e| e.id);
@@ -1293,7 +1333,11 @@ fn cmd_audit(
             }
         }
 
-        let resp = client.get(build_url(None, limit)).bearer_auth(&token).send().await?;
+        let resp = client
+            .get(build_url(None, limit))
+            .bearer_auth(&token)
+            .send()
+            .await?;
         check_status(&resp)?;
         let mut events: Vec<AuditEvent> = resp.json().await?;
         // Server returns newest-first; print oldest-first for consistency
@@ -1393,7 +1437,7 @@ fn cmd_agents(server_url: &str, action: AgentsAction, format: OutputFormat) -> R
                         // AgentHealth is a serde enum without Display;
                         // route through serde to get the snake_case
                         // string form ("healthy", "stale", "missing").
-                        let status_label = serde_json::to_value(&a.status)
+                        let status_label = serde_json::to_value(a.status)
                             .ok()
                             .and_then(|v| v.as_str().map(|s| s.to_string()))
                             .unwrap_or_else(|| format!("{:?}", a.status));
@@ -1442,11 +1486,10 @@ fn cmd_ops(server_url: &str, action: OpsAction, format: OutputFormat) -> Result<
                         "id", "kind", "environment", "requested_by", "created_at", "finished_at"
                     );
                     for o in &ops {
-                        let status_label: String =
-                            serde_json::to_value(&o.status)
-                                .ok()
-                                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                                .unwrap_or_else(|| format!("{:?}", o.status));
+                        let status_label: String = serde_json::to_value(o.status)
+                            .ok()
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_else(|| format!("{:?}", o.status));
                         println!(
                             "{:<28} {:<10} {:<15} {:<20} {:<28} {:<28}",
                             o.id,
@@ -1544,7 +1587,10 @@ fn cmd_expanders(
                             println!("  spec:");
                             for f in &d.spec_fields {
                                 let req = if f.required { "required" } else { "optional" };
-                                println!("    {} <{}> ({})  {}", f.name, f.r#type, req, f.description);
+                                println!(
+                                    "    {} <{}> ({})  {}",
+                                    f.name, f.r#type, req, f.description
+                                );
                             }
                         }
                     }
@@ -1612,10 +1658,7 @@ async fn drift_async(
                         println!("(no open drift)");
                     } else {
                         for d in &rows {
-                            println!(
-                                "[{}] {} ({})",
-                                d.id, d.resource_id, d.severity
-                            );
+                            println!("[{}] {} ({})", d.id, d.resource_id, d.severity);
                             for r in &d.diff.reasons {
                                 println!("    {r}");
                             }
@@ -1623,7 +1666,11 @@ async fn drift_async(
                     }
                 }
             }
-            Ok(if rows.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(2) })
+            Ok(if rows.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
         }
         DriftAction::Show { id } => {
             let resp = http.get(format!("{server}/v1/drift/{id}")).send().await?;
@@ -1646,12 +1693,15 @@ async fn drift_async(
         }
         DriftAction::Ignore { id, ttl } => {
             let token = admin_token().await?;
-            let until = parse_ttl_to_until(&ttl)
-                .with_context(|| format!("parsing --ttl {ttl:?}"))?;
+            let until =
+                parse_ttl_to_until(&ttl).with_context(|| format!("parsing --ttl {ttl:?}"))?;
             let resp = http
                 .post(format!("{server}/v1/drift/{id}/ignore"))
                 .bearer_auth(&token)
-                .json(&DriftIgnoreRequest { until: until.clone(), reason: None })
+                .json(&DriftIgnoreRequest {
+                    until: until.clone(),
+                    reason: None,
+                })
                 .send()
                 .await?;
             check_status(&resp)?;
@@ -1683,11 +1733,20 @@ async fn drift_async(
             }
             Ok(ExitCode::SUCCESS)
         }
-        DriftAction::AcceptBulk { agent_id, kind, severity, reason } => {
+        DriftAction::AcceptBulk {
+            agent_id,
+            kind,
+            severity,
+            reason,
+        } => {
             let token = admin_token().await?;
             let req = DriftBulkAcceptRequest {
                 reason,
-                filter: DriftBulkFilter { agent_id, kind, severity },
+                filter: DriftBulkFilter {
+                    agent_id,
+                    kind,
+                    severity,
+                },
             };
             let resp = http
                 .post(format!("{server}/v1/drift/accept-bulk"))
@@ -1705,11 +1764,20 @@ async fn drift_async(
             }
             Ok(ExitCode::SUCCESS)
         }
-        DriftAction::IgnoreBulk { agent_id, kind, severity, ttl } => {
+        DriftAction::IgnoreBulk {
+            agent_id,
+            kind,
+            severity,
+            ttl,
+        } => {
             let token = admin_token().await?;
             let req = DriftBulkIgnoreRequest {
                 ttl: ttl.clone(),
-                filter: DriftBulkFilter { agent_id, kind, severity },
+                filter: DriftBulkFilter {
+                    agent_id,
+                    kind,
+                    severity,
+                },
             };
             let resp = http
                 .post(format!("{server}/v1/drift/ignore-bulk"))
@@ -1874,7 +1942,10 @@ async fn submit_remote(
         .iter()
         .map(serde_json::to_value)
         .collect::<Result<_, _>>()?;
-    let canary = canary_pct.map(|pct| CanarySpec { pct, min_count: None });
+    let canary = canary_pct.map(|pct| CanarySpec {
+        pct,
+        min_count: None,
+    });
     let req = SubmitOperationRequest {
         environment: environment.to_string(),
         requested_by: actor.to_string(),
@@ -1980,8 +2051,7 @@ fn build_registry() -> iac_core::ProviderRegistry {
 }
 
 fn load_manifests(path: &Path) -> Result<Vec<Resource>> {
-    manifest::load_path(path)
-        .with_context(|| format!("loading manifests from {}", path.display()))
+    manifest::load_path(path).with_context(|| format!("loading manifests from {}", path.display()))
 }
 
 fn cmd_validate(path: &Path, format: OutputFormat) -> Result<ExitCode> {
@@ -2034,7 +2104,11 @@ fn cmd_validate(path: &Path, format: OutputFormat) -> Result<ExitCode> {
         }
     }
 
-    if errors.is_empty() { Ok(ExitCode::SUCCESS) } else { Ok(ExitCode::from(1)) }
+    if errors.is_empty() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
 }
 
 fn cmd_plan(path: &Path, state_dir: &Path, actor: &str, format: OutputFormat) -> Result<ExitCode> {
@@ -2043,7 +2117,11 @@ fn cmd_plan(path: &Path, state_dir: &Path, actor: &str, format: OutputFormat) ->
     let executor = Executor::new(&registry, state_dir.to_path_buf(), actor);
     let result = executor.plan(&resources)?;
     emit_plan(&result, format)?;
-    let exit = if result.has_changes() { ExitCode::from(2) } else { ExitCode::SUCCESS };
+    let exit = if result.has_changes() {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    };
     Ok(exit)
 }
 
@@ -2078,8 +2156,7 @@ fn cmd_plan_remote_from_path(
         let token = credentials::resolve_admin_token_with_refresh(server_url).await?;
         match validate_spec::fetch_catalog(server_url, &token).await {
             Ok(catalog) => {
-                let errors =
-                    validate_spec::validate_resources(&resources_for_validation, &catalog);
+                let errors = validate_spec::validate_resources(&resources_for_validation, &catalog);
                 if !errors.is_empty() {
                     eprintln!("manifest validation failed:");
                     for e in &errors {
@@ -2139,7 +2216,9 @@ fn cmd_plan_remote(
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
         let resp = client
-            .get(format!("{server}/v1/operations/{operation_id}/desired-state"))
+            .get(format!(
+                "{server}/v1/operations/{operation_id}/desired-state"
+            ))
             .bearer_auth(&token)
             .send()
             .await?;
@@ -2297,8 +2376,8 @@ fn cmd_apply_assignment_stdin(state_dir: &Path, actor: &str) -> Result<ExitCode>
     std::io::stdin()
         .read_to_string(&mut buf)
         .context("reading assignment payload from stdin")?;
-    let payload: AssignmentPayload = serde_json::from_str(&buf)
-        .context("decoding assignment payload (expected JSON)")?;
+    let payload: AssignmentPayload =
+        serde_json::from_str(&buf).context("decoding assignment payload (expected JSON)")?;
 
     // Convert each Value into a Resource via the manifest path. Reuses
     // the operator-facing parsing so server-side sanity checks already
@@ -2376,8 +2455,8 @@ fn cmd_apply_direct_ssh(
     if resources.is_empty() {
         anyhow::bail!("no resources to apply");
     }
-    let mut target = ssh_dispatch::SshTarget::parse(target)?
-        .with_overrides(ssh_key, ssh_port, ssh_remote_iac);
+    let mut target =
+        ssh_dispatch::SshTarget::parse(target)?.with_overrides(ssh_key, ssh_port, ssh_remote_iac);
     // Phase 7da.1: probe + (maybe) bootstrap + apply all touch the
     // same host. ControlMaster pooling collapses 3 SSH handshakes
     // into 1.
@@ -2393,7 +2472,9 @@ fn cmd_apply_direct_ssh(
         .iter()
         .map(serde_json::to_value)
         .collect::<Result<_, _>>()?;
-    let payload = AssignmentPayload { resources: resources_json };
+    let payload = AssignmentPayload {
+        resources: resources_json,
+    };
     let outcome = ssh_dispatch::dispatch_apply(&target, &payload, auto_bootstrap)?;
     println!(
         "← {label}: {:?}: {summary}",
@@ -2402,7 +2483,11 @@ fn cmd_apply_direct_ssh(
         summary = outcome.summary,
     );
     if !outcome.stderr.is_empty() {
-        eprintln!("--- {label} stderr ---\n{}", outcome.stderr.trim_end(), label = outcome.label);
+        eprintln!(
+            "--- {label} stderr ---\n{}",
+            outcome.stderr.trim_end(),
+            label = outcome.label
+        );
     }
     Ok(match outcome.status {
         AssignmentResultStatus::Succeeded => ExitCode::SUCCESS,
@@ -2439,7 +2524,9 @@ fn cmd_apply_fanout(
         .iter()
         .map(serde_json::to_value)
         .collect::<Result<_, _>>()?;
-    let payload = Arc::new(AssignmentPayload { resources: resources_json });
+    let payload = Arc::new(AssignmentPayload {
+        resources: resources_json,
+    });
 
     // Phase 7da.1: shared ControlMaster pool for the fan-out. Per-host
     // sockets keyed by `%C` (hash of user@host:port) so distinct hosts
@@ -2485,9 +2572,7 @@ fn cmd_apply_fanout(
                     ssh_dispatch::dispatch_apply(&target, &payload, auto_bootstrap)
                 })
                 .await
-                .unwrap_or_else(|join_err| {
-                    Err(anyhow::anyhow!("worker panicked: {join_err}"))
-                });
+                .unwrap_or_else(|join_err| Err(anyhow::anyhow!("worker panicked: {join_err}")));
                 let outcome = match r {
                     Ok(o) => o,
                     Err(e) => ssh_dispatch::DispatchOutcome {
@@ -2498,10 +2583,7 @@ fn cmd_apply_fanout(
                         stderr: String::new(),
                     },
                 };
-                println!(
-                    "← {label}: {:?}: {}",
-                    outcome.status, outcome.summary,
-                );
+                println!("← {label}: {:?}: {}", outcome.status, outcome.summary,);
                 if outcome.is_terminal_failure() && fail_fast {
                     abort_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -2559,7 +2641,10 @@ fn cmd_history(state_dir: &Path, limit: usize, format: OutputFormat) -> Result<E
                 let outcome = if r.failed_count == 0 {
                     format!("ok ({} host(s))", r.host_count)
                 } else {
-                    format!("{} ok / {} failed of {}", r.ok_count, r.failed_count, r.host_count)
+                    format!(
+                        "{} ok / {} failed of {}",
+                        r.ok_count, r.failed_count, r.host_count
+                    )
                 };
                 println!(
                     "{ts}  {actor:>10}  {outcome:>30}  {cmd}",
@@ -2601,8 +2686,13 @@ fn cmd_run(
 
     // Resolve target list: --ssh single-host OR --inventory --group fan-out.
     let targets = if let Some(target_spec) = ssh {
-        vec![ssh_dispatch::SshTarget::parse(&target_spec)?
-            .with_overrides(ssh_key.as_deref(), ssh_port, None)]
+        vec![
+            ssh_dispatch::SshTarget::parse(&target_spec)?.with_overrides(
+                ssh_key.as_deref(),
+                ssh_port,
+                None,
+            ),
+        ]
     } else if let Some(inv_path) = inventory_path {
         let group = group.ok_or_else(|| anyhow!("`--inventory` requires `--group`"))?;
         let inv = inventory::InventoryFile::load(&inv_path)?;
@@ -2624,10 +2714,7 @@ fn cmd_run(
         pool.apply_to(t);
     }
 
-    eprintln!(
-        "→ run on {} host(s): {shell_command:?}",
-        targets.len()
-    );
+    eprintln!("→ run on {} host(s): {shell_command:?}", targets.len());
     let max_parallel = max_parallel.max(1);
     let abort_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outcomes: Arc<Mutex<Vec<ssh_dispatch::DispatchOutcome>>> =
@@ -2658,9 +2745,7 @@ fn cmd_run(
                     ssh_dispatch::dispatch_run(&target, &cmd_str)
                 })
                 .await
-                .unwrap_or_else(|join_err| {
-                    Err(anyhow::anyhow!("worker panicked: {join_err}"))
-                });
+                .unwrap_or_else(|join_err| Err(anyhow::anyhow!("worker panicked: {join_err}")));
                 let outcome = match r {
                     Ok(o) => o,
                     Err(e) => ssh_dispatch::DispatchOutcome {
@@ -2762,17 +2847,22 @@ fn confirm_or_skip(plan: &PlanResult) -> Result<bool> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         anyhow::bail!("non-interactive run requires --yes to apply changes");
     }
-    print!(
-        "Apply {} change(s)? [y/N] ",
-        plan.change_count()
-    );
+    print!("Apply {} change(s)? [y/N] ", plan.change_count());
     std::io::stdout().flush()?;
     let mut s = String::new();
     std::io::stdin().read_line(&mut s)?;
-    Ok(matches!(s.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
-fn cmd_observe(path: &Path, state_dir: &Path, actor: &str, format: OutputFormat) -> Result<ExitCode> {
+fn cmd_observe(
+    path: &Path,
+    state_dir: &Path,
+    actor: &str,
+    format: OutputFormat,
+) -> Result<ExitCode> {
     let resources = load_manifests(path)?;
     let registry = build_registry();
     let _executor = Executor::new(&registry, state_dir.to_path_buf(), actor);
@@ -2828,9 +2918,7 @@ fn cmd_rollback_remote(
     reason: Option<&str>,
     canary_pct: Option<u8>,
 ) -> Result<ExitCode> {
-    use iac_core::protocol::v1::{
-        CanarySpec, RollbackOperationRequest, RollbackOperationResponse,
-    };
+    use iac_core::protocol::v1::{CanarySpec, RollbackOperationRequest, RollbackOperationResponse};
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2844,7 +2932,10 @@ fn cmd_rollback_remote(
         let req = RollbackOperationRequest {
             requested_by: actor.to_string(),
             reason: reason.map(str::to_string),
-            canary: canary_pct.map(|pct| CanarySpec { pct, min_count: None }),
+            canary: canary_pct.map(|pct| CanarySpec {
+                pct,
+                min_count: None,
+            }),
         };
         let resp = client
             .post(format!("{server}/v1/operations/{operation_id}/rollback"))
@@ -2866,9 +2957,7 @@ fn cmd_rollback_remote(
             _ => {
                 println!(
                     "rollback operation: {}\n  reverted: {} resources\n  assignments: {}",
-                    result.new_operation_id,
-                    result.resources_reverted,
-                    result.assignment_count
+                    result.new_operation_id, result.resources_reverted, result.assignment_count
                 );
                 if !result.resources_orphaned.is_empty() {
                     println!(
@@ -2980,12 +3069,12 @@ mod tests {
         assert!(out.starts_with("// iac operation op-abc\n"));
         assert!(out.contains("digraph G {"));
         // Both nodes declared.
-        assert!(out.contains("\"docker.container/prod/web\" [label=\"docker.container/prod/web\"];"));
+        assert!(
+            out.contains("\"docker.container/prod/web\" [label=\"docker.container/prod/web\"];")
+        );
         assert!(out.contains("\"file/prod/web-config\" [label=\"file/prod/web-config\"];"));
         // Edge present.
-        assert!(out.contains(
-            "\"docker.container/prod/web\" -> \"file/prod/web-config\";"
-        ));
+        assert!(out.contains("\"docker.container/prod/web\" -> \"file/prod/web-config\";"));
         assert!(out.trim_end().ends_with("}"));
     }
 

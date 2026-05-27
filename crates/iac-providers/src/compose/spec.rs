@@ -59,8 +59,7 @@ pub enum ComposeState {
 
 impl DockerComposeSpec {
     pub fn from_value(v: &YamlValue) -> Result<Self, String> {
-        let spec: Self = serde_yaml_ng::from_value(v.clone())
-            .map_err(|e| format!("parse: {e}"))?;
+        let spec: Self = serde_yaml_ng::from_value(v.clone()).map_err(|e| format!("parse: {e}"))?;
         spec.validate()?;
         Ok(spec)
     }
@@ -78,7 +77,9 @@ impl DockerComposeSpec {
                 self.project
             ));
         }
-        if self.state == ComposeState::Present && self.source.as_deref().unwrap_or("").trim().is_empty() {
+        if self.state == ComposeState::Present
+            && self.source.as_deref().unwrap_or("").trim().is_empty()
+        {
             return Err("source must be a non-empty compose YAML when state=present".into());
         }
         if let Some(p) = &self.env_file
@@ -183,7 +184,10 @@ source: |
         let v = yaml("project: x\nsource: 'services: {}'\n");
         let s = DockerComposeSpec::from_value(&v).unwrap();
         assert_eq!(s.project_dir(), PathBuf::from("/var/lib/iac/compose/x"));
-        assert_eq!(s.compose_file(), PathBuf::from("/var/lib/iac/compose/x/docker-compose.yml"));
+        assert_eq!(
+            s.compose_file(),
+            PathBuf::from("/var/lib/iac/compose/x/docker-compose.yml")
+        );
     }
 
     #[test]

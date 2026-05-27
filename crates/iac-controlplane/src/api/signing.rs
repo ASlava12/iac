@@ -11,7 +11,7 @@
 
 use crate::error::{ApiError, ApiResult};
 use crate::server::AppState;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{Json, Router, extract::State, routing::get};
 use iac_core::protocol::v1::{SigningPubkey, SigningPubkeyBundle};
 
 pub fn router() -> Router<AppState> {
@@ -31,9 +31,7 @@ async fn pubkey(State(state): State<AppState>) -> ApiResult<Json<SigningPubkey>>
     }))
 }
 
-async fn pubkey_bundle(
-    State(state): State<AppState>,
-) -> ApiResult<Json<SigningPubkeyBundle>> {
+async fn pubkey_bundle(State(state): State<AppState>) -> ApiResult<Json<SigningPubkeyBundle>> {
     let active_key_id = state.signer.key_id();
     let keys = state
         .signer

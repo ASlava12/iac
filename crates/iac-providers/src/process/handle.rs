@@ -9,7 +9,7 @@
 //! a write or read error, the handle marks itself dead, and the
 //! `ExternalProvider` re-spawns transparently (when `restart_on_crash`).
 
-use super::proto::{Frame, Hello, Request, Response, PROTOCOL_VERSION};
+use super::proto::{Frame, Hello, PROTOCOL_VERSION, Request, Response};
 use super::spec::ExternalProviderSpec;
 use iac_core::{Error, Result};
 use parking_lot::Mutex;
@@ -108,21 +108,16 @@ impl PluginHandle {
                     );
                     if transport {
                         let mut state = self.state.lock();
-                        state.consecutive_crashes =
-                            state.consecutive_crashes.saturating_add(1);
+                        state.consecutive_crashes = state.consecutive_crashes.saturating_add(1);
                         // Threshold + backoff: after 3 in a row, set
                         // a cool-off of 2^(n-3) seconds, capped at
                         // 300 s (5 min). 4th = 2 s, 5th = 4 s, …,
                         // 11th and beyond = 300 s.
                         if state.consecutive_crashes >= 3 {
                             let extra = state.consecutive_crashes - 3;
-                            let secs = 2u64
-                                .saturating_pow(extra.min(8))
-                                .min(300);
-                            state.spawn_blocked_until = Some(
-                                Instant::now()
-                                    + std::time::Duration::from_secs(secs),
-                            );
+                            let secs = 2u64.saturating_pow(extra.min(8)).min(300);
+                            state.spawn_blocked_until =
+                                Some(Instant::now() + std::time::Duration::from_secs(secs));
                         }
                         // Drop the dead child; next call_once will
                         // try to respawn (subject to cool-off).
@@ -153,9 +148,8 @@ impl PluginHandle {
             method: method.into(),
             params: params.clone(),
         };
-        let line = serde_json::to_string(&req).map_err(|e| {
-            Error::provider(&self.spec.kind, format!("encode request: {e}"))
-        })?;
+        let line = serde_json::to_string(&req)
+            .map_err(|e| Error::provider(&self.spec.kind, format!("encode request: {e}")))?;
 
         // Borrow the child's pipes via the lock for the duration of the
         // round-trip. Writes are small (one JSON line); reads are bounded
@@ -169,9 +163,8 @@ impl PluginHandle {
             .map_err(|e| Error::provider(&self.spec.kind, format!("write: {e}")))?;
 
         let deadline = Instant::now() + self.spec.call_timeout();
-        let resp = read_response_until(proc, deadline).map_err(|e| {
-            Error::provider(&self.spec.kind, format!("read: {e}"))
-        })?;
+        let resp = read_response_until(proc, deadline)
+            .map_err(|e| Error::provider(&self.spec.kind, format!("read: {e}")))?;
         if resp.id != id {
             return Err(Error::provider(
                 &self.spec.kind,
@@ -223,9 +216,8 @@ impl PluginHandle {
                     format!("read binary {}: {e}", self.spec.binary.display()),
                 )
             })?;
-            crate::sha256_pin::verify_sha256(&bytes, expected, "binary").map_err(|e| {
-                Error::provider(&self.spec.kind, e)
-            })?;
+            crate::sha256_pin::verify_sha256(&bytes, expected, "binary")
+                .map_err(|e| Error::provider(&self.spec.kind, e))?;
         }
         let mut cmd = Command::new(&self.spec.binary);
         cmd.args(&self.spec.args);
@@ -243,22 +235,24 @@ impl PluginHandle {
                 format!("spawn {}: {e}", self.spec.binary.display()),
             )
         })?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            Error::provider(&self.spec.kind, "child stdin missing after spawn")
-        })?;
-        let stdout = BufReader::new(child.stdout.take().ok_or_else(|| {
-            Error::provider(&self.spec.kind, "child stdout missing after spawn")
-        })?);
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::provider(&self.spec.kind, "child stdin missing after spawn"))?;
+        let stdout =
+            BufReader::new(child.stdout.take().ok_or_else(|| {
+                Error::provider(&self.spec.kind, "child stdout missing after spawn")
+            })?);
 
-        let mut proc = RunningProc { child, stdin, stdout };
+        let mut proc = RunningProc {
+            child,
+            stdin,
+            stdout,
+        };
         // Read the first line as the hello message.
         let deadline = Instant::now() + self.spec.handshake_timeout();
-        let line = read_line_until(&mut proc, deadline).map_err(|e| {
-            Error::provider(
-                &self.spec.kind,
-                format!("handshake read: {e}"),
-            )
-        })?;
+        let line = read_line_until(&mut proc, deadline)
+            .map_err(|e| Error::provider(&self.spec.kind, format!("handshake read: {e}")))?;
         let hello: Hello = match serde_json::from_str::<Frame>(&line) {
             Ok(Frame::Hello { hello }) => hello,
             Ok(other) => {
@@ -349,10 +343,7 @@ fn write_line<W: Write>(w: &mut W, line: &str) -> std::io::Result<()> {
 /// "something is wrong" and we'd rather error than OOM.
 const MAX_NDJSON_LINE_BYTES: usize = 16 * 1024 * 1024;
 
-fn read_line_until(
-    proc: &mut RunningProc,
-    deadline: Instant,
-) -> std::io::Result<String> {
+fn read_line_until(proc: &mut RunningProc, deadline: Instant) -> std::io::Result<String> {
     // BufRead::read_line is blocking. To enforce a deadline without
     // pulling in a runtime, we run a polling loop using available()
     // bytes plus a short sleep. We accept a bit of latency on bursts
@@ -394,9 +385,7 @@ fn read_line_until(
         // Has the child exited?
         match proc.child.try_wait() {
             Ok(Some(status)) => {
-                return Err(std::io::Error::other(format!(
-                    "child exited: {status}"
-                )));
+                return Err(std::io::Error::other(format!("child exited: {status}")));
             }
             Ok(None) => {}
             Err(e) => return Err(e),
@@ -405,10 +394,7 @@ fn read_line_until(
     }
 }
 
-fn read_response_until(
-    proc: &mut RunningProc,
-    deadline: Instant,
-) -> std::io::Result<Response> {
+fn read_response_until(proc: &mut RunningProc, deadline: Instant) -> std::io::Result<Response> {
     let line = read_line_until(proc, deadline)?;
     serde_json::from_str::<Response>(&line)
         .map_err(|e| std::io::Error::other(format!("parse response: {e}: {line:?}")))
@@ -536,9 +522,7 @@ echo '{"id":1,"error":"backend down"}'
             binary_sha256: None,
         };
         let handle = PluginHandle::new(spec);
-        let err = handle
-            .call("observe", serde_json::Value::Null)
-            .unwrap_err();
+        let err = handle.call("observe", serde_json::Value::Null).unwrap_err();
         assert!(format!("{err:?}").contains("backend down"));
     }
 
@@ -567,9 +551,7 @@ echo '{"id":1,"error":"backend down"}'
             let _ = handle.call("observe", serde_json::Value::Null).unwrap_err();
         }
         // Fourth call now hits the cool-off gate at spawn time.
-        let err = handle
-            .call("observe", serde_json::Value::Null)
-            .unwrap_err();
+        let err = handle.call("observe", serde_json::Value::Null).unwrap_err();
         let msg = format!("{err:?}");
         assert!(
             msg.contains("cool-off"),

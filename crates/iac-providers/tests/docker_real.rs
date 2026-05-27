@@ -12,7 +12,7 @@
 use iac_core::diff::DiffKind;
 use iac_core::operation::{Step, StepStatus};
 use iac_core::provider::{ApplyContext, Provider};
-use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
 use iac_providers::docker::{DockerCli, DockerProvider};
 use indexmap::IndexMap;
 use serde_yaml_ng::Value as YamlValue;
@@ -33,7 +33,9 @@ fn docker_reachable() -> bool {
 }
 
 fn cleanup_container() {
-    let _ = Command::new("docker").args(["rm", "-f", TEST_CONTAINER]).output();
+    let _ = Command::new("docker")
+        .args(["rm", "-f", TEST_CONTAINER])
+        .output();
 }
 
 fn mk_resource(image: &str) -> Resource {
@@ -105,10 +107,17 @@ fn full_lifecycle_against_real_daemon() {
     assert_eq!(steps.len(), 2, "expected pull + recreate");
 
     // 3. Apply each step.
-    let _cp = provider.pre_apply(&resource, &steps[0], &ctx).expect("pre_apply");
+    let _cp = provider
+        .pre_apply(&resource, &steps[0], &ctx)
+        .expect("pre_apply");
     for s in &steps {
         let r = provider.apply(&resource, s, &ctx).expect("apply");
-        assert_eq!(r.status, StepStatus::Succeeded, "step {} failed: {r:?}", s.action);
+        assert_eq!(
+            r.status,
+            StepStatus::Succeeded,
+            "step {} failed: {r:?}",
+            s.action
+        );
     }
 
     // 4. Verify.
@@ -134,7 +143,9 @@ fn full_lifecycle_against_real_daemon() {
     assert_eq!(d.kind, DiffKind::Update);
     let steps = provider.plan(&absent_resource, &d).expect("plan");
     assert_eq!(steps[0].action, "docker.remove");
-    let r = provider.apply(&absent_resource, &steps[0], &ctx).expect("apply");
+    let r = provider
+        .apply(&absent_resource, &steps[0], &ctx)
+        .expect("apply");
     assert_eq!(r.status, StepStatus::Succeeded);
 
     let observed = provider.observe(&absent_resource).expect("observe");

@@ -80,7 +80,8 @@ async fn agent_registers_then_pushes_observations_and_drift() {
     // Server side should now know about the agent.
     let client = reqwest::Client::new();
     let agents: Vec<AgentSummary> = client
-        .get(format!("{}/v1/agents", server.url_base())).bearer_auth("test-admin")
+        .get(format!("{}/v1/agents", server.url_base()))
+        .bearer_auth("test-admin")
         .send()
         .await
         .unwrap()
@@ -161,12 +162,16 @@ async fn agent_persists_identity_across_runs() {
     let identity_text = std::fs::read_to_string(&a2.config().identity_file).unwrap();
     let id2: serde_json::Value = serde_json::from_str(&identity_text).unwrap();
     let agent_id_2 = id2["agent_id"].as_str().unwrap();
-    assert_eq!(agent_id_1, agent_id_2, "identity should be reused across runs");
+    assert_eq!(
+        agent_id_1, agent_id_2,
+        "identity should be reused across runs"
+    );
 
     // The server should still see exactly ONE agent registered.
     let client = reqwest::Client::new();
     let agents: Vec<AgentSummary> = client
-        .get(format!("{}/v1/agents", server.url_base())).bearer_auth("test-admin")
+        .get(format!("{}/v1/agents", server.url_base()))
+        .bearer_auth("test-admin")
         .send()
         .await
         .unwrap()

@@ -79,18 +79,13 @@ impl EnvResolver {
         "env"
     }
 
-    pub async fn resolve(
-        &self,
-        path: &str,
-        field: Option<&str>,
-    ) -> ApiResult<String> {
+    pub async fn resolve(&self, path: &str, field: Option<&str>) -> ApiResult<String> {
         if field.is_some() {
             return Err(ApiError::BadRequest(
                 "env resolver does not support `#field`; env vars are flat strings".into(),
             ));
         }
-        std::env::var(path)
-            .map_err(|_| ApiError::BadRequest(format!("env var {path:?} not set")))
+        std::env::var(path).map_err(|_| ApiError::BadRequest(format!("env var {path:?} not set")))
     }
 }
 
@@ -186,11 +181,7 @@ impl VaultResolver {
         "vault"
     }
 
-    pub async fn resolve(
-        &self,
-        path: &str,
-        field: Option<&str>,
-    ) -> ApiResult<String> {
+    pub async fn resolve(&self, path: &str, field: Option<&str>) -> ApiResult<String> {
         let field = field.ok_or_else(|| {
             ApiError::BadRequest(
                 "vault resolver requires `#field`; KV v2 returns a JSON object".into(),
@@ -307,9 +298,7 @@ impl SopsResolver {
     /// - paths containing NUL bytes (defence-in-depth — `Command` would also reject)
     fn resolve_sandboxed_path(&self, path: &str) -> ApiResult<std::path::PathBuf> {
         if path.contains('\0') {
-            return Err(ApiError::BadRequest(
-                "sops path contains NUL byte".into(),
-            ));
+            return Err(ApiError::BadRequest("sops path contains NUL byte".into()));
         }
         let candidate = std::path::Path::new(path);
         if candidate.is_absolute() {
@@ -338,11 +327,7 @@ impl SopsResolver {
         Ok(canonical)
     }
 
-    pub async fn resolve(
-        &self,
-        path: &str,
-        field: Option<&str>,
-    ) -> ApiResult<String> {
+    pub async fn resolve(&self, path: &str, field: Option<&str>) -> ApiResult<String> {
         let abs = self.resolve_sandboxed_path(path)?;
 
         let mut cmd = tokio::process::Command::new(&self.binary);
@@ -354,7 +339,8 @@ impl SopsResolver {
             // can write the path inline as `field=outer"]["inner` —
             // which is gnarly enough that we'll add structured support
             // later if it's actually wanted.
-            cmd.arg("--extract").arg(format!("[\"{}\"]", field.replace('"', "\\\"")));
+            cmd.arg("--extract")
+                .arg(format!("[\"{}\"]", field.replace('"', "\\\"")));
         }
         cmd.arg(&abs);
         // Pipe stdin from /dev/null so sops never blocks on prompts —
@@ -363,22 +349,19 @@ impl SopsResolver {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            cmd.output(),
-        )
-        .await
-        .map_err(|_| {
-            ApiError::Internal(format!(
-                "sops {path}: timed out after 10s — keys missing / agent stuck?"
-            ))
-        })?
-        .map_err(|e| {
-            ApiError::Internal(format!(
-                "sops {path}: failed to spawn {:?}: {e}",
-                self.binary
-            ))
-        })?;
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+            .await
+            .map_err(|_| {
+                ApiError::Internal(format!(
+                    "sops {path}: timed out after 10s — keys missing / agent stuck?"
+                ))
+            })?
+            .map_err(|e| {
+                ApiError::Internal(format!(
+                    "sops {path}: failed to spawn {:?}: {e}",
+                    self.binary
+                ))
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -391,9 +374,7 @@ impl SopsResolver {
         }
 
         let mut s = String::from_utf8(output.stdout).map_err(|_| {
-            ApiError::BadRequest(format!(
-                "sops {path}: decrypted output is not valid UTF-8"
-            ))
+            ApiError::BadRequest(format!("sops {path}: decrypted output is not valid UTF-8"))
         })?;
         // sops appends a trailing newline (it prints a YAML/JSON
         // document). For single-field extracts the field value is
@@ -432,11 +413,7 @@ impl Resolver {
         }
     }
 
-    pub async fn resolve(
-        &self,
-        path: &str,
-        field: Option<&str>,
-    ) -> ApiResult<String> {
+    pub async fn resolve(&self, path: &str, field: Option<&str>) -> ApiResult<String> {
         match self {
             Self::Env(r) => r.resolve(path, field).await,
             Self::Vault(r) => r.resolve(path, field).await,
@@ -459,11 +436,7 @@ impl StaticResolver {
     pub fn name(&self) -> &str {
         self.scheme
     }
-    pub async fn resolve(
-        &self,
-        _path: &str,
-        _field: Option<&str>,
-    ) -> ApiResult<String> {
+    pub async fn resolve(&self, _path: &str, _field: Option<&str>) -> ApiResult<String> {
         Ok(self.value.clone())
     }
 }
@@ -487,12 +460,13 @@ impl std::fmt::Debug for SecretRegistry {
 
 impl SecretRegistry {
     pub fn new() -> Self {
-        Self { resolvers: HashMap::new() }
+        Self {
+            resolvers: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, resolver: Resolver) {
-        self.resolvers
-            .insert(resolver.name().to_string(), resolver);
+        self.resolvers.insert(resolver.name().to_string(), resolver);
     }
 
     /// Resolve a single ref. `BadRequest` for unknown schemes — operators
@@ -512,10 +486,7 @@ impl SecretRegistry {
     /// every string field. Returns the count of resolved references. On
     /// error the value is partially mutated; callers should treat it as
     /// poisoned.
-    pub async fn substitute_in_value(
-        &self,
-        value: &mut serde_json::Value,
-    ) -> ApiResult<u32> {
+    pub async fn substitute_in_value(&self, value: &mut serde_json::Value) -> ApiResult<u32> {
         let pointers = collect_string_pointers(value);
         let mut count = 0;
         for ptr in pointers {
@@ -692,8 +663,7 @@ mod tests {
     async fn env_resolver_unset_var_returns_bad_request() {
         let mut reg = SecretRegistry::new();
         reg.register(Resolver::Env(EnvResolver));
-        let mut v =
-            json!({"k": "${secret://env/IAC_DEFINITELY_NOT_SET_FOR_PHASE_7AM_TESTS}"});
+        let mut v = json!({"k": "${secret://env/IAC_DEFINITELY_NOT_SET_FOR_PHASE_7AM_TESTS}"});
         let err = reg.substitute_in_value(&mut v).await.unwrap_err();
         match err {
             ApiError::BadRequest(msg) => assert!(msg.contains("not set")),
@@ -827,10 +797,7 @@ fi
         let base = base_parent.path().join("inside");
 
         let resolver = SopsResolver::new(&base, stub.to_string_lossy()).unwrap();
-        let err = resolver
-            .resolve("../outside.yaml", None)
-            .await
-            .unwrap_err();
+        let err = resolver.resolve("../outside.yaml", None).await.unwrap_err();
         // canonicalize() on `inside/../outside.yaml` resolves to base_parent
         // which does not start with `inside/` → escape rejected.
         match err {
@@ -879,11 +846,7 @@ fi
         let stub_dir = TempDir::new().unwrap();
         let stub = write_stub(stub_dir.path(), "sops", SOPS_STUB);
         let base = TempDir::new().unwrap();
-        std::fs::write(
-            base.path().join("creds.enc.yaml"),
-            "api_token: abc123\n",
-        )
-        .unwrap();
+        std::fs::write(base.path().join("creds.enc.yaml"), "api_token: abc123\n").unwrap();
 
         let mut reg = SecretRegistry::new();
         reg.register(Resolver::Sops(
@@ -901,13 +864,13 @@ fi
     async fn sops_resolver_missing_base_dir_errors_at_construction() {
         let stub_dir = TempDir::new().unwrap();
         let stub = write_stub(stub_dir.path(), "sops", SOPS_STUB);
-        let result = SopsResolver::new(
-            "/nonexistent/sops/base/dir",
-            stub.to_string_lossy(),
-        );
+        let result = SopsResolver::new("/nonexistent/sops/base/dir", stub.to_string_lossy());
         match result {
             Err(ApiError::BadRequest(msg)) => {
-                assert!(msg.contains("not found") || msg.contains("readable"), "{msg}")
+                assert!(
+                    msg.contains("not found") || msg.contains("readable"),
+                    "{msg}"
+                )
             }
             other => panic!("expected BadRequest, got {other:?}"),
         }

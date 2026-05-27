@@ -5,7 +5,9 @@
 //! module replaces those copies. See `mod.rs` for the design.
 
 use super::runtime::{CapabilityKeysStrategy, PluginRuntime};
-use iac_core::convert::{collect_top_level_changes, json_to_yaml, resource_metadata_to_json, yaml_to_json};
+use iac_core::convert::{
+    collect_top_level_changes, json_to_yaml, resource_metadata_to_json, yaml_to_json,
+};
 use iac_core::diff::{Diff, DiffKind};
 use iac_core::operation::{Checkpoint, Step, StepResult, StepStatus};
 use iac_core::provider::{ApplyContext, Provider, VerifyOutcome};
@@ -13,7 +15,7 @@ use iac_core::resource::Resource;
 use iac_core::state::ObservedState;
 use iac_core::{Error, Result};
 use serde::Deserialize;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 use std::path::Path;
 
@@ -75,14 +77,9 @@ impl<R: PluginRuntime> PluginProvider<R> {
 
     /// Decode a typed response. `method` is only used for the error
     /// message (operators see "decode observe: ..." etc.).
-    fn decode<T: for<'de> Deserialize<'de>>(
-        &self,
-        method: &str,
-        raw: Json,
-    ) -> Result<T> {
-        serde_json::from_value(raw).map_err(|e| {
-            Error::provider(self.runtime.kind(), format!("decode {method}: {e}"))
-        })
+    fn decode<T: for<'de> Deserialize<'de>>(&self, method: &str, raw: Json) -> Result<T> {
+        serde_json::from_value(raw)
+            .map_err(|e| Error::provider(self.runtime.kind(), format!("decode {method}: {e}")))
     }
 
     fn observe_inner(&self, resource: &Resource) -> Result<ObserveResp> {
@@ -146,10 +143,7 @@ impl<R: PluginRuntime> Provider for PluginProvider<R> {
         // Built-in fallback: spec-equality diff. Identical to what
         // shellout / external / wasm-core all did separately before
         // the unification.
-        let desired_absent = matches!(
-            spec_state_field(&resource.spec).as_deref(),
-            Some("absent")
-        );
+        let desired_absent = matches!(spec_state_field(&resource.spec).as_deref(), Some("absent"));
         match (observed.present, desired_absent) {
             (false, true) => Ok(Diff::no_change()),
             (false, false) => Ok(Diff {
@@ -198,12 +192,7 @@ impl<R: PluginRuntime> Provider for PluginProvider<R> {
         )])
     }
 
-    fn pre_apply(
-        &self,
-        resource: &Resource,
-        _step: &Step,
-        _ctx: &ApplyContext,
-    ) -> Result<Json> {
+    fn pre_apply(&self, resource: &Resource, _step: &Step, _ctx: &ApplyContext) -> Result<Json> {
         if self.runtime.supports(PRE_APPLY) {
             return self.runtime.call(PRE_APPLY, self.envelope(resource));
         }
@@ -218,12 +207,7 @@ impl<R: PluginRuntime> Provider for PluginProvider<R> {
         }))
     }
 
-    fn apply(
-        &self,
-        resource: &Resource,
-        step: &Step,
-        _ctx: &ApplyContext,
-    ) -> Result<StepResult> {
+    fn apply(&self, resource: &Resource, step: &Step, _ctx: &ApplyContext) -> Result<StepResult> {
         let phase = phase_of_action(&step.action).ok_or_else(|| {
             Error::provider(
                 self.runtime.kind(),
@@ -346,13 +330,14 @@ impl<R: PluginRuntime> Provider for PluginProvider<R> {
                 let mut out = Vec::with_capacity(templates.len());
                 for tmpl in &templates {
                     out.push(
-                        iac_core::template::render_yaml_top_scalars(tmpl, &resource.spec)
-                            .map_err(|e| {
+                        iac_core::template::render_yaml_top_scalars(tmpl, &resource.spec).map_err(
+                            |e| {
                                 Error::provider(
                                     self.runtime.kind(),
                                     format!("capability_keys[{tmpl:?}]: {e}"),
                                 )
-                            })?,
+                            },
+                        )?,
                     );
                 }
                 Ok(out)
@@ -363,7 +348,10 @@ impl<R: PluginRuntime> Provider for PluginProvider<R> {
                 // surface that as "no keys" rather than erroring —
                 // matches the pre-7di.1 behaviour where wasm modules
                 // could legitimately omit the optional export.
-                match self.runtime.call("capability_keys", self.envelope(resource)) {
+                match self
+                    .runtime
+                    .call("capability_keys", self.envelope(resource))
+                {
                     Ok(raw) => self.decode("capability_keys", raw),
                     Err(_) => Ok(Vec::new()),
                 }

@@ -40,7 +40,12 @@ fn default_reversible() -> bool {
 
 impl Diff {
     pub fn no_change() -> Self {
-        Self { kind: DiffKind::NoChange, changes: vec![], reasons: vec![], reversible: true }
+        Self {
+            kind: DiffKind::NoChange,
+            changes: vec![],
+            reasons: vec![],
+            reversible: true,
+        }
     }
 
     pub fn is_change(&self) -> bool {

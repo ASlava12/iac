@@ -1,15 +1,15 @@
 //! Read-only audit endpoint. Admin token required — these events expose
 //! operator activity and resource identifiers.
 
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::error::ApiResult;
 use crate::identity::Role;
 use crate::server::AppState;
 use crate::store::{AuditChainTip, AuditFilter};
 use axum::{
+    Json, Router,
     extract::{Query, State},
     routing::get,
-    Json, Router,
 };
 use iac_core::protocol::v1::AuditEvent;
 use serde::{Deserialize, Serialize};

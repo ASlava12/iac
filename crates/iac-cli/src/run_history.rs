@@ -77,17 +77,15 @@ impl RunRecord {
 /// audit-log persistence is a "nice to have" and the operator
 /// already saw the per-host output on stdout.
 pub fn append(state_dir: &Path, record: RunRecord) -> Result<()> {
-    std::fs::create_dir_all(state_dir).with_context(|| {
-        format!("creating state_dir {} for run-history", state_dir.display())
-    })?;
+    std::fs::create_dir_all(state_dir)
+        .with_context(|| format!("creating state_dir {} for run-history", state_dir.display()))?;
     let path = state_dir.join(HISTORY_FILE);
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let line = serde_json::to_string(&record)
-        .with_context(|| "serialising run-history record")?;
+    let line = serde_json::to_string(&record).with_context(|| "serialising run-history record")?;
     writeln!(file, "{line}").with_context(|| format!("writing to {}", path.display()))?;
     Ok(())
 }
@@ -99,8 +97,8 @@ pub fn read_recent(state_dir: &Path, limit: usize) -> Result<Vec<RunRecord>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let mut records: Vec<RunRecord> = text
         .lines()
         .filter_map(|line| serde_json::from_str::<RunRecord>(line).ok())
@@ -152,8 +150,16 @@ mod tests {
     #[test]
     fn append_is_append_only() {
         let dir = TempDir::new().unwrap();
-        let r1 = RunRecord::new("bob", "ls", &[outcome("h1", AssignmentResultStatus::Succeeded)]);
-        let r2 = RunRecord::new("bob", "df", &[outcome("h1", AssignmentResultStatus::Succeeded)]);
+        let r1 = RunRecord::new(
+            "bob",
+            "ls",
+            &[outcome("h1", AssignmentResultStatus::Succeeded)],
+        );
+        let r2 = RunRecord::new(
+            "bob",
+            "df",
+            &[outcome("h1", AssignmentResultStatus::Succeeded)],
+        );
         append(dir.path(), r1).unwrap();
         append(dir.path(), r2).unwrap();
         let recent = read_recent(dir.path(), 100).unwrap();

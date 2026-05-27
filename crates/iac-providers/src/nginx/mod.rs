@@ -27,12 +27,12 @@ pub use backend::{MockNginx, NginxBackend, NginxCli};
 pub use spec::{NginxState, NginxVhostSpec};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -50,7 +50,9 @@ impl Default for NginxProvider {
 
 impl NginxProvider {
     pub fn new() -> Self {
-        Self { backend: Box::new(NginxCli) }
+        Self {
+            backend: Box::new(NginxCli),
+        }
     }
 
     /// Phase 7dh.8: test-only dependency injection. Pre-7dh.8 this
@@ -103,8 +105,10 @@ impl Provider for NginxProvider {
         // back to know what to restore from on validation failure.
         let cp_path = ctx.workspace.join("checkpoint.json");
         let checkpoint: Json = if cp_path.exists() {
-            let bytes = std::fs::read(&cp_path)
-                .map_err(|e| Error::Io { path: cp_path.clone(), source: e })?;
+            let bytes = std::fs::read(&cp_path).map_err(|e| Error::Io {
+                path: cp_path.clone(),
+                source: e,
+            })?;
             serde_json::from_slice::<iac_core::operation::Checkpoint>(&bytes)
                 .map_err(Error::from)?
                 .data
@@ -146,7 +150,7 @@ impl Provider for NginxProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+    use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
     use indexmap::IndexMap;
     use serde_yaml_ng::{Mapping, Value as YamlValue};
     use tempfile::TempDir;

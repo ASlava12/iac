@@ -19,7 +19,7 @@
 //! 7. Rollback with `--reason` propagates the reason into the
 //!    summary + audit payload.
 
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     AssignmentResultRequest, AssignmentResultStatus, CanarySpec, RegisterRequest,
     RollbackOperationRequest, RollbackOperationResponse, SubmitOperationRequest,
@@ -94,12 +94,21 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, store, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            store,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -128,7 +137,11 @@ impl TestServer {
         body["agent_id"].as_str().unwrap().to_string()
     }
 
-    async fn submit(&self, env: &str, resources: Vec<serde_json::Value>) -> SubmitOperationResponse {
+    async fn submit(
+        &self,
+        env: &str,
+        resources: Vec<serde_json::Value>,
+    ) -> SubmitOperationResponse {
         let resp = reqwest::Client::new()
             .post(format!("{}/v1/operations", self.url()))
             .bearer_auth(ADMIN_TOKEN)
@@ -143,7 +156,12 @@ impl TestServer {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "submit failed: {}", resp.text().await.unwrap());
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "submit failed: {}",
+            resp.text().await.unwrap()
+        );
         resp.json().await.unwrap()
     }
 
@@ -199,7 +217,10 @@ async fn drive_to_success(store: &Store, op_id: &str) {
             items: vec![],
             summary: None,
         };
-        store.complete_assignment(&agent_id, &id, &result).await.unwrap();
+        store
+            .complete_assignment(&agent_id, &id, &result)
+            .await
+            .unwrap();
     }
 }
 
@@ -211,16 +232,24 @@ async fn rollback_reverts_to_prior_spec() {
     server.register_agent("vm-a", "prod").await;
 
     let v1 = server
-        .submit("prod", vec![file_resource("greet", "prod", "vm-a", "hello-v1")])
+        .submit(
+            "prod",
+            vec![file_resource("greet", "prod", "vm-a", "hello-v1")],
+        )
         .await;
     drive_to_success(&server.store, &v1.operation_id).await;
 
     let v2 = server
-        .submit("prod", vec![file_resource("greet", "prod", "vm-a", "hello-v2")])
+        .submit(
+            "prod",
+            vec![file_resource("greet", "prod", "vm-a", "hello-v2")],
+        )
         .await;
     drive_to_success(&server.store, &v2.operation_id).await;
 
-    let resp = server.rollback(&v2.operation_id, Some("regression"), None).await;
+    let resp = server
+        .rollback(&v2.operation_id, Some("regression"), None)
+        .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: RollbackOperationResponse = resp.json().await.unwrap();
     assert_eq!(body.resources_reverted, 1);
@@ -228,13 +257,12 @@ async fn rollback_reverts_to_prior_spec() {
     assert_eq!(body.assignment_count, 1);
 
     // Inspect what got persisted as desired_state for the rollback op.
-    let new_spec: String = sqlx::query_scalar(
-        "SELECT spec_json FROM desired_states WHERE operation_id = ?",
-    )
-    .bind(&body.new_operation_id)
-    .fetch_one(server.store.pool())
-    .await
-    .unwrap();
+    let new_spec: String =
+        sqlx::query_scalar("SELECT spec_json FROM desired_states WHERE operation_id = ?")
+            .bind(&body.new_operation_id)
+            .fetch_one(server.store.pool())
+            .await
+            .unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&new_spec).unwrap();
     let content = parsed["spec"]["content"].as_str().unwrap();
     assert_eq!(content, "hello-v1\n", "rollback must restore v1's content");
@@ -260,24 +288,22 @@ async fn rollback_chain_walks_back_one_step() {
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
     }
     // Find the v3 op id.
-    let v3_id: String = sqlx::query_scalar(
-        "SELECT id FROM operations ORDER BY created_at DESC LIMIT 1",
-    )
-    .fetch_one(server.store.pool())
-    .await
-    .unwrap();
+    let v3_id: String =
+        sqlx::query_scalar("SELECT id FROM operations ORDER BY created_at DESC LIMIT 1")
+            .fetch_one(server.store.pool())
+            .await
+            .unwrap();
 
     let resp = server.rollback(&v3_id, None, None).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: RollbackOperationResponse = resp.json().await.unwrap();
 
-    let new_spec: String = sqlx::query_scalar(
-        "SELECT spec_json FROM desired_states WHERE operation_id = ?",
-    )
-    .bind(&body.new_operation_id)
-    .fetch_one(server.store.pool())
-    .await
-    .unwrap();
+    let new_spec: String =
+        sqlx::query_scalar("SELECT spec_json FROM desired_states WHERE operation_id = ?")
+            .bind(&body.new_operation_id)
+            .fetch_one(server.store.pool())
+            .await
+            .unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&new_spec).unwrap();
     let content = parsed["spec"]["content"].as_str().unwrap();
     assert_eq!(content, "v2\n", "rollback walks back exactly one step");
@@ -357,18 +383,24 @@ async fn rollback_inherits_canary_spec() {
     drive_to_success(&server.store, &v2.operation_id).await;
 
     let resp = server
-        .rollback(&v2.operation_id, None, Some(CanarySpec { pct: 50, min_count: None }))
+        .rollback(
+            &v2.operation_id,
+            None,
+            Some(CanarySpec {
+                pct: 50,
+                min_count: None,
+            }),
+        )
         .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: RollbackOperationResponse = resp.json().await.unwrap();
 
-    let rows: Vec<(Option<i64>, String)> = sqlx::query_as(
-        "SELECT batch, status FROM assignments WHERE operation_id = ?",
-    )
-    .bind(&body.new_operation_id)
-    .fetch_all(server.store.pool())
-    .await
-    .unwrap();
+    let rows: Vec<(Option<i64>, String)> =
+        sqlx::query_as("SELECT batch, status FROM assignments WHERE operation_id = ?")
+            .bind(&body.new_operation_id)
+            .fetch_all(server.store.pool())
+            .await
+            .unwrap();
     assert_eq!(rows.len(), 2);
     let canary_count = rows.iter().filter(|(b, _)| *b == Some(0)).count();
     let baseline_count = rows.iter().filter(|(b, _)| *b == Some(1)).count();
@@ -396,7 +428,9 @@ async fn rollback_emits_audit_event_with_linkage() {
         .await;
     drive_to_success(&server.store, &v2.operation_id).await;
 
-    let resp = server.rollback(&v2.operation_id, Some("incident-1234"), None).await;
+    let resp = server
+        .rollback(&v2.operation_id, Some("incident-1234"), None)
+        .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: RollbackOperationResponse = resp.json().await.unwrap();
 

@@ -108,7 +108,7 @@ pub fn effective_client_ip(
     trusted_proxies: &[std::net::IpAddr],
 ) -> std::net::IpAddr {
     let socket_ip = socket_addr.ip();
-    if trusted_proxies.is_empty() || !trusted_proxies.iter().any(|p| *p == socket_ip) {
+    if trusted_proxies.is_empty() || !trusted_proxies.contains(&socket_ip) {
         return socket_ip;
     }
     let Some(hv) = headers.get("x-forwarded-for") else {

@@ -8,9 +8,9 @@
 
 //! Indirection over `systemctl` so tests can run without a live systemd.
 
+use crate::subprocess::run_capture_stdout;
 use iac_core::{Error, Result};
 use std::collections::HashMap;
-use crate::subprocess::run_capture_stdout;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -32,7 +32,10 @@ pub struct UnitInfo {
 impl UnitInfo {
     /// True if unit-file is enabled in either persistent or runtime form.
     pub fn is_enabled(&self) -> bool {
-        matches!(self.unit_file_state.as_str(), "enabled" | "enabled-runtime" | "alias")
+        matches!(
+            self.unit_file_state.as_str(),
+            "enabled" | "enabled-runtime" | "alias"
+        )
     }
 
     pub fn is_active(&self) -> bool {
@@ -136,9 +139,21 @@ pub fn parse_show(output: &str) -> UnitInfo {
         }
     }
     UnitInfo {
-        load_state: props.get("LoadState").copied().unwrap_or("unknown").to_string(),
-        active_state: props.get("ActiveState").copied().unwrap_or("unknown").to_string(),
-        sub_state: props.get("SubState").copied().unwrap_or("unknown").to_string(),
+        load_state: props
+            .get("LoadState")
+            .copied()
+            .unwrap_or("unknown")
+            .to_string(),
+        active_state: props
+            .get("ActiveState")
+            .copied()
+            .unwrap_or("unknown")
+            .to_string(),
+        sub_state: props
+            .get("SubState")
+            .copied()
+            .unwrap_or("unknown")
+            .to_string(),
         unit_file_state: props
             .get("UnitFileState")
             .copied()
@@ -185,10 +200,15 @@ impl MockSystemctl {
 impl Systemctl for MockSystemctl {
     fn show(&self, unit: &str) -> Result<UnitInfo> {
         self.record("show", unit);
-        self.units.lock().unwrap().get(unit).cloned().ok_or_else(|| {
-            // Mimic systemd's "not-found" loaded state for unknown units.
-            Error::provider("systemd", format!("mock: unit {unit} not registered"))
-        })
+        self.units
+            .lock()
+            .unwrap()
+            .get(unit)
+            .cloned()
+            .ok_or_else(|| {
+                // Mimic systemd's "not-found" loaded state for unknown units.
+                Error::provider("systemd", format!("mock: unit {unit} not registered"))
+            })
     }
     fn enable(&self, unit: &str) -> Result<()> {
         self.record("enable", unit);

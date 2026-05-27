@@ -1,8 +1,5 @@
 // Phase 7cz.16: tests-only exemption for unwrap/expect/panic.
-#![cfg_attr(
-    test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)
-)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod api;
 pub mod auth;
@@ -17,10 +14,10 @@ pub mod policy;
 pub mod rate_limit;
 pub mod retention;
 pub mod secrets;
+pub mod server;
 pub mod signing;
 pub mod ssh_push;
 pub mod store;
-pub mod server;
 pub mod tls;
 pub mod webhook;
 

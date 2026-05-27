@@ -82,9 +82,8 @@ pub fn fetch_revision(
     // populated. `--depth 1` keeps it cheap; rev-parse below verifies
     // the ref actually exists locally after the fetch.
     let fetch_args = ["fetch", "--depth=1", "--quiet", "origin", ref_spec];
-    run_git(&repo_dir, &fetch_args).with_context(|| {
-        format!("git fetch {repo_url} ref={ref_spec} (does the ref exist?)")
-    })?;
+    run_git(&repo_dir, &fetch_args)
+        .with_context(|| format!("git fetch {repo_url} ref={ref_spec} (does the ref exist?)"))?;
 
     // FETCH_HEAD always points at what we just pulled. Resolve to a
     // canonical SHA before checkout — no chance of a different
@@ -108,10 +107,7 @@ pub fn fetch_revision(
         _ => repo_dir.clone(),
     };
     if !root.exists() {
-        anyhow::bail!(
-            "path {} does not exist in {repo_url}@{sha}",
-            root.display()
-        );
+        anyhow::bail!("path {} does not exist in {repo_url}@{sha}", root.display());
     }
     Ok(GitCheckout { root, sha })
 }
@@ -233,8 +229,7 @@ mod tests {
 
         let cache = dir.path().join("cache");
         let url = format!("file://{}", upstream.display());
-        let err =
-            fetch_revision(&url, "main", Some("does/not/exist"), &cache).unwrap_err();
+        let err = fetch_revision(&url, "main", Some("does/not/exist"), &cache).unwrap_err();
         assert!(err.to_string().contains("does not exist"));
     }
 }

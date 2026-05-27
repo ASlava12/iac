@@ -12,9 +12,7 @@
 // subdomain is unused.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use iac_providers::dns::{
-    CloudflareCli, CloudflareCreds, DnsBackend, RecordType,
-};
+use iac_providers::dns::{CloudflareCli, CloudflareCreds, DnsBackend, RecordType};
 
 fn token() -> Option<String> {
     std::env::var("CLOUDFLARE_DNS_API_TOKEN").ok()
@@ -38,9 +36,7 @@ fn random_name() -> String {
 #[test]
 fn cloudflare_create_read_update_delete_txt_record() {
     let (Some(tok), Some(zone)) = (token(), zone()) else {
-        eprintln!(
-            "skipping: set CLOUDFLARE_DNS_API_TOKEN and CLOUDFLARE_TEST_ZONE"
-        );
+        eprintln!("skipping: set CLOUDFLARE_DNS_API_TOKEN and CLOUDFLARE_TEST_ZONE");
         return;
     };
 
@@ -76,15 +72,8 @@ fn cloudflare_create_read_update_delete_txt_record() {
     assert_eq!(found.ttl, 300);
 
     // 3. Update.
-    cli.update_record(
-        &zone,
-        &id,
-        &fqdn,
-        RecordType::TXT,
-        "iac-real-test-v2",
-        600,
-    )
-    .expect("update_record");
+    cli.update_record(&zone, &id, &fqdn, RecordType::TXT, "iac-real-test-v2", 600)
+        .expect("update_record");
 
     let updated = cli
         .find_record(&zone, &fqdn, RecordType::TXT)

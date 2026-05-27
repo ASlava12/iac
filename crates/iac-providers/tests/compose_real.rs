@@ -11,7 +11,7 @@
 use iac_core::diff::DiffKind;
 use iac_core::operation::{Step, StepStatus};
 use iac_core::provider::{ApplyContext, Provider};
-use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
 use iac_providers::compose::DockerComposeProvider;
 use indexmap::IndexMap;
 use serde_yaml_ng::Value as YamlValue;
@@ -33,7 +33,14 @@ fn compose_reachable() -> bool {
 
 fn cleanup() {
     let _ = Command::new("docker")
-        .args(["compose", "-p", TEST_PROJECT, "down", "--remove-orphans", "-v"])
+        .args([
+            "compose",
+            "-p",
+            TEST_PROJECT,
+            "down",
+            "--remove-orphans",
+            "-v",
+        ])
         .output();
 }
 
@@ -100,7 +107,9 @@ fn compose_full_lifecycle_against_real_daemon() {
     // 2. Apply: compose up.
     let steps: Vec<Step> = provider.plan(&res, &d).expect("plan");
     assert!(!steps.is_empty(), "plan produced no steps");
-    let _cp = provider.pre_apply(&res, &steps[0], &ctx).expect("pre_apply");
+    let _cp = provider
+        .pre_apply(&res, &steps[0], &ctx)
+        .expect("pre_apply");
     for s in &steps {
         let r = provider.apply(&res, s, &ctx).expect("apply");
         assert_eq!(r.status, StepStatus::Succeeded, "{}: {r:?}", s.action);
@@ -132,7 +141,9 @@ fn compose_full_lifecycle_against_real_daemon() {
     );
 
     let steps = provider.plan(&res_absent, &d).expect("plan absent");
-    let _cp = provider.pre_apply(&res_absent, &steps[0], &ctx).expect("pre_apply absent");
+    let _cp = provider
+        .pre_apply(&res_absent, &steps[0], &ctx)
+        .expect("pre_apply absent");
     for s in &steps {
         let r = provider.apply(&res_absent, s, &ctx).expect("apply absent");
         assert_eq!(r.status, StepStatus::Succeeded, "absent: {r:?}");

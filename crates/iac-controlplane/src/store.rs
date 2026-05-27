@@ -284,7 +284,11 @@ impl Store {
         if self.dialect != Dialect::Sqlite {
             return Ok(());
         }
-        let mode = if force_truncate { "TRUNCATE" } else { "PASSIVE" };
+        let mode = if force_truncate {
+            "TRUNCATE"
+        } else {
+            "PASSIVE"
+        };
         sqlx::query(&format!("PRAGMA wal_checkpoint({mode})"))
             .execute(&self.pool)
             .await
@@ -353,11 +357,18 @@ impl Store {
                 )
                 .await?;
                 tx.commit().await?;
-                Ok(AgentCredentials { agent_id: id, token, expires_at })
+                Ok(AgentCredentials {
+                    agent_id: id,
+                    token,
+                    expires_at,
+                })
             }
             Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
                 tx.rollback().await.ok();
-                Err(ApiError::Conflict(format!("agent name {} already taken", req.name)))
+                Err(ApiError::Conflict(format!(
+                    "agent name {} already taken",
+                    req.name
+                )))
             }
             Err(e) => {
                 tx.rollback().await.ok();
@@ -386,11 +397,9 @@ impl Store {
         });
 
         let mut tx = self.pool.begin().await?;
-        let res = sqlx::query(&sql(
-            "UPDATE agents
+        let res = sqlx::query(&sql("UPDATE agents
              SET token_hash = ?, token_expires_at = ?
-             WHERE id = ?",
-        ))
+             WHERE id = ?"))
         .bind(&new_hash)
         .bind(&new_expires_at)
         .bind(agent_id)
@@ -461,25 +470,19 @@ impl Store {
         })
     }
 
-    pub async fn record_heartbeat(
-        &self,
-        agent_id: &str,
-        hb: &HeartbeatRequest,
-    ) -> ApiResult<()> {
+    pub async fn record_heartbeat(&self, agent_id: &str, hb: &HeartbeatRequest) -> ApiResult<()> {
         let now = Timestamp::now().to_string();
         let status = match hb.status {
             AgentHealth::Healthy => "healthy",
             AgentHealth::Degraded => "degraded",
             AgentHealth::Unhealthy => "unhealthy",
         };
-        sqlx::query(&sql(
-            "UPDATE agents SET
+        sqlx::query(&sql("UPDATE agents SET
                 last_heartbeat_at = ?,
                 last_status = ?,
                 last_managed = ?,
                 last_open_drifts = ?
-             WHERE id = ?",
-        ))
+             WHERE id = ?"))
         .bind(&now)
         .bind(status)
         .bind(i64::from(hb.managed))
@@ -525,11 +528,7 @@ impl Store {
     ///
     /// Returns the agent_id (newly minted ULID for first-time
     /// registration; stable across restarts thereafter).
-    pub async fn upsert_ssh_target(
-        &self,
-        name: &str,
-        environment: &str,
-    ) -> ApiResult<String> {
+    pub async fn upsert_ssh_target(&self, name: &str, environment: &str) -> ApiResult<String> {
         let now = Timestamp::now().to_string();
         // Check if a row with this (name, environment, kind='ssh') already exists.
         let existing: Option<String> = sqlx::query_scalar(&sql(
@@ -587,8 +586,7 @@ impl Store {
         }
         let mut tx = self.pool.begin().await?;
         let now_ts = Timestamp::now();
-        let lease_cutoff =
-            (now_ts - jiff::ToSpan::seconds(assignment_lease_secs())).to_string();
+        let lease_cutoff = (now_ts - jiff::ToSpan::seconds(assignment_lease_secs())).to_string();
         let now = now_ts.to_string();
         // Build the IN clause. SQLx Any-pool doesn't support array
         // binding so we render placeholders inline.
@@ -697,11 +695,13 @@ impl Store {
             }
             q.execute(&mut *tx).await?;
         }
-        sqlx::query(&sql("UPDATE agents SET last_observation_at = ? WHERE id = ?"))
-            .bind(&now)
-            .bind(agent_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(&sql(
+            "UPDATE agents SET last_observation_at = ? WHERE id = ?",
+        ))
+        .bind(&now)
+        .bind(agent_id)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(total)
     }
@@ -722,11 +722,9 @@ impl Store {
             // existing one with new diff/severity/detected_at. Insert a new row
             // only when no open row exists. Resolved rows stay around as
             // history.
-            let updated = sqlx::query(&sql(
-                "UPDATE drift_events
+            let updated = sqlx::query(&sql("UPDATE drift_events
                  SET kind = ?, severity = ?, diff_json = ?, detected_at = ?, received_at = ?
-                 WHERE agent_id = ? AND resource_id = ? AND resolved_at IS NULL",
-            ))
+                 WHERE agent_id = ? AND resource_id = ? AND resolved_at IS NULL"))
             .bind(&item.resource_id.kind)
             .bind(&item.severity)
             .bind(&diff_json)
@@ -737,12 +735,10 @@ impl Store {
             .execute(&mut *tx)
             .await?;
             if updated.rows_affected() == 0 {
-                sqlx::query(&sql(
-                    "INSERT INTO drift_events
+                sqlx::query(&sql("INSERT INTO drift_events
                       (agent_id, resource_id, kind, severity, diff_json,
                        detected_at, received_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
-                ))
+                     VALUES (?, ?, ?, ?, ?, ?, ?)"))
                 .bind(agent_id)
                 .bind(&rid)
                 .bind(&item.resource_id.kind)
@@ -794,13 +790,11 @@ impl Store {
         &self,
         resource_id: &str,
     ) -> ApiResult<Option<(String, String)>> {
-        let row: Option<(String, String)> = sqlx::query_as(&sql(
-            "SELECT environment, spec_json
+        let row: Option<(String, String)> = sqlx::query_as(&sql("SELECT environment, spec_json
              FROM desired_states
              WHERE resource_id = ?
              ORDER BY id DESC
-             LIMIT 1",
-        ))
+             LIMIT 1"))
         .bind(resource_id)
         .fetch_optional(&self.pool)
         .await?;
@@ -827,11 +821,9 @@ impl Store {
     pub async fn accept_drift(&self, drift_id: i64, actor: &str, reason: &str) -> ApiResult<()> {
         let now = Timestamp::now().to_string();
         let mut tx = self.pool.begin().await?;
-        let res = sqlx::query(&sql(
-            "UPDATE drift_events
+        let res = sqlx::query(&sql("UPDATE drift_events
              SET resolved_at = ?, resolution = ?, ignored_until = NULL
-             WHERE id = ? AND resolved_at IS NULL",
-        ))
+             WHERE id = ? AND resolved_at IS NULL"))
         .bind(&now)
         .bind(format!("accepted: {reason}"))
         .bind(drift_id)
@@ -977,10 +969,8 @@ impl Store {
             .parse()
             .map_err(|e| ApiError::BadRequest(format!("invalid `until`: {e}")))?;
         let mut tx = self.pool.begin().await?;
-        let res = sqlx::query(&sql(
-            "UPDATE drift_events SET ignored_until = ?
-             WHERE id = ? AND resolved_at IS NULL",
-        ))
+        let res = sqlx::query(&sql("UPDATE drift_events SET ignored_until = ?
+             WHERE id = ? AND resolved_at IS NULL"))
         .bind(ts.to_string())
         .bind(drift_id)
         .execute(&mut *tx)
@@ -1017,7 +1007,9 @@ impl Store {
             .await?
         } else {
             // SQLite doesn't support arrays; build an `IN (?,?,?)` placeholder.
-            let placeholders = std::iter::repeat_n("?", current.len()).collect::<Vec<_>>().join(",");
+            let placeholders = std::iter::repeat_n("?", current.len())
+                .collect::<Vec<_>>()
+                .join(",");
             let q = format!(
                 "UPDATE drift_events SET resolved_at = ?, resolution = 'agent stopped reporting'
                  WHERE agent_id = ? AND resolved_at IS NULL
@@ -1093,16 +1085,19 @@ impl Store {
         canary: Option<iac_core::protocol::v1::CanarySpec>,
     ) -> ApiResult<CreateOperationOutcome> {
         // Snapshot the agent table into an environment → name → id map.
-        let agents: Vec<(String, String, String)> = sqlx::query_as(&sql(
-            "SELECT id, name, environment FROM agents",
-        ))
-        .fetch_all(&self.pool)
-        .await?;
+        let agents: Vec<(String, String, String)> =
+            sqlx::query_as(&sql("SELECT id, name, environment FROM agents"))
+                .fetch_all(&self.pool)
+                .await?;
 
         let mut tx = self.pool.begin().await?;
         let op_id = Ulid::new().to_string();
         let now = Timestamp::now().to_string();
-        let initial_status = if requires_approval { "pending_approval" } else { "pending" };
+        let initial_status = if requires_approval {
+            "pending_approval"
+        } else {
+            "pending"
+        };
         let policies_json = serde_json::to_string(matched_policies)?;
         sqlx::query(&sql(
             "INSERT INTO operations (id, kind, environment, requested_by, status,
@@ -1178,12 +1173,12 @@ impl Store {
                     strip_routing_hints(&mut value);
                     resources_for_payload.push(value);
                 }
-                let payload = AssignmentPayload { resources: resources_for_payload };
+                let payload = AssignmentPayload {
+                    resources: resources_for_payload,
+                };
                 let payload_json = serde_json::to_string(&payload)?;
 
-                let batch = canary_assignment
-                    .get(&(agent_id.clone(), *layer))
-                    .copied();
+                let batch = canary_assignment.get(&(agent_id.clone(), *layer)).copied();
                 let initial_assignment_status = match (*layer, batch) {
                     // Phase 7by: layer-0 ships immediately if there's
                     // no canary, OR if it's the canary batch.
@@ -1286,18 +1281,15 @@ impl Store {
         }
 
         // Snapshot the desired_states and registered agents so we can re-route.
-        let desired_rows = sqlx::query(&sql(
-            "SELECT resource_id, kind, environment, spec_json
-             FROM desired_states WHERE operation_id = ?",
-        ))
+        let desired_rows = sqlx::query(&sql("SELECT resource_id, kind, environment, spec_json
+             FROM desired_states WHERE operation_id = ?"))
         .bind(op_id)
         .fetch_all(&self.pool)
         .await?;
-        let agents: Vec<(String, String, String)> = sqlx::query_as(&sql(
-            "SELECT id, name, environment FROM agents",
-        ))
-        .fetch_all(&self.pool)
-        .await?;
+        let agents: Vec<(String, String, String)> =
+            sqlx::query_as(&sql("SELECT id, name, environment FROM agents"))
+                .fetch_all(&self.pool)
+                .await?;
 
         let mut tx = self.pool.begin().await?;
         let now = Timestamp::now().to_string();
@@ -1306,8 +1298,7 @@ impl Store {
         // it, compute layers — same pipeline the submit path uses, just
         // running on persisted desired_states. Bucket by (agent, layer)
         // so approved operations also get phased dispatch.
-        let mut routing_list: Vec<ResourceForRouting> =
-            Vec::with_capacity(desired_rows.len());
+        let mut routing_list: Vec<ResourceForRouting> = Vec::with_capacity(desired_rows.len());
         for r in &desired_rows {
             let resource_json: String = r.try_get("spec_json")?;
             let value: serde_json::Value = serde_json::from_str(&resource_json)?;
@@ -1367,14 +1358,18 @@ impl Store {
                 .iter()
                 .map(|s| serde_json::from_str(s))
                 .collect::<Result<_, _>>()?;
-            let payload = AssignmentPayload { resources: resources_for_payload };
+            let payload = AssignmentPayload {
+                resources: resources_for_payload,
+            };
             let payload_json = serde_json::to_string(&payload)?;
-            let initial_status = if *layer == 0 { "pending" } else { "pending_layer" };
-            sqlx::query(&sql(
-                "INSERT INTO assignments
+            let initial_status = if *layer == 0 {
+                "pending"
+            } else {
+                "pending_layer"
+            };
+            sqlx::query(&sql("INSERT INTO assignments
                   (id, agent_id, operation_id, payload_json, created_at, status, kind, layer)
-                 VALUES (?, ?, ?, ?, ?, ?, 'apply', ?)",
-            ))
+                 VALUES (?, ?, ?, ?, ?, ?, 'apply', ?)"))
             .bind(&assignment_id)
             .bind(agent_id)
             .bind(op_id)
@@ -1387,14 +1382,20 @@ impl Store {
             assignment_count += 1;
         }
 
-        let new_status = if assignment_count == 0 { "succeeded" } else { "pending" };
-        let finished_at = if assignment_count == 0 { Some(now.as_str()) } else { None };
-        sqlx::query(&sql(
-            "UPDATE operations
+        let new_status = if assignment_count == 0 {
+            "succeeded"
+        } else {
+            "pending"
+        };
+        let finished_at = if assignment_count == 0 {
+            Some(now.as_str())
+        } else {
+            None
+        };
+        sqlx::query(&sql("UPDATE operations
              SET status = ?, approved_by = ?, approved_at = ?, approval_reason = ?,
                  finished_at = COALESCE(?, finished_at)
-             WHERE id = ?",
-        ))
+             WHERE id = ?"))
         .bind(new_status)
         .bind(approver_display)
         .bind(&now)
@@ -1475,8 +1476,7 @@ impl Store {
             //    that touched the same resource_id. We exclude the
             //    target op itself + any op that didn't reach a useful
             //    terminal state. Newest-first via the join's ORDER BY.
-            let prior = sqlx::query(&sql(
-                "SELECT ds.spec_json, ds.kind, ds.environment
+            let prior = sqlx::query(&sql("SELECT ds.spec_json, ds.kind, ds.environment
                  FROM desired_states ds
                  JOIN operations o ON o.id = ds.operation_id
                  WHERE ds.resource_id = ?
@@ -1486,8 +1486,7 @@ impl Store {
                        SELECT created_at FROM operations WHERE id = ?
                    )
                  ORDER BY o.created_at DESC, ds.id DESC
-                 LIMIT 1",
-            ))
+                 LIMIT 1"))
             .bind(&resource_id)
             .bind(op_id)
             .bind(op_id)
@@ -1539,12 +1538,10 @@ impl Store {
         }
         let mut tx = self.pool.begin().await?;
         let now = Timestamp::now().to_string();
-        let res = sqlx::query(&sql(
-            "UPDATE operations
+        let res = sqlx::query(&sql("UPDATE operations
              SET status = 'rejected', rejected_by = ?, rejected_at = ?,
                  rejection_reason = ?, finished_at = ?
-             WHERE id = ? AND status = 'pending_approval'",
-        ))
+             WHERE id = ? AND status = 'pending_approval'"))
         .bind(rejector_display)
         .bind(&now)
         .bind(reason)
@@ -1596,19 +1593,16 @@ impl Store {
     ) -> ApiResult<Vec<AssignmentEnvelope>> {
         let mut tx = self.pool.begin().await?;
         let now_ts = Timestamp::now();
-        let lease_cutoff =
-            (now_ts - jiff::ToSpan::seconds(assignment_lease_secs())).to_string();
+        let lease_cutoff = (now_ts - jiff::ToSpan::seconds(assignment_lease_secs())).to_string();
         let now = now_ts.to_string();
-        let rows = sqlx::query(&sql(
-            "UPDATE assignments
+        let rows = sqlx::query(&sql("UPDATE assignments
              SET status = 'fetched', fetched_at = ?
              WHERE agent_id = ?
                AND (
                  status = 'pending'
                  OR (status = 'fetched' AND fetched_at IS NOT NULL AND fetched_at < ?)
                )
-             RETURNING id, operation_id, kind, payload_json, created_at, expires_at",
-        ))
+             RETURNING id, operation_id, kind, payload_json, created_at, expires_at"))
         .bind(&now)
         .bind(agent_id)
         .bind(&lease_cutoff)
@@ -1616,8 +1610,7 @@ impl Store {
         .await?;
 
         let mut out = Vec::with_capacity(rows.len());
-        let mut op_ids_seen: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut op_ids_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for row in rows {
             let id: String = row.try_get("id")?;
             let payload_json: String = row.try_get("payload_json")?;
@@ -1695,11 +1688,9 @@ impl Store {
             AssignmentResultStatus::Failed => "failed",
         };
         let now = Timestamp::now().to_string();
-        sqlx::query(&sql(
-            "UPDATE assignments
+        sqlx::query(&sql("UPDATE assignments
              SET status = ?, completed_at = ?, result_json = ?
-             WHERE id = ?",
-        ))
+             WHERE id = ?"))
         .bind(status)
         .bind(&now)
         .bind(&result_json)
@@ -1813,11 +1804,9 @@ impl Store {
             .ok_or(ApiError::NotFound)?;
         let environment: String = op_row.try_get("environment")?;
 
-        let rows = sqlx::query(&sql(
-            "SELECT resource_id, kind, environment, spec_json
+        let rows = sqlx::query(&sql("SELECT resource_id, kind, environment, spec_json
              FROM desired_states WHERE operation_id = ?
-             ORDER BY id",
-        ))
+             ORDER BY id"))
         .bind(operation_id)
         .fetch_all(&self.pool)
         .await?;
@@ -1890,12 +1879,10 @@ impl Store {
                 .await?
             }
             None => {
-                sqlx::query(&sql(&format!(
-                    "{base} ORDER BY created_at DESC LIMIT ?"
-                )))
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
+                sqlx::query(&sql(&format!("{base} ORDER BY created_at DESC LIMIT ?")))
+                    .bind(limit)
+                    .fetch_all(&self.pool)
+                    .await?
             }
         };
         for r in rows {
@@ -1955,8 +1942,7 @@ impl Store {
 
         let status_str: String = row.try_get("status")?;
         let matched_json: String = row.try_get("matched_policies_json")?;
-        let matched_policies: Vec<String> =
-            serde_json::from_str(&matched_json).unwrap_or_default();
+        let matched_policies: Vec<String> = serde_json::from_str(&matched_json).unwrap_or_default();
         Ok(OperationView {
             id: row.try_get("id")?,
             kind: row.try_get("kind")?,
@@ -2002,11 +1988,7 @@ fn parse_operation_status(s: &str) -> OperationStatus {
 /// match the promote / cancel queries). Safe to call from multiple
 /// completions racing against each other; SQL row updates serialize
 /// via the active transaction.
-async fn advance_phased_apply(
-    conn: &mut AnyConnection,
-    op_id: &str,
-    now: &str,
-) -> ApiResult<()> {
+async fn advance_phased_apply(conn: &mut AnyConnection, op_id: &str, now: &str) -> ApiResult<()> {
     // Phase 7cg: canary gating runs first. Within any layer that has
     // pending_canary baseline assignments, check the canary batch:
     //   * Any canary failure → cancel both rest of canary and the
@@ -2018,10 +2000,8 @@ async fn advance_phased_apply(
     // Find the lowest layer that still has any `pending_layer`
     // assignments. That's the next candidate for promotion or
     // cancellation. If none, phasing is already settled.
-    let next_layer: Option<i64> = sqlx::query_scalar(&sql(
-        "SELECT MIN(layer) FROM assignments
-         WHERE operation_id = ? AND status = 'pending_layer'",
-    ))
+    let next_layer: Option<i64> = sqlx::query_scalar(&sql("SELECT MIN(layer) FROM assignments
+         WHERE operation_id = ? AND status = 'pending_layer'"))
     .bind(op_id)
     .fetch_optional(&mut *conn)
     .await?
@@ -2034,11 +2014,9 @@ async fn advance_phased_apply(
     // has no rows at all (could happen after cancellation pruning),
     // treat as 'all succeeded' so the next layer flows through.
     let prev_layer = next_layer - 1;
-    let rows: Vec<(String, i64)> = sqlx::query_as(&sql(
-        "SELECT status, COUNT(*) FROM assignments
+    let rows: Vec<(String, i64)> = sqlx::query_as(&sql("SELECT status, COUNT(*) FROM assignments
          WHERE operation_id = ? AND layer = ?
-         GROUP BY status",
-    ))
+         GROUP BY status"))
     .bind(op_id)
     .bind(prev_layer)
     .fetch_all(&mut *conn)
@@ -2067,11 +2045,9 @@ async fn advance_phased_apply(
         // remaining rollout. Mark every remaining `pending_layer`
         // assignment as `cancelled` with completed_at=now so the op
         // rollup sees them as terminal.
-        sqlx::query(&sql(
-            "UPDATE assignments
+        sqlx::query(&sql("UPDATE assignments
              SET status = 'cancelled', completed_at = ?
-             WHERE operation_id = ? AND status = 'pending_layer'",
-        ))
+             WHERE operation_id = ? AND status = 'pending_layer'"))
         .bind(now)
         .bind(op_id)
         .execute(&mut *conn)
@@ -2088,11 +2064,9 @@ async fn advance_phased_apply(
 
     // Promote the next layer's pending_layer → pending so agents
     // start picking them up on their next poll.
-    sqlx::query(&sql(
-        "UPDATE assignments
+    sqlx::query(&sql("UPDATE assignments
          SET status = 'pending'
-         WHERE operation_id = ? AND layer = ? AND status = 'pending_layer'",
-    ))
+         WHERE operation_id = ? AND layer = ? AND status = 'pending_layer'"))
     .bind(op_id)
     .bind(next_layer)
     .execute(&mut *conn)
@@ -2120,34 +2094,28 @@ async fn advance_phased_apply(
 /// single completion that finishes layer-0 canary and triggers
 /// promotion of layer-0 baseline doesn't need a separate trip
 /// through this function.
-async fn advance_canary(
-    conn: &mut AnyConnection,
-    op_id: &str,
-    now: &str,
-) -> ApiResult<()> {
+async fn advance_canary(conn: &mut AnyConnection, op_id: &str, now: &str) -> ApiResult<()> {
     // Distinct layers with pending_canary baseline waiting.
-    let waiting_layers: Vec<i64> = sqlx::query_scalar(&sql(
-        "SELECT DISTINCT layer FROM assignments
-         WHERE operation_id = ? AND status = 'pending_canary'",
-    ))
-    .bind(op_id)
-    .fetch_all(&mut *conn)
-    .await?;
+    let waiting_layers: Vec<i64> =
+        sqlx::query_scalar(&sql("SELECT DISTINCT layer FROM assignments
+         WHERE operation_id = ? AND status = 'pending_canary'"))
+        .bind(op_id)
+        .fetch_all(&mut *conn)
+        .await?;
     if waiting_layers.is_empty() {
         return Ok(());
     }
 
     for layer in waiting_layers {
         // Inspect the canary batch (batch = 0) at this layer.
-        let rows: Vec<(String, i64)> = sqlx::query_as(&sql(
-            "SELECT status, COUNT(*) FROM assignments
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as(&sql("SELECT status, COUNT(*) FROM assignments
              WHERE operation_id = ? AND layer = ? AND batch = 0
-             GROUP BY status",
-        ))
-        .bind(op_id)
-        .bind(layer)
-        .fetch_all(&mut *conn)
-        .await?;
+             GROUP BY status"))
+            .bind(op_id)
+            .bind(layer)
+            .fetch_all(&mut *conn)
+            .await?;
 
         let (mut still_running, mut failed_count, mut succeeded_count) = (0i64, 0i64, 0i64);
         for (s, n) in rows {
@@ -2165,13 +2133,11 @@ async fn advance_canary(
             // pending_canary or pending_layer for this op. Operator
             // sees the smallest blast radius — only the failed canary
             // ever touched real state.
-            sqlx::query(&sql(
-                "UPDATE assignments
+            sqlx::query(&sql("UPDATE assignments
                  SET status = 'cancelled', completed_at = ?
                  WHERE operation_id = ?
                    AND status IN ('pending_canary', 'pending_layer', 'pending', 'fetched')
-                   AND NOT (layer = ? AND batch = 0)",
-            ))
+                   AND NOT (layer = ? AND batch = 0)"))
             .bind(now)
             .bind(op_id)
             .bind(layer)
@@ -2209,11 +2175,7 @@ async fn advance_canary(
     Ok(())
 }
 
-async fn roll_up_operation(
-    conn: &mut AnyConnection,
-    op_id: &str,
-    now: &str,
-) -> ApiResult<()> {
+async fn roll_up_operation(conn: &mut AnyConnection, op_id: &str, now: &str) -> ApiResult<()> {
     // Count assignment statuses for this op.
     let rows: Vec<(String, i64)> = sqlx::query_as(&sql(
         "SELECT status, COUNT(*) FROM assignments WHERE operation_id = ? GROUP BY status",
@@ -2369,10 +2331,14 @@ fn route_resource(
             "hostSelector.name={host:?} but no agent registered in environment={operation_env:?}"
         ));
     }
-    let env_agents: Vec<&(String, String, String)> =
-        agents.iter().filter(|(_, _, env)| env == operation_env).collect();
+    let env_agents: Vec<&(String, String, String)> = agents
+        .iter()
+        .filter(|(_, _, env)| env == operation_env)
+        .collect();
     match env_agents.len() {
-        0 => Err(format!("no agents registered in environment={operation_env:?}")),
+        0 => Err(format!(
+            "no agents registered in environment={operation_env:?}"
+        )),
         1 => Ok(env_agents[0].0.clone()),
         n => Err(format!(
             "{n} agents in environment={operation_env:?}; resource needs spec.hostSelector.name"
@@ -2468,15 +2434,20 @@ impl Store {
         let id: String = row.try_get("id")?;
         let username: String = row.try_get("username")?;
         let roles_json: String = row.try_get("roles_json")?;
-        let roles: Vec<crate::identity::Role> = serde_json::from_str(&roles_json).unwrap_or_default();
+        let roles: Vec<crate::identity::Role> =
+            serde_json::from_str(&roles_json).unwrap_or_default();
 
         // Issue token. Same shape as agent tokens: 256-bit random,
         // sha256(token) stored.
         let (token, token_hash) = crate::auth::issue_token();
         let now = Timestamp::now();
-        let expires = now.checked_add(jiff::Span::new().try_seconds(ttl_secs).map_err(|e| {
-            ApiError::Internal(format!("ttl span: {e}"))
-        })?).map_err(|e| ApiError::Internal(format!("ttl arithmetic: {e}")))?;
+        let expires = now
+            .checked_add(
+                jiff::Span::new()
+                    .try_seconds(ttl_secs)
+                    .map_err(|e| ApiError::Internal(format!("ttl span: {e}")))?,
+            )
+            .map_err(|e| ApiError::Internal(format!("ttl arithmetic: {e}")))?;
         sqlx::query(&sql(
             "INSERT INTO user_tokens (token_hash, user_id, issued_at, expires_at)
              VALUES (?, ?, ?, ?)",
@@ -2491,7 +2462,11 @@ impl Store {
         Ok((
             token,
             expires.to_string(),
-            crate::identity::UserRecord { id, username, roles },
+            crate::identity::UserRecord {
+                id,
+                username,
+                roles,
+            },
         ))
     }
 
@@ -2511,12 +2486,10 @@ impl Store {
         let now_str = now.to_string();
 
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query(&sql(
-            "SELECT u.id, u.username, u.roles_json, u.disabled_at
+        let row = sqlx::query(&sql("SELECT u.id, u.username, u.roles_json, u.disabled_at
              FROM user_tokens t
              JOIN users u ON u.id = t.user_id
-             WHERE t.token_hash = ? AND t.expires_at > ?",
-        ))
+             WHERE t.token_hash = ? AND t.expires_at > ?"))
         .bind(&old_hash)
         .bind(&now_str)
         .fetch_optional(&mut *tx)
@@ -2563,7 +2536,11 @@ impl Store {
         Ok((
             new_token,
             expires.to_string(),
-            crate::identity::UserRecord { id, username, roles },
+            crate::identity::UserRecord {
+                id,
+                username,
+                roles,
+            },
         ))
     }
 
@@ -2575,12 +2552,10 @@ impl Store {
     ) -> ApiResult<Option<crate::identity::UserRecord>> {
         let token_hash = crate::auth::hash_token(token);
         let now = Timestamp::now().to_string();
-        let row = sqlx::query(&sql(
-            "SELECT u.id, u.username, u.roles_json, u.disabled_at
+        let row = sqlx::query(&sql("SELECT u.id, u.username, u.roles_json, u.disabled_at
              FROM user_tokens t
              JOIN users u ON u.id = t.user_id
-             WHERE t.token_hash = ? AND t.expires_at > ?",
-        ))
+             WHERE t.token_hash = ? AND t.expires_at > ?"))
         .bind(token_hash)
         .bind(&now)
         .fetch_optional(&self.pool)
@@ -2591,7 +2566,8 @@ impl Store {
             return Ok(None);
         }
         let roles_json: String = row.try_get("roles_json")?;
-        let roles: Vec<crate::identity::Role> = serde_json::from_str(&roles_json).unwrap_or_default();
+        let roles: Vec<crate::identity::Role> =
+            serde_json::from_str(&roles_json).unwrap_or_default();
         Ok(Some(crate::identity::UserRecord {
             id: row.try_get("id")?,
             username: row.try_get("username")?,
@@ -2661,12 +2637,7 @@ impl Store {
         roles: &[crate::identity::Role],
     ) -> ApiResult<()> {
         let mut tx = self.pool.begin().await?;
-        ensure_active_admin_remains(
-            &mut *tx,
-            user_id,
-            ProposedChange::SetRoles(roles),
-        )
-        .await?;
+        ensure_active_admin_remains(&mut *tx, user_id, ProposedChange::SetRoles(roles)).await?;
         let roles_json = serde_json::to_string(roles)?;
         let res = sqlx::query(&sql("UPDATE users SET roles_json = ? WHERE id = ?"))
             .bind(roles_json)
@@ -2689,10 +2660,8 @@ impl Store {
         let mut tx = self.pool.begin().await?;
         ensure_active_admin_remains(&mut *tx, user_id, ProposedChange::Disable).await?;
         let now = Timestamp::now().to_string();
-        let res = sqlx::query(&sql(
-            "UPDATE users SET disabled_at = ?
-             WHERE id = ? AND disabled_at IS NULL",
-        ))
+        let res = sqlx::query(&sql("UPDATE users SET disabled_at = ?
+             WHERE id = ? AND disabled_at IS NULL"))
         .bind(&now)
         .bind(user_id)
         .execute(&mut *tx)
@@ -2714,10 +2683,8 @@ impl Store {
     /// Re-enable a previously-disabled user. Doesn't issue a fresh token —
     /// the user must `iac login` again.
     pub async fn enable_user(&self, user_id: &str) -> ApiResult<()> {
-        let res = sqlx::query(&sql(
-            "UPDATE users SET disabled_at = NULL
-             WHERE id = ? AND disabled_at IS NOT NULL",
-        ))
+        let res = sqlx::query(&sql("UPDATE users SET disabled_at = NULL
+             WHERE id = ? AND disabled_at IS NOT NULL"))
         .bind(user_id)
         .execute(&self.pool)
         .await?;
@@ -2848,7 +2815,13 @@ pub struct AuditRecord<'a> {
 
 impl<'a> AuditRecord<'a> {
     pub fn new(actor: &'a str, kind: &'a str) -> Self {
-        Self { actor, kind, severity: "info", payload: serde_json::Value::Null, ..Default::default() }
+        Self {
+            actor,
+            kind,
+            severity: "info",
+            payload: serde_json::Value::Null,
+            ..Default::default()
+        }
     }
     #[must_use]
     pub fn severity(mut self, s: &'a str) -> Self {
@@ -3092,10 +3065,7 @@ impl Store {
 /// chain) and updates the materialised `audit_chain_tip` row in the
 /// same tx. Tampering with any historical row breaks the chain at
 /// that point; operators detect via [`Store::audit_verify_chain`].
-async fn record_audit_on(
-    tx: &mut sqlx::AnyConnection,
-    rec: AuditRecord<'_>,
-) -> ApiResult<()> {
+async fn record_audit_on(tx: &mut sqlx::AnyConnection, rec: AuditRecord<'_>) -> ApiResult<()> {
     let payload_json = serde_json::to_string(&rec.payload)?;
     let now = Timestamp::now().to_string();
     // Read the current chain tip. Default to "" if the table is fresh
@@ -3131,13 +3101,11 @@ async fn record_audit_on(
     // row's id while preserving every other field is easy to spot
     // (id no longer monotonically increases).
     let row_hash = compute_audit_row_hash(&prev_hash, 0, &inputs);
-    sqlx::query(&sql(
-        "INSERT INTO audit_events
+    sqlx::query(&sql("INSERT INTO audit_events
             (timestamp, actor, kind, severity,
              operation_id, agent_id, resource_id, drift_id, payload_json,
              prev_hash, row_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ))
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
     .bind(&now)
     .bind(rec.actor)
     .bind(rec.kind)
@@ -3160,11 +3128,9 @@ async fn record_audit_on(
         .as_ref()
         .and_then(|r| r.try_get::<i64, _>("last_id").ok())
         .unwrap_or(0);
-    sqlx::query(&sql(
-        "UPDATE audit_chain_tip
+    sqlx::query(&sql("UPDATE audit_chain_tip
          SET last_id = ?, last_hash = ?, updated_at = ?
-         WHERE id = 1",
-    ))
+         WHERE id = 1"))
     .bind(prev_last_id + 1)
     .bind(&row_hash)
     .bind(&now)
@@ -3310,34 +3276,97 @@ fn parse_health(s: &str) -> AgentHealth {
 
 const MIGRATIONS_SQLITE: &[(i64, &str)] = &[
     (1, include_str!("../migrations/20260429000001_init.sql")),
-    (2, include_str!("../migrations/20260429000002_assignments.sql")),
-    (3, include_str!("../migrations/20260429000003_drift_workflow.sql")),
+    (
+        2,
+        include_str!("../migrations/20260429000002_assignments.sql"),
+    ),
+    (
+        3,
+        include_str!("../migrations/20260429000003_drift_workflow.sql"),
+    ),
     (4, include_str!("../migrations/20260429000004_audit.sql")),
     (5, include_str!("../migrations/20260430000005_approval.sql")),
     (6, include_str!("../migrations/20260430000006_rbac.sql")),
-    (7, include_str!("../migrations/20260430000007_webhook_state.sql")),
-    (8, include_str!("../migrations/20260501000008_webhook_backoff.sql")),
-    (9, include_str!("../migrations/20260501000009_phased_apply.sql")),
-    (10, include_str!("../migrations/20260501000010_agent_token_ttl.sql")),
+    (
+        7,
+        include_str!("../migrations/20260430000007_webhook_state.sql"),
+    ),
+    (
+        8,
+        include_str!("../migrations/20260501000008_webhook_backoff.sql"),
+    ),
+    (
+        9,
+        include_str!("../migrations/20260501000009_phased_apply.sql"),
+    ),
+    (
+        10,
+        include_str!("../migrations/20260501000010_agent_token_ttl.sql"),
+    ),
     (11, include_str!("../migrations/20260502000011_canary.sql")),
-    (12, include_str!("../migrations/20260502000012_ssh_targets.sql")),
-    (13, include_str!("../migrations/20260503000013_audit_chain.sql")),
+    (
+        12,
+        include_str!("../migrations/20260502000012_ssh_targets.sql"),
+    ),
+    (
+        13,
+        include_str!("../migrations/20260503000013_audit_chain.sql"),
+    ),
 ];
 
 const MIGRATIONS_POSTGRES: &[(i64, &str)] = &[
-    (1, include_str!("../migrations-postgres/20260429000001_init.sql")),
-    (2, include_str!("../migrations-postgres/20260429000002_assignments.sql")),
-    (3, include_str!("../migrations-postgres/20260429000003_drift_workflow.sql")),
-    (4, include_str!("../migrations-postgres/20260429000004_audit.sql")),
-    (5, include_str!("../migrations-postgres/20260430000005_approval.sql")),
-    (6, include_str!("../migrations-postgres/20260430000006_rbac.sql")),
-    (7, include_str!("../migrations-postgres/20260430000007_webhook_state.sql")),
-    (8, include_str!("../migrations-postgres/20260501000008_webhook_backoff.sql")),
-    (9, include_str!("../migrations-postgres/20260501000009_phased_apply.sql")),
-    (10, include_str!("../migrations-postgres/20260501000010_agent_token_ttl.sql")),
-    (11, include_str!("../migrations-postgres/20260502000011_canary.sql")),
-    (12, include_str!("../migrations-postgres/20260502000012_ssh_targets.sql")),
-    (13, include_str!("../migrations-postgres/20260503000013_audit_chain.sql")),
+    (
+        1,
+        include_str!("../migrations-postgres/20260429000001_init.sql"),
+    ),
+    (
+        2,
+        include_str!("../migrations-postgres/20260429000002_assignments.sql"),
+    ),
+    (
+        3,
+        include_str!("../migrations-postgres/20260429000003_drift_workflow.sql"),
+    ),
+    (
+        4,
+        include_str!("../migrations-postgres/20260429000004_audit.sql"),
+    ),
+    (
+        5,
+        include_str!("../migrations-postgres/20260430000005_approval.sql"),
+    ),
+    (
+        6,
+        include_str!("../migrations-postgres/20260430000006_rbac.sql"),
+    ),
+    (
+        7,
+        include_str!("../migrations-postgres/20260430000007_webhook_state.sql"),
+    ),
+    (
+        8,
+        include_str!("../migrations-postgres/20260501000008_webhook_backoff.sql"),
+    ),
+    (
+        9,
+        include_str!("../migrations-postgres/20260501000009_phased_apply.sql"),
+    ),
+    (
+        10,
+        include_str!("../migrations-postgres/20260501000010_agent_token_ttl.sql"),
+    ),
+    (
+        11,
+        include_str!("../migrations-postgres/20260502000011_canary.sql"),
+    ),
+    (
+        12,
+        include_str!("../migrations-postgres/20260502000012_ssh_targets.sql"),
+    ),
+    (
+        13,
+        include_str!("../migrations-postgres/20260503000013_audit_chain.sql"),
+    ),
 ];
 
 fn chunk_has_sql(s: &str) -> bool {
@@ -3376,11 +3405,10 @@ async fn run_migrations(pool: &AnyPool, dialect: Dialect) -> ApiResult<()> {
     let max_known: i64 = migrations.iter().map(|(v, _)| *v).max().unwrap_or(0);
     // `MAX(version)` returns NULL on an empty table — first-connect
     // case. Bind as `Option<i64>` so we don't trip the i64 decoder.
-    let max_applied: Option<(Option<i64>,)> = sqlx::query_as(&sql(
-        "SELECT MAX(version) FROM _iac_migrations",
-    ))
-    .fetch_optional(pool)
-    .await?;
+    let max_applied: Option<(Option<i64>,)> =
+        sqlx::query_as(&sql("SELECT MAX(version) FROM _iac_migrations"))
+            .fetch_optional(pool)
+            .await?;
     let max_applied = max_applied.and_then(|(v,)| v).unwrap_or(0);
     if max_applied > max_known {
         return Err(ApiError::Internal(format!(
@@ -3393,11 +3421,12 @@ async fn run_migrations(pool: &AnyPool, dialect: Dialect) -> ApiResult<()> {
     }
 
     for (version, body) in migrations {
-        let row: Option<(i64,)> =
-            sqlx::query_as(&sql("SELECT version FROM _iac_migrations WHERE version = ?"))
-                .bind(*version)
-                .fetch_optional(pool)
-                .await?;
+        let row: Option<(i64,)> = sqlx::query_as(&sql(
+            "SELECT version FROM _iac_migrations WHERE version = ?",
+        ))
+        .bind(*version)
+        .fetch_optional(pool)
+        .await?;
         if row.is_some() {
             continue;
         }
@@ -3422,11 +3451,13 @@ async fn run_migrations(pool: &AnyPool, dialect: Dialect) -> ApiResult<()> {
             }
             sqlx::query(stmt).execute(&mut *tx).await?;
         }
-        sqlx::query(&sql("INSERT INTO _iac_migrations (version, applied_at) VALUES (?, ?)"))
-            .bind(*version)
-            .bind(jiff::Timestamp::now().to_string())
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(&sql(
+            "INSERT INTO _iac_migrations (version, applied_at) VALUES (?, ?)",
+        ))
+        .bind(*version)
+        .bind(jiff::Timestamp::now().to_string())
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         tracing::info!(version, "applied migration");
     }

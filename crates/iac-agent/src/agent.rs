@@ -96,9 +96,8 @@ impl Agent {
             if registry.get(&kind).is_some() {
                 warn!(kind = %kind, "shellout provider overrides built-in or earlier registration");
             }
-            let runtime = ShellOutRuntime::new(p.clone()).map_err(|e| {
-                anyhow::anyhow!("shellout_providers[{}]: {e}", kind)
-            })?;
+            let runtime = ShellOutRuntime::new(p.clone())
+                .map_err(|e| anyhow::anyhow!("shellout_providers[{}]: {e}", kind))?;
             registry.register(Box::new(runtime.into_provider()));
             info!(kind = %kind, "registered shellout provider");
         }
@@ -107,9 +106,8 @@ impl Agent {
             if registry.get(&kind).is_some() {
                 warn!(kind = %kind, "external provider overrides built-in or earlier registration");
             }
-            let runtime = ExternalRuntime::new(p.clone()).map_err(|e| {
-                anyhow::anyhow!("external_providers[{}]: {e}", kind)
-            })?;
+            let runtime = ExternalRuntime::new(p.clone())
+                .map_err(|e| anyhow::anyhow!("external_providers[{}]: {e}", kind))?;
             registry.register(Box::new(runtime.into_provider()));
             info!(kind = %kind, binary = %p.binary.display(), "registered external provider");
         }
@@ -145,9 +143,8 @@ impl Agent {
             // executor doesn't care which one is registered.
             match p.runtime {
                 WasmRuntimeKind::Core => {
-                    let runtime = WasmRuntimeAdapter::new(p.clone()).map_err(|e| {
-                        anyhow::anyhow!("wasm_providers[{}] (core): {e}", kind)
-                    })?;
+                    let runtime = WasmRuntimeAdapter::new(p.clone())
+                        .map_err(|e| anyhow::anyhow!("wasm_providers[{}] (core): {e}", kind))?;
                     registry.register(Box::new(runtime.into_provider()));
                     info!(kind = %kind, module = %p.module.display(), runtime = "core", "registered wasm provider");
                 }
@@ -290,7 +287,11 @@ impl Agent {
             // that window and replays it would otherwise re-execute
             // the assignment. We persist every assignment_id we've
             // seen and silently no-op on a repeat.
-            match self.inner.store.assignment_already_processed(&env.assignment_id) {
+            match self
+                .inner
+                .store
+                .assignment_already_processed(&env.assignment_id)
+            {
                 Ok(Some(prior_status)) => {
                     warn!(
                         assignment = %env.assignment_id,
@@ -567,9 +568,10 @@ impl Agent {
         // Best-effort: drain any assignments waiting for us. Done after the
         // observation push so the server has fresh state when planning.
         if self.has_remote().await
-            && let Err(e) = self.drain_assignments().await {
-                warn!(error = %e, "draining assignments failed");
-            }
+            && let Err(e) = self.drain_assignments().await
+        {
+            warn!(error = %e, "draining assignments failed");
+        }
 
         // Phase 7da.4: auto-rotate the bearer token before it expires.
         // Server returns `expires_at` in `RegisterResponse`; the
@@ -607,7 +609,11 @@ impl Agent {
         // 3× the current remaining time-to-expiry.
         let safety_secs = (remaining / 2).max(3600);
         let identity_path = &self.inner.config.identity_file;
-        if client.rotate_if_needed(identity_path, safety_secs).await?.is_some() {
+        if client
+            .rotate_if_needed(identity_path, safety_secs)
+            .await?
+            .is_some()
+        {
             tracing::info!(
                 remaining_secs_before = remaining,
                 "auto-rotated agent token"
@@ -631,9 +637,7 @@ impl Agent {
         let Some(client) = remote.as_ref() else {
             return Ok(());
         };
-        client
-            .heartbeat(AgentHealth::Healthy, 0, 0, None)
-            .await?;
+        client.heartbeat(AgentHealth::Healthy, 0, 0, None).await?;
         debug!("initial heartbeat ping sent");
         Ok(())
     }
@@ -1056,7 +1060,11 @@ fn observe_resources_blocking(
     let finished_at = Timestamp::now();
     let duration_ms = u64::try_from(started_instant.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    let error_summary = if errors.is_empty() { None } else { Some(errors.join("; ")) };
+    let error_summary = if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    };
     inner.store.record_run(
         started_at,
         Some(finished_at),

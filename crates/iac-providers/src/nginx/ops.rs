@@ -2,14 +2,14 @@ use super::backend::NginxBackend;
 use super::render;
 use super::spec::{NginxState, NginxVhostSpec};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     hash::sha256_hex,
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::{Mapping, Value as YamlValue};
 
 pub fn observe(backend: &dyn NginxBackend, spec: &NginxVhostSpec) -> Result<ObservedState> {
@@ -20,9 +20,15 @@ pub fn observe(backend: &dyn NginxBackend, spec: &NginxVhostSpec) -> Result<Obse
             let sha = sha256_hex(text.as_bytes());
             facts.insert("present".into(), YamlValue::Bool(true));
             facts.insert("content_sha256".into(), YamlValue::String(sha.clone()));
-            facts.insert("size".into(), YamlValue::Number(serde_yaml_ng::Number::from(text.len() as u64)));
+            facts.insert(
+                "size".into(),
+                YamlValue::Number(serde_yaml_ng::Number::from(text.len() as u64)),
+            );
             let mut spec_value = Mapping::new();
-            spec_value.insert("config_path".into(), YamlValue::String(spec.config_path.display().to_string()));
+            spec_value.insert(
+                "config_path".into(),
+                YamlValue::String(spec.config_path.display().to_string()),
+            );
             spec_value.insert("content_sha256".into(), YamlValue::String(sha));
             Ok(ObservedState {
                 present: true,
@@ -174,13 +180,19 @@ pub fn apply(
                 ));
             }
             backend.reload()?;
-            Ok(StepResult::ok(format!("removed and reloaded {}", spec.config_path.display())))
+            Ok(StepResult::ok(format!(
+                "removed and reloaded {}",
+                spec.config_path.display()
+            )))
         }
     }
 }
 
 fn restore(backend: &dyn NginxBackend, path: &std::path::Path, checkpoint: &Json) -> Result<()> {
-    let existed = checkpoint.get("existed").and_then(Json::as_bool).unwrap_or(false);
+    let existed = checkpoint
+        .get("existed")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
     if existed {
         if let Some(content) = checkpoint.get("content").and_then(Json::as_str) {
             backend.write_config(path, content)?;
@@ -248,11 +260,10 @@ mod tests {
         let backend = MockNginx::new();
         let spec = base();
         // Pre-seed the backend with the rendered config.
-        backend
-            .configs
-            .lock()
-            .unwrap()
-            .insert(spec.config_path.clone(), super::super::render::render(&spec));
+        backend.configs.lock().unwrap().insert(
+            spec.config_path.clone(),
+            super::super::render::render(&spec),
+        );
         let observed = observe(&backend, &spec).unwrap();
         let d = diff(&spec, &observed);
         assert_eq!(d.kind, DiffKind::NoChange);
@@ -280,8 +291,13 @@ mod tests {
         assert!(err.to_string().contains("rejected"));
 
         // The restored content should be the previous one.
-        let now =
-            backend.configs.lock().unwrap().get(&spec.config_path).cloned().unwrap();
+        let now = backend
+            .configs
+            .lock()
+            .unwrap()
+            .get(&spec.config_path)
+            .cloned()
+            .unwrap();
         assert_eq!(now, prev);
         // reload should NOT have been called.
         assert!(!backend.calls().iter().any(|c| c.starts_with("reload")));
@@ -301,7 +317,14 @@ mod tests {
         assert!(err.to_string().contains("rejected"));
 
         // Since there was no previous content, the file should now be absent.
-        assert!(backend.configs.lock().unwrap().get(&spec.config_path).is_none());
+        assert!(
+            backend
+                .configs
+                .lock()
+                .unwrap()
+                .get(&spec.config_path)
+                .is_none()
+        );
     }
 
     #[test]
@@ -326,7 +349,14 @@ mod tests {
         let cp = pre_apply(&backend, &spec).unwrap();
         let r = apply(&backend, &spec, &steps[0], &cp).unwrap();
         assert_eq!(r.status, StepStatus::Succeeded);
-        assert!(backend.configs.lock().unwrap().get(&spec.config_path).is_none());
+        assert!(
+            backend
+                .configs
+                .lock()
+                .unwrap()
+                .get(&spec.config_path)
+                .is_none()
+        );
     }
 
     #[test]
@@ -344,7 +374,13 @@ mod tests {
         backend.write_config(&spec.config_path, "# new\n").unwrap();
         // Rollback.
         rollback(&backend, &spec, &cp).unwrap();
-        let now = backend.configs.lock().unwrap().get(&spec.config_path).cloned().unwrap();
+        let now = backend
+            .configs
+            .lock()
+            .unwrap()
+            .get(&spec.config_path)
+            .cloned()
+            .unwrap();
         assert_eq!(now, prev);
     }
 
@@ -355,6 +391,13 @@ mod tests {
         let cp = pre_apply(&backend, &spec).unwrap();
         backend.write_config(&spec.config_path, "# new\n").unwrap();
         rollback(&backend, &spec, &cp).unwrap();
-        assert!(backend.configs.lock().unwrap().get(&spec.config_path).is_none());
+        assert!(
+            backend
+                .configs
+                .lock()
+                .unwrap()
+                .get(&spec.config_path)
+                .is_none()
+        );
     }
 }

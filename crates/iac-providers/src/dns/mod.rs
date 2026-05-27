@@ -42,20 +42,16 @@ crate::step_actions!(DnsAction {
     Delete => "dns-delete",
 });
 
-pub use backend::{
-    pick_backend, CloudflareCli, DnsBackend, DnsRecord, MockDns,
-};
-pub use spec::{
-    CloudflareCreds, DnsBackendKind, DnsRecordSpec, RecordState, RecordType,
-};
+pub use backend::{CloudflareCli, DnsBackend, DnsRecord, MockDns, pick_backend};
+pub use spec::{CloudflareCreds, DnsBackendKind, DnsRecordSpec, RecordState, RecordType};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -80,7 +76,9 @@ impl DnsRecordProvider {
     }
 
     pub fn with_backend(backend: Box<dyn DnsBackend>) -> Self {
-        Self { test_backend: Some(backend) }
+        Self {
+            test_backend: Some(backend),
+        }
     }
 
     fn parse_spec(&self, resource: &Resource) -> Result<DnsRecordSpec> {

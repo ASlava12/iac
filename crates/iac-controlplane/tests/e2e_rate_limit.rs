@@ -8,7 +8,7 @@
 //! (no limit) leaves behavior unchanged.
 
 use iac_controlplane::rate_limit::{RateLimitConfig, RateLimiter};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{RegisterRequest, SubmitOperationRequest};
 use reqwest::StatusCode;
 use serde_json::json;
@@ -42,7 +42,7 @@ impl TestServer {
             maintenance_windows: vec![],
             recurring_maintenance_windows: vec![],
             webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-        tls: iac_controlplane::tls::TlsConfig::default(),
+            tls: iac_controlplane::tls::TlsConfig::default(),
             secrets: iac_controlplane::config::SecretsConfig::default(),
             retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
             modules: vec![],
@@ -64,8 +64,10 @@ impl TestServer {
             config_path: None,
             signer,
             rate_limiter: Arc::new(RateLimiter::from_config(&cfg.rate_limit)),
-        webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+            webhook_dispatcher: None,
+            maintenance_metrics: Arc::new(
+                iac_controlplane::maintenance::MaintenanceMetrics::default(),
+            ),
             secret_registry: None,
         };
         let app = iac_controlplane::server::router(state);
@@ -74,12 +76,20 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -123,7 +133,8 @@ impl TestServer {
                         "mode": "0644",
                         "content": format!("{name}\n"),
                     }
-                })], canary: None,
+                })],
+                canary: None,
             })
             .send()
             .await
@@ -148,7 +159,8 @@ async fn unlimited_default_allows_all_submissions() {
 async fn cap_exceeded_returns_429_with_retry_after() {
     let server = TestServer::spawn(RateLimitConfig {
         operations_per_minute: Some(2),
-        agent_requests_per_minute: None, ..Default::default()
+        agent_requests_per_minute: None,
+        ..Default::default()
     })
     .await;
     server.register_agent("vm-cap", "ops").await;
@@ -170,7 +182,10 @@ async fn cap_exceeded_returns_429_with_retry_after() {
         .unwrap()
         .parse::<u64>()
         .unwrap();
-    assert!((1..=60).contains(&retry), "Retry-After {retry} out of range");
+    assert!(
+        (1..=60).contains(&retry),
+        "Retry-After {retry} out of range"
+    );
     // Phase 7q + 7av: structured bucket field carries `(type, name)`;
     // detail is a plain human-readable retry hint, no legacy
     // `bucket=<type>:<name>` prefix.
@@ -179,7 +194,10 @@ async fn cap_exceeded_returns_429_with_retry_after() {
     assert_eq!(body["bucket"]["name"], "ops");
     let detail = body["detail"].as_str().unwrap();
     assert!(detail.starts_with("retry after "), "detail: {detail}");
-    assert!(!detail.contains("bucket="), "legacy prefix should be gone: {detail}");
+    assert!(
+        !detail.contains("bucket="),
+        "legacy prefix should be gone: {detail}"
+    );
 
     server.shutdown().await;
 }
@@ -188,7 +206,8 @@ async fn cap_exceeded_returns_429_with_retry_after() {
 async fn separate_environments_have_separate_buckets() {
     let server = TestServer::spawn(RateLimitConfig {
         operations_per_minute: Some(1),
-        agent_requests_per_minute: None, ..Default::default()
+        agent_requests_per_minute: None,
+        ..Default::default()
     })
     .await;
     server.register_agent("vm-prod", "prod").await;
@@ -218,7 +237,8 @@ async fn rate_limit_runs_after_basic_validation() {
     // anyway — keeps the bucket reflecting *real* submissions.
     let server = TestServer::spawn(RateLimitConfig {
         operations_per_minute: Some(1),
-        agent_requests_per_minute: None, ..Default::default()
+        agent_requests_per_minute: None,
+        ..Default::default()
     })
     .await;
     server.register_agent("vm-x", "ops").await;
@@ -232,7 +252,8 @@ async fn rate_limit_runs_after_basic_validation() {
             requested_by: "alice".into(),
             source_commit: None,
             summary: None,
-            resources: vec![], canary: None,
+            resources: vec![],
+            canary: None,
         })
         .send()
         .await
@@ -252,7 +273,8 @@ async fn rate_limit_runs_after_auth() {
     // legitimate operators' budgets.
     let server = TestServer::spawn(RateLimitConfig {
         operations_per_minute: Some(1),
-        agent_requests_per_minute: None, ..Default::default()
+        agent_requests_per_minute: None,
+        ..Default::default()
     })
     .await;
     server.register_agent("vm-y", "ops").await;
@@ -270,7 +292,8 @@ async fn rate_limit_runs_after_auth() {
                     "kind": "file",
                     "metadata": { "name": "spam", "environment": "ops" },
                     "spec": { "path": "/tmp/spam.txt", "mode": "0644", "content": "x" }
-                })], canary: None,
+                })],
+                canary: None,
             })
             .send()
             .await
@@ -291,7 +314,8 @@ async fn agent_rate_limit_caps_heartbeats_per_agent_id() {
     use iac_core::protocol::v1::{AgentHealth, HeartbeatRequest, RegisterResponse};
     let server = TestServer::spawn(RateLimitConfig {
         operations_per_minute: None,
-        agent_requests_per_minute: Some(2), ..Default::default()
+        agent_requests_per_minute: Some(2),
+        ..Default::default()
     })
     .await;
 
@@ -355,7 +379,8 @@ async fn agent_rate_limit_isolates_per_agent_id_in_e2e() {
     use iac_core::protocol::v1::{AgentHealth, HeartbeatRequest, RegisterResponse};
     let server = TestServer::spawn(RateLimitConfig {
         operations_per_minute: None,
-        agent_requests_per_minute: Some(1), ..Default::default()
+        agent_requests_per_minute: Some(1),
+        ..Default::default()
     })
     .await;
 
@@ -383,7 +408,11 @@ async fn agent_rate_limit_isolates_per_agent_id_in_e2e() {
     };
 
     // Burn agent-a's quota.
-    let a_url = format!("{}/v1/agents/{}/heartbeat", server.url(), creds_pair[0].agent_id);
+    let a_url = format!(
+        "{}/v1/agents/{}/heartbeat",
+        server.url(),
+        creds_pair[0].agent_id
+    );
     assert_eq!(
         reqwest::Client::new()
             .post(&a_url)
@@ -408,7 +437,11 @@ async fn agent_rate_limit_isolates_per_agent_id_in_e2e() {
     );
 
     // agent-b's quota is still 1, untouched.
-    let b_url = format!("{}/v1/agents/{}/heartbeat", server.url(), creds_pair[1].agent_id);
+    let b_url = format!(
+        "{}/v1/agents/{}/heartbeat",
+        server.url(),
+        creds_pair[1].agent_id
+    );
     assert_eq!(
         reqwest::Client::new()
             .post(&b_url)

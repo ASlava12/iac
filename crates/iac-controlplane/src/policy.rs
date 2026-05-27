@@ -75,10 +75,7 @@ impl Policy {
         }
         // An empty policy match block matches nothing — otherwise every
         // operation would trip every empty policy. Catch it here.
-        if m.environment.is_none()
-            && m.resource_count_min.is_none()
-            && m.kind.is_none()
-        {
+        if m.environment.is_none() && m.resource_count_min.is_none() && m.kind.is_none() {
             return false;
         }
         true
@@ -95,7 +92,13 @@ pub fn evaluate<'a>(policies: &'a [Policy], facts: &OperationFacts<'_>) -> Vec<&
 mod tests {
     use super::*;
 
-    fn p(name: &str, env: Option<&str>, kind: Option<&str>, min: Option<usize>, ra: bool) -> Policy {
+    fn p(
+        name: &str,
+        env: Option<&str>,
+        kind: Option<&str>,
+        min: Option<usize>,
+        ra: bool,
+    ) -> Policy {
         Policy {
             name: name.into(),
             r#match: PolicyMatch {
@@ -112,22 +115,37 @@ mod tests {
     #[test]
     fn empty_match_block_matches_nothing() {
         let pol = p("empty", None, None, None, true);
-        let facts = OperationFacts { environment: "prod", resources: &["file"] };
+        let facts = OperationFacts {
+            environment: "prod",
+            resources: &["file"],
+        };
         assert!(!pol.matches(&facts));
     }
 
     #[test]
     fn environment_exact_match() {
         let pol = p("prod-only", Some("prod"), None, None, true);
-        assert!(pol.matches(&OperationFacts { environment: "prod", resources: &["file"] }));
-        assert!(!pol.matches(&OperationFacts { environment: "stage", resources: &["file"] }));
+        assert!(pol.matches(&OperationFacts {
+            environment: "prod",
+            resources: &["file"]
+        }));
+        assert!(!pol.matches(&OperationFacts {
+            environment: "stage",
+            resources: &["file"]
+        }));
     }
 
     #[test]
     fn environment_wildcard() {
         let pol = p("any-env", Some("*"), None, None, true);
-        assert!(pol.matches(&OperationFacts { environment: "prod", resources: &["file"] }));
-        assert!(pol.matches(&OperationFacts { environment: "test", resources: &["file"] }));
+        assert!(pol.matches(&OperationFacts {
+            environment: "prod",
+            resources: &["file"]
+        }));
+        assert!(pol.matches(&OperationFacts {
+            environment: "test",
+            resources: &["file"]
+        }));
     }
 
     #[test]
@@ -158,7 +176,13 @@ mod tests {
 
     #[test]
     fn all_clauses_must_match() {
-        let pol = p("prod-docker", Some("prod"), Some("docker.container"), Some(2), true);
+        let pol = p(
+            "prod-docker",
+            Some("prod"),
+            Some("docker.container"),
+            Some(2),
+            true,
+        );
         let mut facts = OperationFacts {
             environment: "prod",
             resources: &["docker.container", "file"],
@@ -170,11 +194,17 @@ mod tests {
         assert!(!pol.matches(&facts));
 
         // Right env but no docker resource.
-        let facts2 = OperationFacts { environment: "prod", resources: &["file", "file"] };
+        let facts2 = OperationFacts {
+            environment: "prod",
+            resources: &["file", "file"],
+        };
         assert!(!pol.matches(&facts2));
 
         // Right env + docker, but only 1 resource.
-        let facts3 = OperationFacts { environment: "prod", resources: &["docker.container"] };
+        let facts3 = OperationFacts {
+            environment: "prod",
+            resources: &["docker.container"],
+        };
         assert!(!pol.matches(&facts3));
     }
 

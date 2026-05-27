@@ -4,16 +4,16 @@
 //! `chown(2)` / `chmod(2)` are applied to the temp file before the rename so
 //! a reader never sees the file with wrong permissions.
 
-use super::spec::{parse_mode, FileSpec, FileState};
+use super::spec::{FileSpec, FileState, parse_mode};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     hash::sha256_hex,
     operation::StepResult,
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -26,7 +26,12 @@ pub fn observe(spec: &FileSpec) -> Result<ObservedState> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ObservedState::absent()),
-        Err(e) => return Err(Error::Io { path: path.clone(), source: e }),
+        Err(e) => {
+            return Err(Error::Io {
+                path: path.clone(),
+                source: e,
+            });
+        }
     };
 
     let mut facts: IndexMap<String, YamlValue> = IndexMap::new();
@@ -46,7 +51,10 @@ pub fn observe(spec: &FileSpec) -> Result<ObservedState> {
         });
     }
 
-    let content = fs::read(path).map_err(|e| Error::Io { path: path.clone(), source: e })?;
+    let content = fs::read(path).map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
     let sha = sha256_hex(&content);
     let mode = meta.permissions().mode() & 0o7777;
 
@@ -54,16 +62,34 @@ pub fn observe(spec: &FileSpec) -> Result<ObservedState> {
     spec_value.insert("path".into(), YamlValue::String(path.display().to_string()));
     spec_value.insert("state".into(), YamlValue::String("present".into()));
     spec_value.insert("mode".into(), YamlValue::String(format!("0{mode:o}")));
-    spec_value.insert("owner_uid".into(), YamlValue::Number(serde_yaml_ng::Number::from(meta.uid())));
-    spec_value.insert("group_gid".into(), YamlValue::Number(serde_yaml_ng::Number::from(meta.gid())));
+    spec_value.insert(
+        "owner_uid".into(),
+        YamlValue::Number(serde_yaml_ng::Number::from(meta.uid())),
+    );
+    spec_value.insert(
+        "group_gid".into(),
+        YamlValue::Number(serde_yaml_ng::Number::from(meta.gid())),
+    );
     spec_value.insert("content_sha256".into(), YamlValue::String(sha.clone()));
-    spec_value.insert("size".into(), YamlValue::Number(serde_yaml_ng::Number::from(meta.size())));
+    spec_value.insert(
+        "size".into(),
+        YamlValue::Number(serde_yaml_ng::Number::from(meta.size())),
+    );
 
     facts.insert("content_sha256".into(), YamlValue::String(sha));
-    facts.insert("size".into(), YamlValue::Number(serde_yaml_ng::Number::from(meta.size())));
+    facts.insert(
+        "size".into(),
+        YamlValue::Number(serde_yaml_ng::Number::from(meta.size())),
+    );
     facts.insert("mode".into(), YamlValue::String(format!("0{mode:o}")));
-    facts.insert("uid".into(), YamlValue::Number(serde_yaml_ng::Number::from(meta.uid())));
-    facts.insert("gid".into(), YamlValue::Number(serde_yaml_ng::Number::from(meta.gid())));
+    facts.insert(
+        "uid".into(),
+        YamlValue::Number(serde_yaml_ng::Number::from(meta.uid())),
+    );
+    facts.insert(
+        "gid".into(),
+        YamlValue::Number(serde_yaml_ng::Number::from(meta.gid())),
+    );
 
     Ok(ObservedState {
         present: true,
@@ -164,8 +190,10 @@ pub fn diff(spec: &FileSpec, observed: &ObservedState) -> Diff {
     if let Some(owner) = spec.owner.as_deref() {
         match resolve_uid(owner) {
             Ok(want_uid) => {
-                let have_uid = observed_facts.get("uid").and_then(YamlValue::as_u64).unwrap_or(0)
-                    as u32;
+                let have_uid = observed_facts
+                    .get("uid")
+                    .and_then(YamlValue::as_u64)
+                    .unwrap_or(0) as u32;
                 if want_uid != have_uid {
                     changes.push(FieldChange {
                         field: "owner".into(),
@@ -183,8 +211,10 @@ pub fn diff(spec: &FileSpec, observed: &ObservedState) -> Diff {
     if let Some(group) = spec.group.as_deref() {
         match resolve_gid(group) {
             Ok(want_gid) => {
-                let have_gid = observed_facts.get("gid").and_then(YamlValue::as_u64).unwrap_or(0)
-                    as u32;
+                let have_gid = observed_facts
+                    .get("gid")
+                    .and_then(YamlValue::as_u64)
+                    .unwrap_or(0) as u32;
                 if want_gid != have_gid {
                     changes.push(FieldChange {
                         field: "group".into(),
@@ -202,7 +232,12 @@ pub fn diff(spec: &FileSpec, observed: &ObservedState) -> Diff {
     if changes.is_empty() {
         Diff::no_change()
     } else {
-        Diff { kind: DiffKind::Update, changes, reasons, reversible: true }
+        Diff {
+            kind: DiffKind::Update,
+            changes,
+            reasons,
+            reversible: true,
+        }
     }
 }
 
@@ -212,7 +247,10 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
         Error::provider("file", format!("path has no parent: {}", path.display()))
     })?;
     if !parent.exists() {
-        fs::create_dir_all(parent).map_err(|e| Error::Io { path: parent.into(), source: e })?;
+        fs::create_dir_all(parent).map_err(|e| Error::Io {
+            path: parent.into(),
+            source: e,
+        })?;
     }
 
     // Phase 7cr (security fix #4.9): refuse to write through a
@@ -258,26 +296,42 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
 
     let content = spec.content.clone().unwrap_or_default();
     let tmp = temp_path_in(parent, path);
-    fs::write(&tmp, &content).map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
+    fs::write(&tmp, &content).map_err(|e| Error::Io {
+        path: tmp.clone(),
+        source: e,
+    })?;
 
     if let Some(mode) = spec.parsed_mode() {
         let perms = fs::Permissions::from_mode(mode);
-        fs::set_permissions(&tmp, perms)
-            .map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
+        fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
     }
 
-    let uid = spec.owner.as_deref().map(resolve_uid).transpose().map_err(|e| {
-        Error::provider("file", format!("owner resolution failed: {e}"))
-    })?;
-    let gid = spec.group.as_deref().map(resolve_gid).transpose().map_err(|e| {
-        Error::provider("file", format!("group resolution failed: {e}"))
-    })?;
+    let uid = spec
+        .owner
+        .as_deref()
+        .map(resolve_uid)
+        .transpose()
+        .map_err(|e| Error::provider("file", format!("owner resolution failed: {e}")))?;
+    let gid = spec
+        .group
+        .as_deref()
+        .map(resolve_gid)
+        .transpose()
+        .map_err(|e| Error::provider("file", format!("group resolution failed: {e}")))?;
     if uid.is_some() || gid.is_some() {
-        std::os::unix::fs::chown(&tmp, uid, gid)
-            .map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
+        std::os::unix::fs::chown(&tmp, uid, gid).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
     }
 
-    fs::rename(&tmp, path).map_err(|e| Error::Io { path: path.clone(), source: e })?;
+    fs::rename(&tmp, path).map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
 
     let sha = sha256_hex(content.as_bytes());
     Ok(StepResult {
@@ -291,23 +345,34 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
 pub fn delete(path: &Path) -> Result<StepResult> {
     match fs::remove_file(path) {
         Ok(()) => Ok(StepResult::ok(format!("deleted {}", path.display()))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(StepResult::skipped(format!("{} already absent", path.display())))
-        }
-        Err(e) => Err(Error::Io { path: path.into(), source: e }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StepResult::skipped(format!(
+            "{} already absent",
+            path.display()
+        ))),
+        Err(e) => Err(Error::Io {
+            path: path.into(),
+            source: e,
+        }),
     }
 }
 
 pub fn backup(path: &Path, workspace: &Path) -> Result<Json> {
-    fs::create_dir_all(workspace)
-        .map_err(|e| Error::Io { path: workspace.into(), source: e })?;
+    fs::create_dir_all(workspace).map_err(|e| Error::Io {
+        path: workspace.into(),
+        source: e,
+    })?;
 
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Ok(json!({ "existed": false, "path": path }));
         }
-        Err(e) => return Err(Error::Io { path: path.into(), source: e }),
+        Err(e) => {
+            return Err(Error::Io {
+                path: path.into(),
+                source: e,
+            });
+        }
     };
 
     if !meta.file_type().is_file() {
@@ -318,7 +383,10 @@ pub fn backup(path: &Path, workspace: &Path) -> Result<Json> {
     }
 
     let backup = workspace.join(BACKUP_FILENAME);
-    fs::copy(path, &backup).map_err(|e| Error::Io { path: backup.clone(), source: e })?;
+    fs::copy(path, &backup).map_err(|e| Error::Io {
+        path: backup.clone(),
+        source: e,
+    })?;
     Ok(json!({
         "existed": true,
         "path": path,
@@ -358,13 +426,19 @@ pub fn restore(target_path: &Path, checkpoint_data: &Json, workspace: &Path) -> 
             ),
         ));
     }
-    let existed = checkpoint_data.get("existed").and_then(Json::as_bool).unwrap_or(false);
+    let existed = checkpoint_data
+        .get("existed")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
 
     if !existed {
         match fs::remove_file(target_path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(Error::Io { path: target_path.to_path_buf(), source: e }),
+            Err(e) => Err(Error::Io {
+                path: target_path.to_path_buf(),
+                source: e,
+            }),
         }
     } else {
         let backup_name = checkpoint_data
@@ -395,16 +469,22 @@ pub fn restore(target_path: &Path, checkpoint_data: &Json, workspace: &Path) -> 
             )
         })?;
         if !parent.exists() {
-            fs::create_dir_all(parent)
-                .map_err(|e| Error::Io { path: parent.into(), source: e })?;
+            fs::create_dir_all(parent).map_err(|e| Error::Io {
+                path: parent.into(),
+                source: e,
+            })?;
         }
         let tmp = temp_path_in(parent, target_path);
-        fs::copy(&backup, &tmp).map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
+        fs::copy(&backup, &tmp).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
 
         if let Some(mode_str) = checkpoint_data.get("mode").and_then(Json::as_str)
-            && let Ok(mode) = parse_mode(mode_str.trim_start_matches('0')) {
-                let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode));
-            }
+            && let Ok(mode) = parse_mode(mode_str.trim_start_matches('0'))
+        {
+            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(mode));
+        }
         let uid = checkpoint_data
             .get("uid")
             .and_then(Json::as_u64)
@@ -417,8 +497,10 @@ pub fn restore(target_path: &Path, checkpoint_data: &Json, workspace: &Path) -> 
             let _ = std::os::unix::fs::chown(&tmp, uid, gid);
         }
 
-        fs::rename(&tmp, target_path)
-            .map_err(|e| Error::Io { path: target_path.to_path_buf(), source: e })?;
+        fs::rename(&tmp, target_path).map_err(|e| Error::Io {
+            path: target_path.to_path_buf(),
+            source: e,
+        })?;
         Ok(())
     }
 }
@@ -446,7 +528,9 @@ pub fn resolve_uid(spec: &str) -> std::result::Result<u32, String> {
         let _ = parts.next();
         let uid = parts.next().unwrap_or("");
         if name == spec {
-            return uid.parse::<u32>().map_err(|e| format!("bad uid for {name}: {e}"));
+            return uid
+                .parse::<u32>()
+                .map_err(|e| format!("bad uid for {name}: {e}"));
         }
     }
     Err(format!("user {spec:?} not found in /etc/passwd"))
@@ -464,7 +548,9 @@ pub fn resolve_gid(spec: &str) -> std::result::Result<u32, String> {
         let _ = parts.next();
         let gid = parts.next().unwrap_or("");
         if name == spec {
-            return gid.parse::<u32>().map_err(|e| format!("bad gid for {name}: {e}"));
+            return gid
+                .parse::<u32>()
+                .map_err(|e| format!("bad gid for {name}: {e}"));
         }
     }
     Err(format!("group {spec:?} not found in /etc/group"))
@@ -473,8 +559,8 @@ pub fn resolve_gid(spec: &str) -> std::result::Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
     use iac_core::provider::Provider;
+    use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
     use serde_yaml_ng::Mapping;
     use tempfile::TempDir;
 
@@ -601,7 +687,10 @@ mod tests {
 
         let workspace = dir.path().join("ws");
         fs::create_dir_all(&workspace).unwrap();
-        let ctx = iac_core::ApplyContext { operation_id: ulid::Ulid::new(), workspace: workspace.clone() };
+        let ctx = iac_core::ApplyContext {
+            operation_id: ulid::Ulid::new(),
+            workspace: workspace.clone(),
+        };
 
         let cp_data = provider.pre_apply(&resource, &steps[0], &ctx).unwrap();
         provider.apply(&resource, &steps[0], &ctx).unwrap();
@@ -660,10 +749,7 @@ mod tests {
             "backup": "../../../etc/passwd",
         });
         let err = restore(&target, &cp, &workspace).unwrap_err();
-        assert!(
-            err.to_string().contains("path separators"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("path separators"), "got: {err}");
     }
 
     #[test]

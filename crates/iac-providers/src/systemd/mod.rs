@@ -32,12 +32,12 @@ pub use backend::{MockSystemctl, RealSystemctl, Systemctl, UnitInfo};
 pub use spec::{SystemdUnitSpec, UnitType};
 
 use iac_core::{
+    Error, Result,
     diff::Diff,
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
 use serde_json::Value as Json;
 use std::path::Path;
@@ -55,7 +55,9 @@ impl Default for SystemdProvider {
 
 impl SystemdProvider {
     pub fn new() -> Self {
-        Self { backend: Box::new(RealSystemctl) }
+        Self {
+            backend: Box::new(RealSystemctl),
+        }
     }
 
     pub fn with_backend(backend: Box<dyn Systemctl>) -> Self {
@@ -64,7 +66,10 @@ impl SystemdProvider {
 
     fn parse_spec(&self, resource: &Resource) -> Result<SystemdUnitSpec> {
         SystemdUnitSpec::from_value(&resource.spec).map_err(|e| {
-            Error::validation(resource.id().to_string(), format!("invalid systemd.unit spec: {e}"))
+            Error::validation(
+                resource.id().to_string(),
+                format!("invalid systemd.unit spec: {e}"),
+            )
         })
     }
 }

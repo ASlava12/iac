@@ -219,7 +219,11 @@ impl SshTargetConfig {
         if self.name.is_empty() {
             anyhow::bail!("ssh_targets[].name must not be empty");
         }
-        if !self.name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
+        if !self
+            .name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
             anyhow::bail!(
                 "ssh_targets[].name {:?} must be alphanumeric with -_.",
                 self.name
@@ -234,7 +238,10 @@ impl SshTargetConfig {
         // Defensive: reject control chars in host/user — these end up
         // in shell args via `ssh user@host`.
         for (field, value) in [("host", &self.host), ("user", &self.user)] {
-            if value.chars().any(|c| c.is_control() || c == ' ' || c == '\'' || c == '"') {
+            if value
+                .chars()
+                .any(|c| c.is_control() || c == ' ' || c == '\'' || c == '"')
+            {
                 anyhow::bail!(
                     "ssh_targets[{}].{} contains unsafe characters: {:?}",
                     self.name,
@@ -268,9 +275,7 @@ impl SshTargetConfig {
         // the operator may not actually control. Fail-closed at
         // config-load is louder than a successful push to the wrong
         // host on first contact.
-        if self.host_key_policy == SshHostKeyPolicy::Strict
-            && self.known_hosts_file.is_none()
-        {
+        if self.host_key_policy == SshHostKeyPolicy::Strict && self.known_hosts_file.is_none() {
             anyhow::bail!(
                 "ssh_targets[{}]: host_key_policy=strict requires known_hosts_file to be set \
                  (otherwise ssh uses ~/.ssh/known_hosts of the server process, which may not \
@@ -491,7 +496,9 @@ impl Config {
         // loopback / private / cloud-metadata targets unless the
         // operator explicitly opted in. Failing here at config-load
         // is much louder than failing at first dispatch.
-        webhooks.validate().map_err(|e| anyhow::anyhow!("[webhooks] {e}"))?;
+        webhooks
+            .validate()
+            .map_err(|e| anyhow::anyhow!("[webhooks] {e}"))?;
         let tls = raw.tls;
         let secrets = raw.secrets;
         let retry_after_format = raw.retry_after_format;
@@ -499,8 +506,7 @@ impl Config {
         // load. Surfacing typos / collisions / undeclared template
         // vars at startup beats failing on first apply.
         let modules = raw.modules;
-        let mut module_names: std::collections::BTreeSet<&str> =
-            std::collections::BTreeSet::new();
+        let mut module_names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for m in &modules {
             m.validate()
                 .map_err(|e| anyhow::anyhow!("module {:?}: {e}", m.name))?;
@@ -537,8 +543,7 @@ impl Config {
         }
         // Phase 7ck: validate ssh_targets at startup.
         let ssh_targets = raw.ssh_targets;
-        let mut target_names: std::collections::BTreeSet<&str> =
-            std::collections::BTreeSet::new();
+        let mut target_names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for t in &ssh_targets {
             t.validate()
                 .map_err(|e| anyhow::anyhow!("ssh_targets[{}]: {e}", t.name))?;

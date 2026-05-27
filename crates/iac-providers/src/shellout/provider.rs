@@ -41,7 +41,7 @@
 //! impl that maps method names to the four configurable scripts.
 //! All Provider semantics now live in [`crate::plugin::PluginProvider`].
 
-use super::spec::{split_argv, ShellOutSpec};
+use super::spec::{ShellOutSpec, split_argv};
 use crate::plugin::{CapabilityKeysStrategy, PluginProvider, PluginRuntime};
 use iac_core::{Error, Result};
 use serde_json::Value as Json;
@@ -120,10 +120,9 @@ impl ShellOutRuntime {
                 &self.spec.kind,
                 format!("spawn {}: {e}", argv.join(" ")),
             )),
-            Err(iac_core::subprocess::SubprocessError::Wait(e)) => Err(Error::provider(
-                &self.spec.kind,
-                format!("wait: {e}"),
-            )),
+            Err(iac_core::subprocess::SubprocessError::Wait(e)) => {
+                Err(Error::provider(&self.spec.kind, format!("wait: {e}")))
+            }
         }
     }
 
@@ -198,7 +197,7 @@ mod tests {
     use super::*;
     use iac_core::operation::Step;
     use iac_core::provider::Provider;
-    use iac_core::resource::{Metadata, Resource, SourceLocation, API_VERSION};
+    use iac_core::resource::{API_VERSION, Metadata, Resource, SourceLocation};
     use indexmap::IndexMap;
     use serde_yaml_ng::Value as YamlValue;
     use std::os::unix::fs::PermissionsExt;
@@ -296,11 +295,7 @@ mod tests {
     #[test]
     fn run_times_out_long_running_command() {
         let dir = TempDir::new().unwrap();
-        let observe = mk_script(
-            dir.path(),
-            "observe",
-            "#!/bin/sh\nsleep 10\n",
-        );
+        let observe = mk_script(dir.path(), "observe", "#!/bin/sh\nsleep 10\n");
         let apply = mk_script(
             dir.path(),
             "apply",
@@ -320,6 +315,9 @@ mod tests {
         let res = mk_resource();
         let err = provider.observe(&res).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("timed out"), "expected timeout error, got {msg:?}");
+        assert!(
+            msg.contains("timed out"),
+            "expected timeout error, got {msg:?}"
+        );
     }
 }

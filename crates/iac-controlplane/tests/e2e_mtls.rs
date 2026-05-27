@@ -15,9 +15,9 @@
 //! an external PKI.
 
 use iac_agent::config::AgentTlsConfig;
-use iac_agent::remote::{build_http_client, Client};
-use iac_controlplane::tls::{generate_self_signed_pki, TlsConfig};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_agent::remote::{Client, build_http_client};
+use iac_controlplane::tls::{TlsConfig, generate_self_signed_pki};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::RegisterRequest;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -57,7 +57,13 @@ fn write_pki(client_names: &[&str]) -> PkiDir {
         std::fs::write(&kp, &c.key_pem).unwrap();
         client_certs.push((c.name.clone(), cp, kp));
     }
-    PkiDir { _dir: dir, ca_path, server_cert, server_key, client_certs }
+    PkiDir {
+        _dir: dir,
+        ca_path,
+        server_cert,
+        server_key,
+        client_certs,
+    }
 }
 
 struct TestServer {
@@ -104,9 +110,9 @@ impl TestServer {
             )),
             config_path: None,
             signer,
-            rate_limiter: Arc::new(
-                iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
-            ),
+            rate_limiter: Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(
+                &cfg.rate_limit,
+            )),
             webhook_dispatcher: None,
             maintenance_metrics: Arc::new(
                 iac_controlplane::maintenance::MaintenanceMetrics::default(),
@@ -141,7 +147,12 @@ impl TestServer {
         // Give the listener a moment to start accepting before tests
         // start their connect attempts.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        Self { addr, shutdown, handle: serve_handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle: serve_handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -216,10 +227,7 @@ async fn mutual_mode_rejects_client_without_cert() {
     let http = build_http_client(&agent_tls).expect("build http client");
 
     // Hitting any endpoint should fail at the TLS handshake.
-    let result = http
-        .get(format!("{}/v1/health", server.url()))
-        .send()
-        .await;
+    let result = http.get(format!("{}/v1/health", server.url())).send().await;
     assert!(
         result.is_err(),
         "server in mutual mode must refuse a client with no cert; got {:?}",
@@ -281,10 +289,7 @@ async fn agent_rejects_unknown_server_ca() {
     };
     let http = build_http_client(&agent_tls).expect("build http client");
 
-    let result = http
-        .get(format!("{}/v1/health", server.url()))
-        .send()
-        .await;
+    let result = http.get(format!("{}/v1/health", server.url())).send().await;
     assert!(
         result.is_err(),
         "agent with wrong CA must reject server's cert; got {:?}",

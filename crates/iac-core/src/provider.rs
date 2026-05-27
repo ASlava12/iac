@@ -1,8 +1,8 @@
+use crate::Result;
 use crate::diff::{Diff, FieldChange};
 use crate::operation::{Checkpoint, Step, StepResult};
 use crate::resource::Resource;
 use crate::state::ObservedState;
-use crate::Result;
 use serde_json::Value as Json;
 use std::path::{Path, PathBuf};
 use ulid::Ulid;

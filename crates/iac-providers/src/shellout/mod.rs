@@ -24,4 +24,4 @@ mod provider;
 mod spec;
 
 pub use provider::{ShellOutProvider, ShellOutRuntime};
-pub use spec::{split_argv, ShellOutSpec};
+pub use spec::{ShellOutSpec, split_argv};

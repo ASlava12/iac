@@ -13,9 +13,9 @@
 //! the operator a clear breadcrumb in process listings.
 
 use super::spec::{DockerContainerSpec, RestartPolicy};
+use crate::subprocess::run_with_status;
 use iac_core::{Error, Result};
 use std::collections::HashMap;
-use crate::subprocess::run_with_status;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -131,20 +131,20 @@ impl DockerCli {
             .stderr(Stdio::piped());
         // Phase 7dh.10: routed through shared wrapper for unified
         // truncation + transport-error mapping.
-        run_with_status(
-            cmd,
-            b"",
-            timeout,
-            "docker",
-            &format!("docker {args:?}"),
-        )
+        run_with_status(cmd, b"", timeout, "docker", &format!("docker {args:?}"))
     }
 }
 
 impl DockerBackend for DockerCli {
     fn inspect_container(&self, name: &str) -> Result<Option<ContainerInfo>> {
-        let (ok, stdout, stderr) =
-            Self::run_capture(&["inspect", "--type", "container", "--format", "{{json .}}", name])?;
+        let (ok, stdout, stderr) = Self::run_capture(&[
+            "inspect",
+            "--type",
+            "container",
+            "--format",
+            "{{json .}}",
+            name,
+        ])?;
         if !ok {
             // `No such object` is the canonical "doesn't exist" case.
             if stderr.contains("No such") {
@@ -314,8 +314,7 @@ impl DockerBackend for DockerCli {
     }
 
     fn connect_network(&self, container: &str, network: &str) -> Result<()> {
-        let (ok, _stdout, stderr) =
-            Self::run_capture(&["network", "connect", network, container])?;
+        let (ok, _stdout, stderr) = Self::run_capture(&["network", "connect", network, container])?;
         if !ok {
             // Idempotency: docker errors with "is already attached to network"
             // (or similar) when the container is already on the network. Treat
@@ -541,10 +540,18 @@ fn parse_port_bindings(v: Option<&serde_json::Value>) -> Vec<String> {
             Some((c, p)) => (c, p),
             None => (key.as_str(), "tcp"),
         };
-        let Some(arr) = bindings.as_array() else { continue };
+        let Some(arr) = bindings.as_array() else {
+            continue;
+        };
         for b in arr {
-            let host_ip = b.get("HostIp").and_then(serde_json::Value::as_str).unwrap_or("");
-            let host_port = b.get("HostPort").and_then(serde_json::Value::as_str).unwrap_or("");
+            let host_ip = b
+                .get("HostIp")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let host_port = b
+                .get("HostPort")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             if host_port.is_empty() {
                 continue;
             }
@@ -616,11 +623,17 @@ impl MockDocker {
     }
 
     pub fn set_image_digest(&self, image: &str, digest: &str) {
-        self.images.lock().unwrap().insert(image.to_string(), digest.to_string());
+        self.images
+            .lock()
+            .unwrap()
+            .insert(image.to_string(), digest.to_string());
     }
 
     fn record(&self, action: &str, target: &str) {
-        self.calls.lock().unwrap().push(format!("{action} {target}"));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("{action} {target}"));
     }
 
     fn ensure_image(&self, image: &str) -> String {
@@ -638,7 +651,11 @@ impl DockerBackend for MockDocker {
         let g = self.containers.lock().unwrap();
         Ok(g.get(name).map(|c| ContainerInfo {
             running: c.running,
-            status: if c.running { "running".into() } else { "exited".into() },
+            status: if c.running {
+                "running".into()
+            } else {
+                "exited".into()
+            },
             image_ref: c.image_ref.clone(),
             image_id: c.image_id.clone(),
             env: c.env.clone(),
@@ -677,8 +694,11 @@ impl DockerBackend for MockDocker {
             RestartPolicy::OnFailure => "on-failure",
         }
         .to_string();
-        let mut labels: Vec<String> =
-            spec.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let mut labels: Vec<String> = spec
+            .labels
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
         labels.sort();
         // Phase 7ay: clone the spec's command into MockContainer so the
         // observe path returns the same Option<Vec<String>> shape the
@@ -714,7 +734,11 @@ impl DockerBackend for MockDocker {
                 let (src, dst, ro) = super::spec::parse_volume_spec(s).ok()?;
                 Some(super::spec::normalize_volume_spec(src, dst, ro))
             })
-            .chain(spec.mounts.iter().filter_map(super::spec::mount_to_short_form))
+            .chain(
+                spec.mounts
+                    .iter()
+                    .filter_map(super::spec::mount_to_short_form),
+            )
             .collect();
         volumes.sort();
         // Phase 7bb: track the primary network as a singleton list to
@@ -813,10 +837,7 @@ mod tests {
         assert_eq!(info.env, vec!["PATH=/usr/bin", "FOO=bar"]);
         assert_eq!(info.restart_policy, "unless-stopped");
         // Sorted, so 127.0.0.1 binding comes first.
-        assert_eq!(
-            info.ports,
-            vec!["127.0.0.1:8443:443/tcp", "8080:80/tcp"]
-        );
+        assert_eq!(info.ports, vec!["127.0.0.1:8443:443/tcp", "8080:80/tcp"]);
     }
 
     // Phase 7bo: tmpfs round-trip through observe + diff.

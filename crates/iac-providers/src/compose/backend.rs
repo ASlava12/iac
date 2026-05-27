@@ -5,10 +5,10 @@
 //! Tests use [`MockCompose`] that records calls and returns scripted
 //! outputs.
 
+use crate::subprocess::{run_capture_stdout, run_check_status};
 use iac_core::{Error, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
-use crate::subprocess::{run_capture_stdout, run_check_status};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -37,12 +37,7 @@ pub trait ComposeBackend: std::fmt::Debug + Send + Sync {
     fn list_services(&self, project: &str) -> Result<Vec<ComposeService>>;
 
     /// Run `docker compose -f <file> -p <project> [--env-file …] up -d --remove-orphans`.
-    fn up(
-        &self,
-        project: &str,
-        compose_file: &Path,
-        env_file: Option<&Path>,
-    ) -> Result<()>;
+    fn up(&self, project: &str, compose_file: &Path, env_file: Option<&Path>) -> Result<()>;
 
     /// Run `docker compose -p <project> down --remove-orphans` (keeps volumes).
     fn down(&self, project: &str, compose_file: Option<&Path>) -> Result<()>;
@@ -73,29 +68,43 @@ impl ComposeBackend for ComposeCli {
             if line.is_empty() {
                 continue;
             }
-            let v: serde_json::Value = serde_json::from_str(line)
-                .map_err(|e| Error::provider("docker.compose", format!("docker compose ps json: {e}")))?;
+            let v: serde_json::Value = serde_json::from_str(line).map_err(|e| {
+                Error::provider("docker.compose", format!("docker compose ps json: {e}"))
+            })?;
             services.push(ComposeService {
-                name: v.get("Service").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                state: v.get("State").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                status: v.get("Status").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                image: v.get("Image").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                name: v
+                    .get("Service")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                state: v
+                    .get("State")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                status: v
+                    .get("Status")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                image: v
+                    .get("Image")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             });
         }
         services.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(services)
     }
 
-    fn up(
-        &self,
-        project: &str,
-        compose_file: &Path,
-        env_file: Option<&Path>,
-    ) -> Result<()> {
+    fn up(&self, project: &str, compose_file: &Path, env_file: Option<&Path>) -> Result<()> {
         let mut cmd = Command::new("docker");
         cmd.arg("compose")
-            .arg("-p").arg(project)
-            .arg("-f").arg(compose_file);
+            .arg("-p")
+            .arg(project)
+            .arg("-f")
+            .arg(compose_file);
         if let Some(env) = env_file {
             cmd.arg("--env-file").arg(env);
         }
@@ -177,27 +186,26 @@ impl MockCompose {
 impl ComposeBackend for MockCompose {
     fn list_services(&self, project: &str) -> Result<Vec<ComposeService>> {
         Ok(self.journal.with_state(|s| {
-            s.services_by_project.get(project).cloned().unwrap_or_default()
+            s.services_by_project
+                .get(project)
+                .cloned()
+                .unwrap_or_default()
         }))
     }
 
-    fn up(
-        &self,
-        project: &str,
-        compose_file: &Path,
-        env_file: Option<&Path>,
-    ) -> Result<()> {
+    fn up(&self, project: &str, compose_file: &Path, env_file: Option<&Path>) -> Result<()> {
         let line = format!(
             "up project={project} file={} env={}",
             compose_file.display(),
-            env_file.map(|p| p.display().to_string()).unwrap_or_else(|| "-".into()),
+            env_file
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "-".into()),
         );
         // Read the file BEFORE entering the locked section: file IO
         // shouldn't happen under the mutex, and the closure is meant
         // to be quick state ops only.
-        let prepared_services: Option<Vec<ComposeService>> = std::fs::read_to_string(compose_file)
-            .ok()
-            .map(|text| {
+        let prepared_services: Option<Vec<ComposeService>> =
+            std::fs::read_to_string(compose_file).ok().map(|text| {
                 parse_service_names_from_yaml(&text)
                     .into_iter()
                     .map(|name| ComposeService {
@@ -223,9 +231,11 @@ impl ComposeBackend for MockCompose {
     }
 
     fn down(&self, project: &str, _compose_file: Option<&Path>) -> Result<()> {
-        match self.journal.record("down", format!("down project={project}"), |s| {
-            s.services_by_project.remove(project);
-        }) {
+        match self
+            .journal
+            .record("down", format!("down project={project}"), |s| {
+                s.services_by_project.remove(project);
+            }) {
             Ok(()) => Ok(()),
             Err(msg) => Err(Error::provider("docker.compose", msg)),
         }
@@ -276,10 +286,13 @@ mod tests {
         let m = MockCompose::new();
         m.up("a", &PathBuf::from("/tmp/x.yml"), None).unwrap();
         m.down("a", None).unwrap();
-        assert_eq!(m.calls(), vec![
-            "up project=a file=/tmp/x.yml env=-".to_string(),
-            "down project=a".to_string(),
-        ]);
+        assert_eq!(
+            m.calls(),
+            vec![
+                "up project=a file=/tmp/x.yml env=-".to_string(),
+                "down project=a".to_string(),
+            ]
+        );
     }
 
     #[test]

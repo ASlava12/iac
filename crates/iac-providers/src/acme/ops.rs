@@ -5,16 +5,16 @@
 //!   * cert exists but expires within `renew_window_days` → renew
 //!   * spec says absent and cert files exist → revoke
 
-use super::backend::{read_expiry_with_fallback, AcmeBackend};
+use super::backend::{AcmeBackend, read_expiry_with_fallback};
 use super::spec::{AcmeCertSpec, AcmeState};
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Step, StepResult},
     state::ObservedState,
-    Error, Result,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use serde_yaml_ng::Value as YamlValue;
 
 pub fn observe(spec: &AcmeCertSpec) -> Result<ObservedState> {
@@ -63,10 +63,7 @@ pub fn diff(spec: &AcmeCertSpec, observed: &ObservedState) -> Result<Diff> {
         .get("cert_present")
         .and_then(YamlValue::as_bool)
         .unwrap_or(false);
-    let days_left = observed
-        .facts
-        .get("days_left")
-        .and_then(YamlValue::as_i64);
+    let days_left = observed.facts.get("days_left").and_then(YamlValue::as_i64);
     match spec.state {
         AcmeState::Absent => {
             if !cert_present {
@@ -101,10 +98,7 @@ pub fn diff(spec: &AcmeCertSpec, observed: &ObservedState) -> Result<Diff> {
                         ))),
                         sensitive: false,
                     }],
-                    reasons: vec![format!(
-                        "issue certificate for {}",
-                        spec.primary_domain()
-                    )],
+                    reasons: vec![format!("issue certificate for {}", spec.primary_domain())],
                     reversible: true,
                 });
             }
@@ -115,7 +109,9 @@ pub fn diff(spec: &AcmeCertSpec, observed: &ObservedState) -> Result<Diff> {
                     changes: vec![FieldChange {
                         field: "expiry".into(),
                         from: Some(YamlValue::Number(d.into())),
-                        to: Some(YamlValue::Number((spec.renew_window_days as i64 + 60).into())),
+                        to: Some(YamlValue::Number(
+                            (spec.renew_window_days as i64 + 60).into(),
+                        )),
                         sensitive: false,
                     }],
                     reasons: vec![format!(
@@ -177,11 +173,7 @@ pub fn pre_apply(spec: &AcmeCertSpec) -> Result<Json> {
     }))
 }
 
-pub fn apply(
-    backend: &dyn AcmeBackend,
-    spec: &AcmeCertSpec,
-    step: &Step,
-) -> Result<StepResult> {
+pub fn apply(backend: &dyn AcmeBackend, spec: &AcmeCertSpec, step: &Step) -> Result<StepResult> {
     match super::AcmeAction::parse(&step.action)? {
         super::AcmeAction::Issue => {
             backend.issue(spec)?;
@@ -215,10 +207,7 @@ pub fn rollback(spec: &AcmeCertSpec, checkpoint: &Json) -> Result<()> {
     if prior_present {
         // Restore the prior cert+key files.
         std::fs::create_dir_all(&spec.cert_dir).map_err(|e| {
-            Error::provider(
-                "acme.certificate",
-                format!("rollback create_dir_all: {e}"),
-            )
+            Error::provider("acme.certificate", format!("rollback create_dir_all: {e}"))
         })?;
         if let Some(b64) = checkpoint.get("prior_cert_b64").and_then(|v| v.as_str()) {
             let bytes = base64_decode(b64)?;
@@ -244,17 +233,16 @@ pub fn rollback(spec: &AcmeCertSpec, checkpoint: &Json) -> Result<()> {
 // `base64` crate already in the workspace. The original "defence
 // against deps" comment was misguided — the crate was already a
 // transitive dep via reqwest/sqlx.
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 
 fn base64_encode(input: &[u8]) -> String {
     B64.encode(input)
 }
 
 fn base64_decode(s: &str) -> Result<Vec<u8>> {
-    B64.decode(s).map_err(|e| {
-        Error::provider("acme.certificate", format!("base64 decode: {e}"))
-    })
+    B64.decode(s)
+        .map_err(|e| Error::provider("acme.certificate", format!("base64 decode: {e}")))
 }
 
 #[cfg(test)]

@@ -5,15 +5,15 @@
 //! without reading source. Open to any authenticated caller (Viewer
 //! role) since the catalog isn't sensitive.
 
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::error::{ApiError, ApiResult};
-use crate::expansion::{list_all_expanders, ExpanderDescriptor};
+use crate::expansion::{ExpanderDescriptor, list_all_expanders};
 use crate::identity::Role;
 use crate::server::AppState;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::get,
-    Json, Router,
 };
 
 pub fn router() -> Router<AppState> {

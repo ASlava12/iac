@@ -67,11 +67,7 @@ impl Resource {
     pub fn validate_shape(&self) -> crate::Result<()> {
         validate_required_identifier(self.id().to_string(), "apiVersion", &self.api_version)?;
         validate_required_identifier(self.id().to_string(), "kind", &self.kind)?;
-        validate_required_identifier(
-            self.id().to_string(),
-            "metadata.name",
-            &self.metadata.name,
-        )?;
+        validate_required_identifier(self.id().to_string(), "metadata.name", &self.metadata.name)?;
         validate_required_identifier(
             self.id().to_string(),
             "metadata.environment",
@@ -84,13 +80,12 @@ impl Resource {
 /// Reject empty / whitespace-only / control-char-bearing identifiers.
 /// Used at manifest-load and re-used by the agent/server when receiving
 /// resource refs over the wire so the same rule lands everywhere.
-fn validate_required_identifier(
-    id: String,
-    field: &str,
-    value: &str,
-) -> crate::Result<()> {
+fn validate_required_identifier(id: String, field: &str, value: &str) -> crate::Result<()> {
     if value.is_empty() {
-        return Err(crate::Error::validation(id, format!("{field} must not be empty")));
+        return Err(crate::Error::validation(
+            id,
+            format!("{field} must not be empty"),
+        ));
     }
     if value.trim().is_empty() {
         return Err(crate::Error::validation(

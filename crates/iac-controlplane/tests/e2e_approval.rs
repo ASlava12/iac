@@ -9,7 +9,7 @@
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_controlplane::policy::{Policy, PolicyMatch};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use iac_core::protocol::v1::{
     AssignmentList, AuditEvent, OperationApproveRequest, OperationRejectRequest, OperationStatus,
     OperationView, SubmitOperationRequest, SubmitOperationResponse,
@@ -43,11 +43,11 @@ impl TestServer {
             admin_token: Some(ADMIN_TOKEN.to_string()),
             policies,
             retention: iac_controlplane::retention::RetentionConfig::default(),
-        rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
+            rate_limit: iac_controlplane::rate_limit::RateLimitConfig::default(),
             maintenance_windows: vec![],
             recurring_maintenance_windows: vec![],
             webhooks: iac_controlplane::webhook::WebhooksConfig::default(),
-        tls: iac_controlplane::tls::TlsConfig::default(),
+            tls: iac_controlplane::tls::TlsConfig::default(),
             secrets: iac_controlplane::config::SecretsConfig::default(),
             retry_after_format: iac_controlplane::config::RetryAfterFormat::default(),
             modules: vec![],
@@ -68,9 +68,13 @@ impl TestServer {
             )),
             config_path: None,
             signer,
-            rate_limiter: std::sync::Arc::new(iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit)),
-        webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
+            rate_limiter: std::sync::Arc::new(
+                iac_controlplane::rate_limit::RateLimiter::from_config(&cfg.rate_limit),
+            ),
+            webhook_dispatcher: None,
+            maintenance_metrics: Arc::new(
+                iac_controlplane::maintenance::MaintenanceMetrics::default(),
+            ),
             secret_registry: None,
         };
         let app = iac_controlplane::server::router(state);
@@ -79,12 +83,20 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
-        Self { addr, shutdown, handle, _tempdir: dir }
+        Self {
+            addr,
+            shutdown,
+            handle,
+            _tempdir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -146,7 +158,8 @@ async fn submit_prod(server: &TestServer, target: &Path) -> SubmitOperationRespo
                 "mode": "0644",
                 "content": "approved-content\n",
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     reqwest::Client::new()
         .post(format!("{}/v1/operations", server.url()))
@@ -255,7 +268,10 @@ async fn approve_promotes_pending_to_running_and_lets_agent_apply() {
     // Agent observes → applies.
     agent.observe_once().await.unwrap();
     assert!(target.exists());
-    assert_eq!(std::fs::read_to_string(&target).unwrap(), "approved-content\n");
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "approved-content\n"
+    );
 
     let view = fetch_op(&server, &op_id).await;
     assert!(matches!(view.status, OperationStatus::Succeeded));
@@ -340,16 +356,28 @@ async fn approve_and_reject_audit_events_are_recorded() {
     let r2 = submit_prod(&server, &target).await;
 
     reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), r1.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            r1.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&OperationApproveRequest { reason: Some("ship it".into()) })
+        .json(&OperationApproveRequest {
+            reason: Some("ship it".into()),
+        })
         .send()
         .await
         .unwrap();
     reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/reject", server.url(), r2.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/reject",
+            server.url(),
+            r2.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&OperationRejectRequest { reason: "wrong env".into() })
+        .json(&OperationRejectRequest {
+            reason: "wrong env".into(),
+        })
         .send()
         .await
         .unwrap();
@@ -364,7 +392,10 @@ async fn approve_and_reject_audit_events_are_recorded() {
         .await
         .unwrap();
     assert_eq!(approved.len(), 1);
-    assert_eq!(approved[0].operation_id.as_deref(), Some(r1.operation_id.as_str()));
+    assert_eq!(
+        approved[0].operation_id.as_deref(),
+        Some(r1.operation_id.as_str())
+    );
     assert_eq!(approved[0].payload["reason"], "ship it");
 
     let rejected: Vec<AuditEvent> = reqwest::Client::new()
@@ -383,7 +414,10 @@ async fn approve_and_reject_audit_events_are_recorded() {
     // Original `operation.submitted` is replaced by `operation.pending_approval`
     // for gated submits — confirm it's recorded too.
     let pending: Vec<AuditEvent> = reqwest::Client::new()
-        .get(format!("{}/v1/audit?kind=operation.pending_approval", server.url()))
+        .get(format!(
+            "{}/v1/audit?kind=operation.pending_approval",
+            server.url()
+        ))
         .bearer_auth(ADMIN_TOKEN)
         .send()
         .await
@@ -406,7 +440,11 @@ async fn approve_and_reject_require_admin() {
     let resp = submit_prod(&server, &target).await;
 
     let bad_approve = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/approve", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/approve",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth("wrong")
         .json(&OperationApproveRequest { reason: None })
         .send()
@@ -415,7 +453,11 @@ async fn approve_and_reject_require_admin() {
     assert_eq!(bad_approve.status(), StatusCode::UNAUTHORIZED);
 
     let bad_reject = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/reject", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/reject",
+            server.url(),
+            resp.operation_id
+        ))
         .json(&OperationRejectRequest { reason: "x".into() })
         .send()
         .await
@@ -435,9 +477,15 @@ async fn empty_reject_reason_returns_400() {
     let resp = submit_prod(&server, &target).await;
 
     let r = reqwest::Client::new()
-        .post(format!("{}/v1/operations/{}/reject", server.url(), resp.operation_id))
+        .post(format!(
+            "{}/v1/operations/{}/reject",
+            server.url(),
+            resp.operation_id
+        ))
         .bearer_auth(ADMIN_TOKEN)
-        .json(&OperationRejectRequest { reason: "  ".into() })
+        .json(&OperationRejectRequest {
+            reason: "  ".into(),
+        })
         .send()
         .await
         .unwrap();

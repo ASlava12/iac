@@ -26,7 +26,7 @@
 //! to see full output; this is purely about what enters durable
 //! state.
 
-use iac_core::subprocess::{run_with_timeout, SubprocessError};
+use iac_core::subprocess::{SubprocessError, run_with_timeout};
 use iac_core::{Error, Result};
 use std::process::Command;
 use std::time::Duration;
@@ -59,13 +59,13 @@ fn truncate_for_error(bytes: &[u8]) -> String {
 /// Map a `SubprocessError` into the provider-shaped `Error::Provider`
 /// using the same truncation rules across every wrapper. Pulled out
 /// so all three public helpers share one path.
-fn map_subprocess_error(
-    err: SubprocessError,
-    provider_kind: &str,
-    label: &str,
-) -> Error {
+fn map_subprocess_error(err: SubprocessError, provider_kind: &str, label: &str) -> Error {
     match err {
-        SubprocessError::Timeout { elapsed, partial_stderr, .. } => Error::provider(
+        SubprocessError::Timeout {
+            elapsed,
+            partial_stderr,
+            ..
+        } => Error::provider(
             provider_kind,
             format!(
                 "{label} timed out after {}s (stderr={})",
@@ -73,14 +73,12 @@ fn map_subprocess_error(
                 truncate_for_error(&partial_stderr)
             ),
         ),
-        SubprocessError::Spawn(e) => Error::provider(
-            provider_kind,
-            format!("{label}: spawn failed: {e}"),
-        ),
-        SubprocessError::Wait(e) => Error::provider(
-            provider_kind,
-            format!("{label}: wait failed: {e}"),
-        ),
+        SubprocessError::Spawn(e) => {
+            Error::provider(provider_kind, format!("{label}: spawn failed: {e}"))
+        }
+        SubprocessError::Wait(e) => {
+            Error::provider(provider_kind, format!("{label}: wait failed: {e}"))
+        }
     }
 }
 
@@ -125,10 +123,7 @@ pub(crate) fn run_capture_stdout(
                 return Err(nonzero_exit_error(&out, provider_kind, label));
             }
             String::from_utf8(out.stdout).map_err(|e| {
-                Error::provider(
-                    provider_kind,
-                    format!("{label}: response not utf-8: {e}"),
-                )
+                Error::provider(provider_kind, format!("{label}: response not utf-8: {e}"))
             })
         }
         Err(e) => Err(map_subprocess_error(e, provider_kind, label)),

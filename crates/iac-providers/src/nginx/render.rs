@@ -36,7 +36,11 @@ pub fn render(spec: &NginxVhostSpec) -> String {
         // When TLS is on, the main block handles 443 and the redirect block
         // (if any) handled 80. Any other ports the user listed remain on the
         // main block but won't have ssl on them.
-        listen.iter().copied().filter(|p| !render_redirect || *p != 80).collect()
+        listen
+            .iter()
+            .copied()
+            .filter(|p| !render_redirect || *p != 80)
+            .collect()
     } else {
         listen.clone()
     };

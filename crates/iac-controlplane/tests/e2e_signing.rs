@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestServer, ADMIN_TOKEN};
+use common::{ADMIN_TOKEN, TestServer};
 
 use iac_agent::{Agent, Config as AgentConfig, ConfigOverrides};
 use iac_core::protocol::v1::{
@@ -18,7 +18,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
-
 
 fn build_agent(workdir: &Path, server_url: &str, name: &str, env: &str) -> Agent {
     let manifests = workdir.join("manifests.d");
@@ -55,7 +54,8 @@ async fn submit(server: &TestServer, env: &str, target: &Path) -> SubmitOperatio
                 "mode": "0644",
                 "content": "expected\n",
             }
-        })], canary: None,
+        })],
+        canary: None,
     };
     let client = reqwest::Client::new();
     let resp = client
@@ -126,8 +126,15 @@ async fn agent_rejects_pinned_key_change() {
     // Clear legacy fields so they don't backfill the pinned set during
     // migration on load.
     identity.as_object_mut().unwrap().remove("server_key_id");
-    identity.as_object_mut().unwrap().remove("server_public_key");
-    std::fs::write(&identity_path, serde_json::to_vec_pretty(&identity).unwrap()).unwrap();
+    identity
+        .as_object_mut()
+        .unwrap()
+        .remove("server_public_key");
+    std::fs::write(
+        &identity_path,
+        serde_json::to_vec_pretty(&identity).unwrap(),
+    )
+    .unwrap();
 
     // Build a fresh agent — should refuse to connect.
     let agent2 = build_agent(dir.path(), &server.url(), "key-change", "sign");
@@ -182,7 +189,11 @@ async fn agent_rejects_envelope_with_wrong_signature() {
 
     let client = reqwest::Client::new();
     let resp = client
-        .get(format!("{}/v1/agents/{}/assignments", server.url(), agent_id))
+        .get(format!(
+            "{}/v1/agents/{}/assignments",
+            server.url(),
+            agent_id
+        ))
         .bearer_auth(token)
         .send()
         .await
@@ -207,8 +218,8 @@ async fn agent_rejects_envelope_with_wrong_signature() {
         &payload_json,
     );
     let bad_sig = attacker.sign(&msg);
-    use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as B64;
     tampered.signature = B64.encode(bad_sig.to_bytes());
 
     // Construct a "list" containing the tampered envelope and ask the agent
@@ -224,10 +235,13 @@ async fn agent_rejects_envelope_with_wrong_signature() {
     let mut payload_changed = env.clone();
     let mut new_payload = payload_changed.payload.resources.clone();
     if let Some(first) = new_payload.first_mut()
-        && let Some(spec) = first.get_mut("spec").and_then(|s| s.as_object_mut()) {
-            spec.insert("content".into(), json!("MALICIOUS\n"));
-        }
-    payload_changed.payload = AssignmentPayload { resources: new_payload };
+        && let Some(spec) = first.get_mut("spec").and_then(|s| s.as_object_mut())
+    {
+        spec.insert("content".into(), json!("MALICIOUS\n"));
+    }
+    payload_changed.payload = AssignmentPayload {
+        resources: new_payload,
+    };
     // Verify directly via the verifier we'd have built. Re-fetching via the
     // agent client would loop back to us; instead, reconstruct a verifier
     // from identity and confirm rejection.

@@ -1,17 +1,17 @@
 use crate::api;
 use crate::config::{Config, RetryAfterFormat};
-use crate::maintenance::{compute_config_issues, ConfigIssue, MaintenanceMetrics};
+use crate::maintenance::{ConfigIssue, MaintenanceMetrics, compute_config_issues};
 use crate::rate_limit::RateLimiter;
 use crate::secrets::SecretRegistry;
 use crate::signing::ServerSigner;
 use crate::store::Store;
 use crate::webhook::WebhookDispatcher;
 use arc_swap::ArcSwap;
-use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
-use axum::middleware::{from_fn_with_state, Next};
-use axum::response::Response;
 use axum::Router;
+use axum::extract::{Request, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware::{Next, from_fn_with_state};
+use axum::response::Response;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,7 +48,10 @@ pub struct ReloadableState {
 impl ReloadableState {
     pub fn new(config: Arc<Config>) -> Self {
         let config_issues = Arc::new(compute_config_issues(&config));
-        Self { config, config_issues }
+        Self {
+            config,
+            config_issues,
+        }
     }
 }
 
@@ -114,8 +117,7 @@ impl AppState {
         let path = self.config_path.as_deref().ok_or_else(|| {
             anyhow::anyhow!("reload_config: no config_path set; running from programmatic config")
         })?;
-        let new_config =
-            Config::load(Some(path), crate::config::Overrides::default())?;
+        let new_config = Config::load(Some(path), crate::config::Overrides::default())?;
         // Phase 9 follow-up: hot-swap rate-limit caps too. Caps live
         // in AtomicU32s now (0 = disabled); per-bucket state survives.
         self.rate_limiter.apply_config(&new_config.rate_limit);

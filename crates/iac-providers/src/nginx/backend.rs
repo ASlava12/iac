@@ -11,12 +11,12 @@
 //! shells out to `nginx -t` for validation and `systemctl reload nginx`
 //! for reload, so it works on any distro that ships nginx via systemd.
 
+use crate::subprocess::run_check_status;
 use iac_core::{Error, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use crate::subprocess::run_check_status;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -65,23 +65,40 @@ impl NginxBackend for NginxCli {
         match fs::read_to_string(path) {
             Ok(s) => Ok(Some(s)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(Error::Io { path: path.into(), source: e }),
+            Err(e) => Err(Error::Io {
+                path: path.into(),
+                source: e,
+            }),
         }
     }
 
     fn write_config(&self, path: &Path, content: &str) -> Result<()> {
         let parent = path.parent().ok_or_else(|| {
-            Error::provider("nginx", format!("config path has no parent: {}", path.display()))
+            Error::provider(
+                "nginx",
+                format!("config path has no parent: {}", path.display()),
+            )
         })?;
         if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| Error::Io { path: parent.into(), source: e })?;
+            fs::create_dir_all(parent).map_err(|e| Error::Io {
+                path: parent.into(),
+                source: e,
+            })?;
         }
         let tmp = temp_path_in(parent, path);
-        fs::write(&tmp, content).map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
+        fs::write(&tmp, content).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
         let perms = fs::Permissions::from_mode(0o644);
-        fs::set_permissions(&tmp, perms)
-            .map_err(|e| Error::Io { path: tmp.clone(), source: e })?;
-        fs::rename(&tmp, path).map_err(|e| Error::Io { path: path.into(), source: e })?;
+        fs::set_permissions(&tmp, perms).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
+        fs::rename(&tmp, path).map_err(|e| Error::Io {
+            path: path.into(),
+            source: e,
+        })?;
         Ok(())
     }
 
@@ -89,7 +106,10 @@ impl NginxBackend for NginxCli {
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(Error::Io { path: path.into(), source: e }),
+            Err(e) => Err(Error::Io {
+                path: path.into(),
+                source: e,
+            }),
         }
     }
 
@@ -143,7 +163,10 @@ impl MockNginx {
     }
 
     fn record(&self, action: &str, target: &str) {
-        self.calls.lock().unwrap().push(format!("{action} {target}"));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("{action} {target}"));
     }
 }
 
@@ -155,7 +178,10 @@ impl NginxBackend for MockNginx {
 
     fn write_config(&self, path: &Path, content: &str) -> Result<()> {
         self.record("write", &path.display().to_string());
-        self.configs.lock().unwrap().insert(path.to_path_buf(), content.to_string());
+        self.configs
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), content.to_string());
         Ok(())
     }
 

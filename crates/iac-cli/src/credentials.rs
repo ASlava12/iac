@@ -28,7 +28,10 @@ pub struct CredentialStore {
 
 impl Default for CredentialStore {
     fn default() -> Self {
-        Self { version: default_version(), credentials: IndexMap::new() }
+        Self {
+            version: default_version(),
+            credentials: IndexMap::new(),
+        }
     }
 }
 
@@ -57,8 +60,8 @@ impl CredentialStore {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let bytes = fs::read(path)
-            .with_context(|| format!("reading credentials {}", path.display()))?;
+        let bytes =
+            fs::read(path).with_context(|| format!("reading credentials {}", path.display()))?;
         let store: Self = serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing credentials {}", path.display()))?;
         Ok(store)
@@ -134,9 +137,10 @@ pub async fn resolve_admin_token_with_refresh_at(
     store_path: &Path,
 ) -> Result<String> {
     if let Ok(t) = std::env::var("IAC_ADMIN_TOKEN")
-        && !t.is_empty() {
-            return Ok(t);
-        }
+        && !t.is_empty()
+    {
+        return Ok(t);
+    }
     let mut store = CredentialStore::load(store_path)?;
     let Some(entry) = store.lookup(server_url).cloned() else {
         anyhow::bail!(

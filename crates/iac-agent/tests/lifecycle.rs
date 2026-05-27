@@ -172,7 +172,11 @@ async fn run_loop_writes_status_and_exits_on_shutdown() {
 
     // Shutdown; the loop should return promptly.
     shutdown.notify_waiters();
-    tokio::time::timeout(Duration::from_secs(2), handle).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]

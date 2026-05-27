@@ -28,14 +28,14 @@ crate::step_actions!(FileAction {
 });
 
 use iac_core::{
+    Error, Result,
     diff::{Diff, DiffKind, FieldChange},
     operation::{Checkpoint, Step, StepResult},
     provider::{ApplyContext, Provider, VerifyOutcome},
     resource::Resource,
     state::ObservedState,
-    Error, Result,
 };
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use std::path::Path;
 
 pub use spec::{FileSpec, FileState};

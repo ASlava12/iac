@@ -9,16 +9,16 @@
 //! `POST /v1/admin/signing-keys/rotate` and
 //! `POST /v1/admin/signing-keys/{key_id}/retire`.
 
-use crate::api::{require_role, BearerToken};
+use crate::api::{BearerToken, require_role};
 use crate::error::{ApiError, ApiResult};
 use crate::identity::Role;
 use crate::maintenance::ConfigIssue;
 use crate::server::AppState;
 use crate::store::AuditRecord;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{get, post},
-    Json, Router,
 };
 use iac_core::protocol::v1::{SigningPubkey, SigningPubkeyBundle};
 use serde::Serialize;

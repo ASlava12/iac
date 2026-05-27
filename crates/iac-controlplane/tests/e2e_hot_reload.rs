@@ -11,7 +11,7 @@
 use iac_controlplane::config::RetryAfterFormat;
 use iac_controlplane::modules::{Module, ModuleParameter};
 use iac_controlplane::rate_limit::{RateLimitConfig, RateLimiter};
-use iac_controlplane::{server::AppState, Config as ServerConfig, Store};
+use iac_controlplane::{Config as ServerConfig, Store, server::AppState};
 use reqwest::StatusCode;
 use serde_json::json;
 use std::net::SocketAddr;
@@ -142,10 +142,13 @@ impl TestServer {
         let shutdown = Arc::new(Notify::new());
         let signal = shutdown.clone();
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .with_graceful_shutdown(async move { signal.notified().await })
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move { signal.notified().await })
+            .await
+            .unwrap();
         });
         Self {
             addr,
@@ -356,14 +359,15 @@ admin_token = "{token}"
         signer,
         rate_limiter: Arc::new(RateLimiter::from_config(&cfg.rate_limit)),
         webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(
-            iac_controlplane::maintenance::MaintenanceMetrics::default(),
-        ),
+        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
         secret_registry: None,
     };
 
     // Initial: delta-seconds.
-    assert_eq!(state.config().retry_after_format, RetryAfterFormat::DeltaSeconds);
+    assert_eq!(
+        state.config().retry_after_format,
+        RetryAfterFormat::DeltaSeconds
+    );
 
     // Operator edits config to http-date.
     let updated_toml = format!(
@@ -383,7 +387,10 @@ retry_after_format = "http-date"
     state.reload_config().expect("reload succeeds");
 
     // Verify swap took effect.
-    assert_eq!(state.config().retry_after_format, RetryAfterFormat::HttpDate);
+    assert_eq!(
+        state.config().retry_after_format,
+        RetryAfterFormat::HttpDate
+    );
 }
 
 #[tokio::test]
@@ -410,11 +417,11 @@ async fn reload_without_config_path_errors_clearly() {
         secrets: iac_controlplane::config::SecretsConfig::default(),
         retry_after_format: RetryAfterFormat::default(),
         modules: vec![],
-            agent_token_ttl_secs: None,
-            ssh_targets: vec![],
-            wal_checkpoint_interval_secs: 0,
-            shutdown_timeout_secs: 1,
-            trusted_proxies: vec![],
+        agent_token_ttl_secs: None,
+        ssh_targets: vec![],
+        wal_checkpoint_interval_secs: 0,
+        shutdown_timeout_secs: 1,
+        trusted_proxies: vec![],
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(
@@ -429,9 +436,7 @@ async fn reload_without_config_path_errors_clearly() {
         signer,
         rate_limiter: Arc::new(RateLimiter::from_config(&cfg.rate_limit)),
         webhook_dispatcher: None,
-        maintenance_metrics: Arc::new(
-            iac_controlplane::maintenance::MaintenanceMetrics::default(),
-        ),
+        maintenance_metrics: Arc::new(iac_controlplane::maintenance::MaintenanceMetrics::default()),
         secret_registry: None,
     };
 
