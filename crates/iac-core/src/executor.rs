@@ -323,7 +323,15 @@ impl<'a> Executor<'a> {
                 }
             };
 
-            let checkpoint = Checkpoint::new(resource.id(), op.id, pre_data);
+            // Phase 9 follow-up: persist the resource spec alongside the
+            // provider's pre_apply data. Rollback then reconstructs a
+            // real Resource (not a Null-spec stub) and providers like
+            // file/ops can derive the target path from the spec rather
+            // than from `data["path"]` — closing the last fallback that
+            // 7cz.1 left documented as untrusted-JSON-after-checkpoint-
+            // tamper.
+            let checkpoint =
+                Checkpoint::with_spec(resource.id(), op.id, pre_data, resource.spec.clone());
             write_json(&workspace.join("checkpoint.json"), &checkpoint)?;
 
             let result = match provider.apply(resource, &s, &ctx) {
@@ -472,7 +480,13 @@ fn synthesize_resource(cp: &Checkpoint) -> Resource {
             labels: Default::default(),
             annotations: Default::default(),
         },
-        spec: serde_yaml_ng::Value::Null,
+        // Phase 9 follow-up: prefer the spec snapshot the apply path
+        // persisted; fall back to Null for legacy checkpoints written
+        // before the field existed. Providers that need spec fields
+        // (file/ops::rollback wanting spec.path) now get the real
+        // value, dropping the per-field-from-checkpoint-data fallback
+        // out of the trust boundary.
+        spec: cp.resource_spec.clone().unwrap_or(serde_yaml_ng::Value::Null),
         policy: serde_yaml_ng::Value::Null,
         source: SourceLocation::default(),
     }

@@ -137,6 +137,14 @@ impl Operation {
 
 /// Snapshot the executor takes before applying so a step can be undone later.
 /// `data` is provider-specific (file backup path, package version string, etc).
+///
+/// `resource_spec` (Phase 9 follow-up) carries the resource spec the operator
+/// submitted for this apply. Persisting it lets rollback reconstruct the
+/// original spec instead of trusting per-field fallbacks in `data` (which is
+/// untrusted JSON — see file/mod.rs::rollback for the historical fallback on
+/// `data["path"]` that 7cz.1 already partially mitigated). Optional with
+/// `#[serde(default)]` so on-disk checkpoints written by older agents
+/// (without the field) deserialise without rewrite.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub id: Ulid,
@@ -144,9 +152,14 @@ pub struct Checkpoint {
     pub operation_id: Ulid,
     pub created_at: Timestamp,
     pub data: Json,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_spec: Option<serde_yaml_ng::Value>,
 }
 
 impl Checkpoint {
+    /// Backwards-compatible constructor — leaves `resource_spec` as None.
+    /// Kept so existing test fixtures (which don't need the spec snapshot)
+    /// compile unchanged.
     pub fn new(resource_id: ResourceId, operation_id: Ulid, data: Json) -> Self {
         Self {
             id: Ulid::new(),
@@ -154,6 +167,26 @@ impl Checkpoint {
             operation_id,
             created_at: Timestamp::now(),
             data,
+            resource_spec: None,
+        }
+    }
+
+    /// Constructor that captures the resource spec alongside the provider's
+    /// `data`. Production apply paths in `Executor::apply` use this so the
+    /// rollback path doesn't depend on the checkpoint's per-field JSON.
+    pub fn with_spec(
+        resource_id: ResourceId,
+        operation_id: Ulid,
+        data: Json,
+        resource_spec: serde_yaml_ng::Value,
+    ) -> Self {
+        Self {
+            id: Ulid::new(),
+            resource_id,
+            operation_id,
+            created_at: Timestamp::now(),
+            data,
+            resource_spec: Some(resource_spec),
         }
     }
 }

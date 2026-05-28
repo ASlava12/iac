@@ -135,15 +135,23 @@ impl Provider for FileProvider {
         checkpoint: &Checkpoint,
         workspace: &Path,
     ) -> Result<()> {
-        // Phase 7cz.1: prefer the live spec's path as the write
-        // target. The CLI rollback path synthesises a Resource with
-        // spec=Null (it doesn't keep the original manifest around),
-        // so when parse_spec fails we fall back to the checkpoint's
-        // path field — knowing that field is itself untrusted JSON.
-        // The integrity guarantee on the checkpoint as a whole moves
-        // to 7cz.3 (server-signed checkpoints); 7cz.1 still guards
-        // the per-field bits (backup_name path-separator escape, the
-        // path-mismatch sanity check when both values are present).
+        // Trust order, tightest to loosest:
+        //
+        //   1. live `resource.spec` — set by the executor's
+        //      `synthesize_resource`, which since Phase 9 reads it
+        //      from the persisted `checkpoint.resource_spec`. This
+        //      is the operator-authored spec at apply time and
+        //      doesn't depend on the provider-controlled `data`
+        //      field, so the path can't be steered by a tampered
+        //      checkpoint payload.
+        //   2. `checkpoint.data["path"]` — last-resort fallback for
+        //      legacy on-disk checkpoints written before the spec
+        //      snapshot existed. Stays guarded by the path-mismatch
+        //      sanity check + backup_name path-separator escape
+        //      (Phase 7cz.1) inside `ops::restore`. Once an operator
+        //      has rolled past any legacy checkpoint, this branch
+        //      stops firing and the trust on `data["path"]` falls
+        //      out of the live surface.
         let target_from_spec = self.parse_spec(resource).ok().map(|s| s.path);
         let target_from_checkpoint: Option<std::path::PathBuf> = checkpoint
             .data
