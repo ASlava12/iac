@@ -481,7 +481,13 @@ fn write_atomic_unix(
     // Doing this BEFORE the rename means a reader hitting `path` only
     // sees the final perms / owner (and never the tmpfile).
     if let Some(mode) = mode {
-        rustix::fs::fchmod(tmp_file.as_fd(), Mode::from_bits_truncate(mode)).map_err(|e| {
+        // Mode's underlying integer is platform-specific: u32 on Linux
+        // (mode_t = unsigned int), u16 on macOS / FreeBSD / NetBSD
+        // (mode_t = unsigned short). Cast through `RawMode` so the
+        // same source compiles on every Unix release.yml target.
+        // The bits we use (0o0..=0o7777) always fit in u16.
+        let raw = mode as rustix::fs::RawMode;
+        rustix::fs::fchmod(tmp_file.as_fd(), Mode::from_bits_truncate(raw)).map_err(|e| {
             Error::Io {
                 path: parent.join(&tmp_name),
                 source: errno_to_io(e),
