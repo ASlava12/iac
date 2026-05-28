@@ -316,61 +316,10 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
         })?;
     }
 
-    // Phase 7cr (security fix #4.9): refuse to write through a
-    // symlink at `path`. Without this check, a low-priv user on the
-    // target host can plant a symlink at an iac-managed location
-    // (e.g. /etc/iac/foo.conf → /etc/shadow); the next operator-
-    // driven `iac apply` running as root rename's onto the symlink
-    // target and overwrites a sensitive file. Privilege escalation.
-    //
-    // We use `symlink_metadata` so we see the symlink itself, not
-    // its target. Any kind that's not a regular file (or absent)
-    // gets refused — directories at a file path are also operator
-    // error, fail loudly.
-    //
-    // Caveat: this is still TOCTOU-vulnerable in principle (the
-    // symlink could be planted between this check and the rename).
-    // A full fix needs `openat`/`renameat` with `O_NOFOLLOW` on a
-    // pinned parent fd. That's a follow-up; the symlink check
-    // closes 99% of the realistic attack surface.
-    if let Ok(md) = fs::symlink_metadata(path) {
-        if md.file_type().is_symlink() {
-            return Err(Error::provider(
-                "file",
-                format!(
-                    "refusing to write through symlink at {}: \
-                     remove the symlink first or change the manifest path. \
-                     A symlink at this location often signals an attacker-planted \
-                     redirect aimed at privilege escalation.",
-                    path.display()
-                ),
-            ));
-        }
-        if md.file_type().is_dir() {
-            return Err(Error::provider(
-                "file",
-                format!(
-                    "{} is a directory, not a file — refusing to overwrite",
-                    path.display()
-                ),
-            ));
-        }
-    }
-
     let content = spec.content.clone().unwrap_or_default();
-    let tmp = temp_path_in(parent, path);
-    fs::write(&tmp, &content).map_err(|e| Error::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
 
-    if let Some(mode) = spec.parsed_mode() {
-        set_mode(&tmp, mode).map_err(|e| Error::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-    }
-
+    // Resolve owner/group up front so both backends see the same
+    // arguments — Unix passes them to fchown, Windows path ignores them.
     let uid = spec
         .owner
         .as_deref()
@@ -383,17 +332,13 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
         .map(resolve_gid)
         .transpose()
         .map_err(|e| Error::provider("file", format!("group resolution failed: {e}")))?;
-    if uid.is_some() || gid.is_some() {
-        set_owner(&tmp, uid, gid).map_err(|e| Error::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-    }
+    let mode = spec.parsed_mode();
 
-    fs::rename(&tmp, path).map_err(|e| Error::Io {
-        path: path.clone(),
-        source: e,
-    })?;
+    #[cfg(unix)]
+    write_atomic_unix(path, parent, content.as_bytes(), mode, uid, gid)?;
+
+    #[cfg(not(unix))]
+    write_legacy_non_unix(path, parent, content.as_bytes(), mode, uid, gid)?;
 
     let sha = sha256_hex(content.as_bytes());
     Ok(StepResult {
@@ -402,6 +347,229 @@ pub fn write(spec: &FileSpec) -> Result<StepResult> {
         data: json!({ "path": path, "content_sha256": sha, "bytes": content.len() }),
         error: None,
     })
+}
+
+/// Phase 9 follow-up #20: TOCTOU-safe apply path. The previous code
+/// did `fs::symlink_metadata(path)` + `fs::write(tmp)` + `fs::rename`
+/// against paths re-resolved at every syscall, leaving a window where
+/// an attacker on the target host could plant a symlink between the
+/// check and the rename and steer the write to a sensitive location.
+///
+/// We now anchor every step to a parent-directory fd opened with
+/// `O_DIRECTORY | O_NOFOLLOW` and call `fstatat` / `openat` /
+/// `renameat` with `AT_SYMLINK_NOFOLLOW`. Once the parent fd is in
+/// hand, an attacker can't substitute a different inode without
+/// also winning a race against open() — and even then the
+/// `O_NOFOLLOW` flag on every reopened entry refuses to traverse
+/// any newly-planted symlink. The rename is `renameat` within that
+/// same fd, so the swap can't drift to a different directory.
+///
+/// Returns an `Err` on any of:
+///   * the parent path itself being a symlink (we never traverse one)
+///   * the existing target being a symlink or directory
+///   * the tmpfile name colliding with an attacker-placed entry
+///     (O_EXCL guarantees we own the tmp inode)
+///   * an underlying syscall error (ENOENT, EPERM, ENOSPC, …)
+#[cfg(unix)]
+fn write_atomic_unix(
+    path: &Path,
+    parent: &Path,
+    content: &[u8],
+    mode: Option<u32>,
+    uid: Option<u32>,
+    gid: Option<u32>,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags, openat, renameat, statat};
+    use std::io::Write;
+    use std::os::fd::AsFd;
+
+    let basename = path
+        .file_name()
+        .ok_or_else(|| {
+            Error::provider("file", format!("path has no file name: {}", path.display()))
+        })?
+        .to_owned();
+
+    // Step 1: open the parent directory with O_DIRECTORY | O_NOFOLLOW.
+    // If the parent path itself is a symlink we refuse — the operator
+    // wrote a manifest pointing at a managed dir, not at "the thing a
+    // symlink elsewhere on the system happens to point at right now".
+    // CWD-relative parents are resolved here once and then frozen as
+    // an fd; no later syscall re-walks the parent path.
+    let parent_fd = rustix::fs::open(
+        parent,
+        OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| Error::Io {
+        path: parent.into(),
+        source: errno_to_io(e),
+    })?;
+
+    // Step 2: stat the existing target under the pinned parent fd
+    // with AT_SYMLINK_NOFOLLOW. Refuse symlinks and directories the
+    // same way the legacy code did — but with no second syscall to
+    // re-resolve `path`, so an attacker can't race a symlink in
+    // between this check and the rename.
+    match statat(&parent_fd, &basename, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => {
+            let ft = FileType::from_raw_mode(stat.st_mode);
+            if ft == FileType::Symlink {
+                return Err(Error::provider(
+                    "file",
+                    format!(
+                        "refusing to write through symlink at {}: \
+                         remove the symlink first or change the manifest path. \
+                         A symlink at this location often signals an attacker-planted \
+                         redirect aimed at privilege escalation.",
+                        path.display()
+                    ),
+                ));
+            }
+            if ft == FileType::Directory {
+                return Err(Error::provider(
+                    "file",
+                    format!(
+                        "{} is a directory, not a file — refusing to overwrite",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+        Err(rustix::io::Errno::NOENT) => {
+            // Absent target is the create case — fall through.
+        }
+        Err(e) => {
+            return Err(Error::Io {
+                path: path.into(),
+                source: errno_to_io(e),
+            });
+        }
+    }
+
+    // Step 3: create the tempfile inside the parent fd with
+    // O_CREAT | O_EXCL | O_NOFOLLOW. EXCL means we own the inode
+    // outright; if a sibling races us to that exact ULID name we
+    // surface the conflict instead of silently appending.
+    let tmp_name = {
+        let stem = basename.to_string_lossy();
+        let ulid = ulid::Ulid::new();
+        format!(".{stem}.iac.{ulid}.tmp")
+    };
+    let tmp_fd = openat(
+        &parent_fd,
+        tmp_name.as_str(),
+        OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::WRONLY | OFlags::CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(|e| Error::Io {
+        path: parent.join(&tmp_name),
+        source: errno_to_io(e),
+    })?;
+    let mut tmp_file = std::fs::File::from(tmp_fd);
+    tmp_file.write_all(content).map_err(|e| Error::Io {
+        path: parent.join(&tmp_name),
+        source: e,
+    })?;
+    tmp_file.sync_all().map_err(|e| Error::Io {
+        path: parent.join(&tmp_name),
+        source: e,
+    })?;
+
+    // Step 4: fchmod / fchown via the tempfile fd, then drop the
+    // file handle (close) so readers can't observe the partial state.
+    // Doing this BEFORE the rename means a reader hitting `path` only
+    // sees the final perms / owner (and never the tmpfile).
+    if let Some(mode) = mode {
+        rustix::fs::fchmod(tmp_file.as_fd(), Mode::from_bits_truncate(mode)).map_err(|e| {
+            Error::Io {
+                path: parent.join(&tmp_name),
+                source: errno_to_io(e),
+            }
+        })?;
+    }
+    if uid.is_some() || gid.is_some() {
+        rustix::fs::fchown(
+            tmp_file.as_fd(),
+            uid.map(rustix::fs::Uid::from_raw),
+            gid.map(rustix::fs::Gid::from_raw),
+        )
+        .map_err(|e| Error::Io {
+            path: parent.join(&tmp_name),
+            source: errno_to_io(e),
+        })?;
+    }
+    drop(tmp_file);
+
+    // Step 5: atomic rename within parent_fd. POSIX rename(2)
+    // guarantees the swap is atomic on the same filesystem; doing it
+    // through `renameat` against our pinned fd means the destination
+    // can't be re-routed by a symlink planted at the parent dir
+    // level either.
+    renameat(&parent_fd, tmp_name.as_str(), &parent_fd, &basename).map_err(|e| Error::Io {
+        path: path.into(),
+        source: errno_to_io(e),
+    })?;
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn errno_to_io(e: rustix::io::Errno) -> std::io::Error {
+    std::io::Error::from_raw_os_error(e.raw_os_error())
+}
+
+/// Non-Unix fallback: same shape as the old apply path. We don't have
+/// `openat`/`renameat` outside Unix; the file provider isn't a
+/// production target on Windows in any case (agent only runs on Unix).
+#[cfg(not(unix))]
+fn write_legacy_non_unix(
+    path: &Path,
+    parent: &Path,
+    content: &[u8],
+    mode: Option<u32>,
+    uid: Option<u32>,
+    gid: Option<u32>,
+) -> Result<()> {
+    if let Ok(md) = fs::symlink_metadata(path) {
+        if md.file_type().is_symlink() {
+            return Err(Error::provider(
+                "file",
+                format!("refusing to write through symlink at {}", path.display()),
+            ));
+        }
+        if md.file_type().is_dir() {
+            return Err(Error::provider(
+                "file",
+                format!(
+                    "{} is a directory, not a file — refusing to overwrite",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    let tmp = temp_path_in(parent, path);
+    fs::write(&tmp, content).map_err(|e| Error::Io {
+        path: tmp.clone(),
+        source: e,
+    })?;
+    if let Some(mode) = mode {
+        set_mode(&tmp, mode).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
+    }
+    if uid.is_some() || gid.is_some() {
+        set_owner(&tmp, uid, gid).map_err(|e| Error::Io {
+            path: tmp.clone(),
+            source: e,
+        })?;
+    }
+    fs::rename(&tmp, path).map_err(|e| Error::Io {
+        path: path.into(),
+        source: e,
+    })?;
+    Ok(())
 }
 
 pub fn delete(path: &Path) -> Result<StepResult> {
@@ -845,6 +1013,43 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&victim).unwrap(),
             "original sensitive content\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_refuses_symlinked_parent_directory() {
+        // Phase 9 follow-up #20: when the parent directory of the
+        // target is itself a symlink, the previous `fs::*` apply path
+        // silently traversed it (rename(2) follows the parent
+        // component normally) — letting an attacker who controls a
+        // writable directory on the box redirect the whole write into
+        // some other tree by replacing the operator's stated parent
+        // with a symlink to attacker-chosen ground. The openat path
+        // opens the parent with O_NOFOLLOW; a parent symlink now
+        // surfaces as an explicit ELOOP-style error instead.
+        let dir = ws();
+        let real_parent = dir.path().join("real");
+        std::fs::create_dir(&real_parent).unwrap();
+        let attacker_target = dir.path().join("attacker_target");
+        std::fs::create_dir(&attacker_target).unwrap();
+        let symlinked_parent = dir.path().join("operator_managed_dir");
+        std::os::unix::fs::symlink(&attacker_target, &symlinked_parent).unwrap();
+
+        let spec = FileSpec {
+            path: symlinked_parent.join("config.conf"),
+            content: Some("important config\n".into()),
+            mode: Some("0644".into()),
+            owner: None,
+            group: None,
+            state: super::super::spec::FileState::Present,
+        };
+        let result = write(&spec);
+        assert!(result.is_err(), "expected parent-symlink rejection");
+        // Confirm the rename never reached the attacker's preferred tree.
+        assert!(
+            !attacker_target.join("config.conf").exists(),
+            "write must not have landed in the symlink target"
         );
     }
 }

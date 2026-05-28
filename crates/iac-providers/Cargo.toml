@@ -45,6 +45,11 @@ wasmtime-wasi = { workspace = true, optional = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 
+# Phase 9 follow-up #20: openat/renameat-based file provider apply
+# path. Unix-only; the existing `fs::*` fallback covers Windows.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
 [features]
 default = ["wasm"]
 # Phase 10: WASM-module provider. Requires wasmtime/cranelift, which

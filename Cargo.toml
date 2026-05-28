@@ -121,6 +121,15 @@ bytes = "1"
 # glob matching for capability allowlists
 globset = "0.4"
 
+# Phase 9 follow-up #20: openat/renameat/fstatat with O_NOFOLLOW.
+# Used by the file provider's apply path to anchor write+rename to a
+# parent-directory fd that we statted with AT_SYMLINK_NOFOLLOW, closing
+# the TOCTOU window between symlink_metadata check and rename(2).
+# rustix is already in the build graph transitively via cap-primitives;
+# pinning it here avoids version drift. `fs` is the only feature we
+# need — `process`, `net`, etc. stay off.
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+
 # Interactive password prompt for `iac login` (Phase 6f). Test paths use a
 # `--password` flag or `IAC_LOGIN_PASSWORD` env var instead.
 rpassword = "7"
