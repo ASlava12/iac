@@ -520,7 +520,10 @@ fn synthesize_resource(cp: &Checkpoint) -> Resource {
         // (file/ops::rollback wanting spec.path) now get the real
         // value, dropping the per-field-from-checkpoint-data fallback
         // out of the trust boundary.
-        spec: cp.resource_spec.clone().unwrap_or(serde_yaml_ng::Value::Null),
+        spec: cp
+            .resource_spec
+            .clone()
+            .unwrap_or(serde_yaml_ng::Value::Null),
         policy: serde_yaml_ng::Value::Null,
         source: SourceLocation::default(),
     }

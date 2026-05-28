@@ -208,8 +208,7 @@ async fn list_assignments(
     for env in &mut items {
         if let Some(registry) = state.secret_registry.as_deref() {
             for resource in &mut env.payload.resources {
-                let (_, secret_pointers) =
-                    registry.substitute_with_pointers(resource).await?;
+                let (_, secret_pointers) = registry.substitute_with_pointers(resource).await?;
                 // Phase 9 follow-up #15: tag the resource with the
                 // list of JSON pointers whose original value carried a
                 // `${secret://...}` reference. The executor consults
@@ -236,10 +235,7 @@ async fn list_assignments(
                     if let Some(meta) = resource.pointer_mut("/metadata")
                         && let Some(map) = meta.as_object_mut()
                     {
-                        map.insert(
-                            "annotations".into(),
-                            serde_json::Value::Object(annotations),
-                        );
+                        map.insert("annotations".into(), serde_json::Value::Object(annotations));
                     }
                 }
             }
