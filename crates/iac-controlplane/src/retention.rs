@@ -252,7 +252,7 @@ pub async fn prune_once(store: &Store, config: &RetentionConfig) -> ApiResult<Pr
 async fn delete_older_than(store: &Store, table: &str, column: &str, days: i64) -> ApiResult<u64> {
     let cutoff = cutoff_string(days);
     let q = format!("DELETE FROM {table} WHERE {column} < ?");
-    let res = sqlx::query(&sql(&q))
+    let res = sqlx::query(&store.sql(&q))
         .bind(cutoff)
         .execute(store.pool())
         .await?;
@@ -268,7 +268,7 @@ async fn delete_older_than_with_filter(
 ) -> ApiResult<u64> {
     let cutoff = cutoff_string(days);
     let q = format!("DELETE FROM {table} WHERE {extra_filter} AND {column} < ?");
-    let res = sqlx::query(&sql(&q))
+    let res = sqlx::query(&store.sql(&q))
         .bind(cutoff)
         .execute(store.pool())
         .await?;
@@ -317,7 +317,7 @@ async fn prune_observations_per_resource(store: &Store, max_per_resource: i64) -
              )";
     let mut total = 0u64;
     loop {
-        let res = sqlx::query(&sql(q))
+        let res = sqlx::query(&store.sql(q))
             .bind(max_per_resource)
             .bind(CHUNK_SIZE)
             .execute(store.pool())
@@ -361,7 +361,7 @@ async fn prune_desired_states_per_resource(store: &Store, max_per_resource: i64)
              )";
     let mut total = 0u64;
     loop {
-        let res = sqlx::query(&sql(q))
+        let res = sqlx::query(&store.sql(q))
             .bind(max_per_resource)
             .bind(CHUNK_SIZE)
             .execute(store.pool())

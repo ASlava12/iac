@@ -675,15 +675,16 @@ impl WebhookDispatcher {
     ///   3. `0` if `backfill=true`, else `MAX(audit_events.id)` —
     ///      first-boot semantics.
     pub async fn initialize(&self, store: &Store) {
-        let max_id: i64 =
-            sqlx::query_as::<_, (i64,)>(&sql("SELECT COALESCE(MAX(id), 0) FROM audit_events"))
-                .fetch_one(store.pool())
-                .await
-                .map(|(id,)| id)
-                .unwrap_or(0);
-        let legacy: Option<i64> = sqlx::query_as::<_, (i64,)>(&sql(
-            "SELECT last_seen_id FROM webhook_cursor WHERE key = 'audit'",
-        ))
+        let max_id: i64 = sqlx::query_as::<_, (i64,)>(
+            &store.sql("SELECT COALESCE(MAX(id), 0) FROM audit_events"),
+        )
+        .fetch_one(store.pool())
+        .await
+        .map(|(id,)| id)
+        .unwrap_or(0);
+        let legacy: Option<i64> = sqlx::query_as::<_, (i64,)>(
+            &store.sql("SELECT last_seen_id FROM webhook_cursor WHERE key = 'audit'"),
+        )
         .fetch_optional(store.pool())
         .await
         .ok()
@@ -693,9 +694,9 @@ impl WebhookDispatcher {
         let mut cursors = self.cursors.lock().await;
         for webhook in &self.config.webhooks {
             let key = Self::cursor_key(&webhook.name);
-            let persisted: Option<i64> = sqlx::query_as::<_, (i64,)>(&sql(
-                "SELECT last_seen_id FROM webhook_cursor WHERE key = ?",
-            ))
+            let persisted: Option<i64> = sqlx::query_as::<_, (i64,)>(
+                &store.sql("SELECT last_seen_id FROM webhook_cursor WHERE key = ?"),
+            )
             .bind(&key)
             .fetch_optional(store.pool())
             .await
@@ -735,7 +736,7 @@ impl WebhookDispatcher {
         let now = jiff::Timestamp::now();
         let deadline_unix = now.as_second().saturating_add(retry_secs as i64);
         let updated_at = now.to_string();
-        if let Err(e) = sqlx::query(&sql(
+        if let Err(e) = sqlx::query(&store.sql(
             "INSERT INTO webhook_backoff (webhook_name, deadline_unix, updated_at)
              VALUES (?, ?, ?)
              ON CONFLICT(webhook_name) DO UPDATE SET
@@ -762,7 +763,7 @@ impl WebhookDispatcher {
     /// "missed" backoff (one premature attempt) but no other harm.
     async fn load_persisted_backoffs(&self, store: &Store) {
         let now_unix = jiff::Timestamp::now().as_second();
-        let rows: Vec<(String, i64)> = match sqlx::query_as(&sql(
+        let rows: Vec<(String, i64)> = match sqlx::query_as(&store.sql(
             "SELECT webhook_name, deadline_unix FROM webhook_backoff
              WHERE deadline_unix > ?",
         ))
@@ -813,9 +814,9 @@ impl WebhookDispatcher {
         // Read all `audit:*` rows so we can compute orphans in Rust;
         // expressing "NOT IN (?, ?, ?)" in SQL with a dynamic-length
         // list is more code than this set difference.
-        let rows: Vec<(String,)> = match sqlx::query_as(&sql(
-            "SELECT key FROM webhook_cursor WHERE key LIKE 'audit:%'",
-        ))
+        let rows: Vec<(String,)> = match sqlx::query_as(
+            &store.sql("SELECT key FROM webhook_cursor WHERE key LIKE 'audit:%'"),
+        )
         .fetch_all(store.pool())
         .await
         {
@@ -830,7 +831,7 @@ impl WebhookDispatcher {
             if configured.contains(&key) {
                 continue;
             }
-            match sqlx::query(&sql("DELETE FROM webhook_cursor WHERE key = ?"))
+            match sqlx::query(&store.sql("DELETE FROM webhook_cursor WHERE key = ?"))
                 .bind(&key)
                 .execute(store.pool())
                 .await
@@ -899,9 +900,11 @@ impl WebhookDispatcher {
         } else {
             self.config.backfill_batch_size
         };
-        let rows = match sqlx::query(&sql("SELECT id, timestamp, actor, kind, severity,
+        let rows = match sqlx::query(&store.sql(
+            "SELECT id, timestamp, actor, kind, severity,
                     operation_id, agent_id, resource_id, drift_id, payload_json
-             FROM audit_events WHERE id > ? ORDER BY id LIMIT ?"))
+             FROM audit_events WHERE id > ? ORDER BY id LIMIT ?",
+        ))
         .bind(cursor)
         .bind(i64::from(batch_size))
         .fetch_all(store.pool())
@@ -963,7 +966,7 @@ impl WebhookDispatcher {
         if last != cursor {
             self.cursors.lock().await.insert(key.clone(), last);
             let now = jiff::Timestamp::now().to_string();
-            if let Err(e) = sqlx::query(&sql(
+            if let Err(e) = sqlx::query(&store.sql(
                 "INSERT INTO webhook_cursor (key, last_seen_id, updated_at)
                  VALUES (?, ?, ?)
                  ON CONFLICT(key) DO UPDATE SET
