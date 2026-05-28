@@ -92,10 +92,8 @@ impl Store {
                 sidecar.push(ext);
                 let sidecar = std::path::PathBuf::from(sidecar);
                 if sidecar.exists() {
-                    let _ = std::fs::set_permissions(
-                        &sidecar,
-                        std::fs::Permissions::from_mode(0o600),
-                    );
+                    let _ =
+                        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o600));
                 }
             }
         }

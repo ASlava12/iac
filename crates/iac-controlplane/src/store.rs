@@ -1693,10 +1693,8 @@ impl Store {
         // Postgres only when the SQL goes through `sql()`; the raw
         // literal here would silently break Postgres deployments. Use
         // the same wrapper every other call site in this file uses.
-        let op_id: Option<String> = sqlx::query_scalar(&sql(
-            "SELECT operation_id FROM assignments
-             WHERE id = ? AND agent_id = ? AND status IN ('pending', 'fetched')",
-        ))
+        let op_id: Option<String> = sqlx::query_scalar(&sql("SELECT operation_id FROM assignments
+             WHERE id = ? AND agent_id = ? AND status IN ('pending', 'fetched')"))
         .bind(assignment_id)
         .bind(agent_id)
         .fetch_optional(&mut *tx)
@@ -1792,13 +1790,11 @@ impl Store {
         agent_id: &str,
     ) -> ApiResult<Vec<DesiredStateItem>> {
         // Step 1: this agent's non-failed apply assignments.
-        let assignments = sqlx::query(&sql(
-            "SELECT operation_id, payload_json
+        let assignments = sqlx::query(&sql("SELECT operation_id, payload_json
              FROM assignments
              WHERE agent_id = ?
                AND status != 'failed'
-               AND kind = 'apply'",
-        ))
+               AND kind = 'apply'"))
         .bind(agent_id)
         .fetch_all(&self.pool)
         .await?;

@@ -284,10 +284,7 @@ impl RateLimiter {
     /// Held under a single `state` lock so the dry-run check and the
     /// commit pass see the same snapshot — no other request can race
     /// in between.
-    pub async fn check_and_record_policies(
-        &self,
-        policies: &[(&str, u32)],
-    ) -> ApiResult<()> {
+    pub async fn check_and_record_policies(&self, policies: &[(&str, u32)]) -> ApiResult<()> {
         use std::sync::atomic::Ordering::Relaxed;
         // Filter out disabled caps up-front so they don't pollute the
         // metrics counter.
