@@ -302,3 +302,37 @@ fn operations_dir_is_bounded_by_gc() {
     let exec2 = Executor::new(&reg, fresh.path().into(), "test");
     exec2.gc_operation_dirs(3).unwrap();
 }
+
+#[test]
+fn plan_marks_field_changes_sensitive_when_resource_tagged() {
+    // Regression for Phase 9 follow-up #15: when the control-plane has
+    // stamped `iac.dev/secret-fields` on a resource, every FieldChange
+    // the planner emits for that resource must come back with
+    // sensitive=true so renders + drift reports redact the values.
+    let reg = make_registry();
+    let dir = TempDir::new().unwrap();
+    let exec = Executor::new(&reg, dir.path().into(), "test");
+
+    let mut tagged = mk_resource("a", "hush");
+    tagged
+        .metadata
+        .annotations
+        .insert(super::SECRET_FIELDS_ANNOTATION.into(), "/spec".into());
+    let plan = exec.plan(&[tagged]).unwrap();
+    assert_eq!(plan.items.len(), 1);
+    let changes = &plan.items[0].diff.changes;
+    assert!(!changes.is_empty(), "diff must carry at least one change");
+    assert!(
+        changes.iter().all(|c| c.sensitive),
+        "every FieldChange should be flagged sensitive when the resource is tagged"
+    );
+
+    // Sanity counter-test: a plain (untagged) resource still produces
+    // non-sensitive changes — we haven't accidentally marked the world.
+    let plain = mk_resource("b", "hush");
+    let plan = exec.plan(&[plain]).unwrap();
+    assert!(
+        plan.items[0].diff.changes.iter().all(|c| !c.sensitive),
+        "untagged resource must not be marked sensitive"
+    );
+}

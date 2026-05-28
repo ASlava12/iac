@@ -165,7 +165,8 @@ impl<'a> Executor<'a> {
         for resource in resources {
             let provider = self.registry.require(&resource.kind)?;
             let observed = provider.observe(resource)?;
-            let diff = provider.diff(resource, &observed)?;
+            let mut diff = provider.diff(resource, &observed)?;
+            mark_secret_changes(resource, &mut diff);
             let steps = if diff.is_change() {
                 provider.plan(resource, &diff)?
             } else {
@@ -279,7 +280,8 @@ impl<'a> Executor<'a> {
     fn apply_one(&self, resource: &Resource, op: &Operation) -> Result<ApplyItem> {
         let provider = self.registry.require(&resource.kind)?;
         let observed = provider.observe(resource)?;
-        let diff = provider.diff(resource, &observed)?;
+        let mut diff = provider.diff(resource, &observed)?;
+        mark_secret_changes(resource, &mut diff);
         if matches!(diff.kind, DiffKind::NoChange) {
             // Even no-change runs may want to refresh applied state metadata.
             self.write_applied(resource, op.id)?;
@@ -465,6 +467,38 @@ impl<'a> Executor<'a> {
             .join("checkpoints")
             .join(rid.fs_key())
             .join(step.id.to_string())
+    }
+}
+
+/// Phase 9 follow-up #15: annotation the control-plane stamps onto a
+/// resource (under `metadata.annotations`) listing the JSON-pointer
+/// paths whose original value carried a `${secret://...}` reference.
+/// Kept in `iac.dev/` namespace to avoid colliding with operator
+/// annotations. Mirrored in `iac-controlplane/src/api/agents.rs` —
+/// keep the two constants in sync if either crate changes the key.
+pub const SECRET_FIELDS_ANNOTATION: &str = "iac.dev/secret-fields";
+
+/// If the resource was tagged by the control-plane as carrying secret
+/// substitutions, redact every FieldChange in the supplied diff. The
+/// granular pointer→field mapping is provider-specific and not always
+/// 1:1 (a docker.container env-var map's secret pointer can't be
+/// projected onto the provider's coarse "env" FieldChange), so the
+/// conservative shape — "any secret -> the whole diff is sensitive" —
+/// is what we apply. The render layer already replaces from/to with
+/// `<sensitive>` placeholders when the flag is set, so this prevents
+/// resolved plaintext from leaking through drift reports and local
+/// plan/apply output.
+fn mark_secret_changes(resource: &Resource, diff: &mut crate::diff::Diff) {
+    let has_secrets = resource
+        .metadata
+        .annotations
+        .get(SECRET_FIELDS_ANNOTATION)
+        .is_some_and(|v| !v.is_empty());
+    if !has_secrets {
+        return;
+    }
+    for change in &mut diff.changes {
+        change.sensitive = true;
     }
 }
 

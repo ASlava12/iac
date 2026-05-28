@@ -13,6 +13,15 @@ use iac_core::protocol::v1::{
 };
 use std::net::SocketAddr;
 
+/// Phase 9 follow-up #15: annotation key under `metadata.annotations`
+/// whose value is a comma-separated list of JSON pointers whose original
+/// value carried a `${secret://...}` reference. The agent-side executor
+/// uses this to flip `Diff::FieldChange::sensitive=true` so resolved
+/// plaintext doesn't surface in drift reports or local plan/apply output.
+/// Kept under the `iac.dev/` namespace so operator-authored annotations
+/// can't collide.
+pub const SECRET_FIELDS_ANNOTATION: &str = "iac.dev/secret-fields";
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/agents", get(list_agents))
@@ -199,7 +208,40 @@ async fn list_assignments(
     for env in &mut items {
         if let Some(registry) = state.secret_registry.as_deref() {
             for resource in &mut env.payload.resources {
-                registry.substitute_in_value(resource).await?;
+                let (_, secret_pointers) =
+                    registry.substitute_with_pointers(resource).await?;
+                // Phase 9 follow-up #15: tag the resource with the
+                // list of JSON pointers whose original value carried a
+                // `${secret://...}` reference. The executor consults
+                // this tag when collecting FieldChange entries and
+                // flips `sensitive=true` on the whole diff so a drift
+                // report or local plan print can't leak the resolved
+                // plaintext back through audit-visible channels.
+                // We stash it under `metadata.annotations` because
+                // that map already rides the wire and providers ignore
+                // unknown keys — no protocol change needed.
+                if !secret_pointers.is_empty() {
+                    let entry = resource
+                        .pointer_mut("/metadata/annotations")
+                        .filter(|v| v.is_object())
+                        .cloned();
+                    let mut annotations = match entry {
+                        Some(serde_json::Value::Object(map)) => map,
+                        _ => serde_json::Map::new(),
+                    };
+                    annotations.insert(
+                        SECRET_FIELDS_ANNOTATION.to_string(),
+                        serde_json::Value::String(secret_pointers.join(",")),
+                    );
+                    if let Some(meta) = resource.pointer_mut("/metadata")
+                        && let Some(map) = meta.as_object_mut()
+                    {
+                        map.insert(
+                            "annotations".into(),
+                            serde_json::Value::Object(annotations),
+                        );
+                    }
+                }
             }
         }
         let payload_json = serde_json::to_vec(&env.payload)?;

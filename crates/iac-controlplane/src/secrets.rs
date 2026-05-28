@@ -491,8 +491,22 @@ impl SecretRegistry {
     /// error the value is partially mutated; callers should treat it as
     /// poisoned.
     pub async fn substitute_in_value(&self, value: &mut serde_json::Value) -> ApiResult<u32> {
+        let (count, _) = self.substitute_with_pointers(value).await?;
+        Ok(count)
+    }
+
+    /// Phase 9 follow-up — same as `substitute_in_value` but also returns
+    /// the JSON-pointer paths of every node that contained a secret
+    /// reference. Used by the agent-fetch path to mark which fields
+    /// the diff/drift renderer should redact so resolved plaintext
+    /// can't leak back through drift reports or audit-visible diffs.
+    pub async fn substitute_with_pointers(
+        &self,
+        value: &mut serde_json::Value,
+    ) -> ApiResult<(u32, Vec<String>)> {
         let pointers = collect_string_pointers(value);
         let mut count = 0;
+        let mut secret_pointers: Vec<String> = Vec::new();
         for ptr in pointers {
             let original = match value.pointer(&ptr) {
                 Some(serde_json::Value::String(s)) => s.clone(),
@@ -502,6 +516,7 @@ impl SecretRegistry {
             if refs.is_empty() {
                 continue;
             }
+            secret_pointers.push(ptr.clone());
             let mut out = String::with_capacity(original.len());
             let mut cursor = 0;
             for (start, end, sref) in &refs {
@@ -516,7 +531,7 @@ impl SecretRegistry {
                 *target = serde_json::Value::String(out);
             }
         }
-        Ok(count)
+        Ok((count, secret_pointers))
     }
 }
 
