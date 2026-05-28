@@ -8,7 +8,7 @@ use super::spec::{FileSpec, FileState, parse_mode};
 use iac_core::{
     Error, Result,
     diff::{Diff, DiffKind, FieldChange},
-    hash::sha256_hex,
+    hash::{sha256_hex, sha256_hex_reader},
     operation::StepResult,
     state::ObservedState,
 };
@@ -103,11 +103,19 @@ pub fn observe(spec: &FileSpec) -> Result<ObservedState> {
         });
     }
 
-    let content = fs::read(path).map_err(|e| Error::Io {
+    // Stream the file through the hasher rather than slurping it into
+    // a Vec — `observe` runs on every cycle for every managed file, and
+    // the content is only needed to derive the sha (it's never
+    // returned). A multi-GB managed file (log, DB dump, disk image)
+    // would otherwise spike the agent's RSS by its full size each tick.
+    let file = fs::File::open(path).map_err(|e| Error::Io {
         path: path.clone(),
         source: e,
     })?;
-    let sha = sha256_hex(&content);
+    let sha = sha256_hex_reader(std::io::BufReader::new(file)).map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
     let mode = file_mode(&meta);
     let uid = file_uid(&meta);
     let gid = file_gid(&meta);
