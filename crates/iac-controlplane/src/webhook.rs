@@ -18,7 +18,7 @@
 //! retry — same rationale. If you need at-least-once, plug the audit
 //! log into a real bus.
 
-use crate::store::{Store, sql};
+use crate::store::Store;
 use iac_core::protocol::v1::AuditEvent;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;

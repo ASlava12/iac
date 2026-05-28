@@ -8,7 +8,7 @@
 //! upgrade — they have to opt into shorter windows.
 
 use crate::error::ApiResult;
-use crate::store::{Store, sql};
+use crate::store::Store;
 use jiff::{Span, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -460,9 +460,11 @@ mod tests {
     }
 
     async fn insert_audit(store: &Store, timestamp: &str) {
-        sqlx::query(&sql("INSERT INTO audit_events
+        sqlx::query(&store.sql(
+            "INSERT INTO audit_events
                 (timestamp, actor, kind, severity, payload_json)
-             VALUES (?, 'admin', 'test', 'info', '{}')"))
+             VALUES (?, 'admin', 'test', 'info', '{}')",
+        ))
         .bind(timestamp)
         .execute(store.pool())
         .await
@@ -489,7 +491,7 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.audit, 1);
 
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM audit_events"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM audit_events"))
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -501,7 +503,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = store_in(&dir).await;
         // Need a registered agent for the FK.
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO agents (id, name, environment, token_hash, registered_at)
              VALUES ('a1', 'agent-a', 'test', 'h', ?)",
         ))
@@ -510,7 +512,7 @@ mod tests {
         .await
         .unwrap();
 
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO observations
                 (agent_id, resource_id, kind, observed_at, present, spec_json, facts_json, received_at)
              VALUES ('a1', 'file/test/x', 'file', ?, 1, '{}', '{}', ?)",
@@ -520,7 +522,7 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO observations
                 (agent_id, resource_id, kind, observed_at, present, spec_json, facts_json, received_at)
              VALUES ('a1', 'file/test/x', 'file', ?, 1, '{}', '{}', ?)",
@@ -535,7 +537,7 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.observations, 1);
 
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM observations"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM observations"))
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -546,7 +548,7 @@ mod tests {
     async fn drift_prune_keeps_open_events_regardless_of_age() {
         let dir = TempDir::new().unwrap();
         let store = store_in(&dir).await;
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO agents (id, name, environment, token_hash, registered_at)
              VALUES ('a1', 'agent-a', 'test', 'h', ?)",
         ))
@@ -556,10 +558,12 @@ mod tests {
         .unwrap();
 
         // Old + resolved → prunable.
-        sqlx::query(&sql("INSERT INTO drift_events
+        sqlx::query(&store.sql(
+            "INSERT INTO drift_events
                 (agent_id, resource_id, kind, severity, diff_json, detected_at,
                  received_at, resolved_at)
-             VALUES ('a1', 'file/test/x', 'file', 'warning', '{}', ?, ?, ?)"))
+             VALUES ('a1', 'file/test/x', 'file', 'warning', '{}', ?, ?, ?)",
+        ))
         .bind(ago(60))
         .bind(ago(60))
         .bind(ago(60))
@@ -567,10 +571,12 @@ mod tests {
         .await
         .unwrap();
         // Old + still open → kept.
-        sqlx::query(&sql("INSERT INTO drift_events
+        sqlx::query(&store.sql(
+            "INSERT INTO drift_events
                 (agent_id, resource_id, kind, severity, diff_json, detected_at,
                  received_at)
-             VALUES ('a1', 'file/test/y', 'file', 'warning', '{}', ?, ?)"))
+             VALUES ('a1', 'file/test/y', 'file', 'warning', '{}', ?, ?)",
+        ))
         .bind(ago(60))
         .bind(ago(60))
         .execute(store.pool())
@@ -581,7 +587,7 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.drift_resolved, 1);
 
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM drift_events"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM drift_events"))
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -602,7 +608,7 @@ mod tests {
             .await
             .unwrap();
         // Insert two tokens: one expired, one valid.
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO user_tokens (token_hash, user_id, issued_at, expires_at)
              VALUES (?, ?, ?, ?)",
         ))
@@ -613,7 +619,7 @@ mod tests {
         .execute(store.pool())
         .await
         .unwrap();
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO user_tokens (token_hash, user_id, issued_at, expires_at)
              VALUES (?, ?, ?, ?)",
         ))
@@ -634,7 +640,7 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.user_tokens_expired, 1);
 
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM user_tokens"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM user_tokens"))
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -654,7 +660,7 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.audit, 0);
 
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM audit_events"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM audit_events"))
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -680,7 +686,7 @@ mod tests {
                 .checked_sub(Span::new().try_minutes((n - i) as i64).unwrap())
                 .unwrap()
                 .to_string();
-            sqlx::query(&sql(
+            sqlx::query(&store.sql(
                 "INSERT INTO observations
                     (agent_id, resource_id, kind, observed_at, present, spec_json, facts_json, received_at)
                  VALUES (?, ?, 'file', ?, 1, '{}', '{}', ?)",
@@ -699,7 +705,7 @@ mod tests {
     async fn per_resource_cap_keeps_n_newest_drops_rest() {
         let dir = TempDir::new().unwrap();
         let store = store_in(&dir).await;
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO agents (id, name, environment, token_hash, registered_at)
              VALUES ('a1', 'agent-a', 'test', 'h', ?)",
         ))
@@ -723,7 +729,7 @@ mod tests {
         assert_eq!(stats.observations, 0, "age-based path should be disabled");
         assert_eq!(stats.observations_per_resource, 4);
 
-        let counts: Vec<(String, i64)> = sqlx::query_as(&sql(
+        let counts: Vec<(String, i64)> = sqlx::query_as(&store.sql(
             "SELECT resource_id, COUNT(*) FROM observations GROUP BY resource_id ORDER BY resource_id",
         ))
         .fetch_all(store.pool())
@@ -742,7 +748,7 @@ mod tests {
     async fn per_resource_cap_zero_disables() {
         let dir = TempDir::new().unwrap();
         let store = store_in(&dir).await;
-        sqlx::query(&sql(
+        sqlx::query(&store.sql(
             "INSERT INTO agents (id, name, environment, token_hash, registered_at)
              VALUES ('a1', 'agent-a', 'test', 'h', ?)",
         ))
@@ -760,7 +766,7 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.observations_per_resource, 0);
 
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM observations"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM observations"))
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -779,17 +785,21 @@ mod tests {
             // (operation_id REFERENCES operations(id) ON DELETE
             // CASCADE) is satisfied.
             let op_id = format!("op-{resource_id}-{i:03}");
-            sqlx::query(&sql("INSERT INTO operations
+            sqlx::query(&store.sql(
+                "INSERT INTO operations
                     (id, kind, environment, requested_by, status, created_at, matched_policies_json)
-                 VALUES (?, 'apply', 'test', 'test', 'succeeded', ?, '[]')"))
+                 VALUES (?, 'apply', 'test', 'test', 'succeeded', ?, '[]')",
+            ))
             .bind(&op_id)
             .bind(ago(0))
             .execute(store.pool())
             .await
             .unwrap();
-            sqlx::query(&sql("INSERT INTO desired_states
+            sqlx::query(&store.sql(
+                "INSERT INTO desired_states
                     (operation_id, resource_id, kind, environment, spec_json, metadata_json)
-                 VALUES (?, ?, 'file', 'test', '{}', '{}')"))
+                 VALUES (?, ?, 'file', 'test', '{}', '{}')",
+            ))
             .bind(&op_id)
             .bind(resource_id)
             .execute(store.pool())
@@ -823,7 +833,7 @@ mod tests {
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.desired_states_per_resource, 4);
 
-        let counts: Vec<(String, i64)> = sqlx::query_as(&sql(
+        let counts: Vec<(String, i64)> = sqlx::query_as(&store.sql(
             "SELECT resource_id, COUNT(*) FROM desired_states GROUP BY resource_id ORDER BY resource_id",
         ))
         .fetch_all(store.pool())
@@ -855,7 +865,7 @@ mod tests {
         };
         let stats = prune_once(&store, &cfg).await.unwrap();
         assert_eq!(stats.desired_states_per_resource, 0);
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM desired_states"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM desired_states"))
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -870,7 +880,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = store_in(&dir).await;
         for (id, name) in [("a1", "agent-a"), ("a2", "agent-b")] {
-            sqlx::query(&sql(
+            sqlx::query(&store.sql(
                 "INSERT INTO agents (id, name, environment, token_hash, registered_at)
                  VALUES (?, ?, 'test', 'h', ?)",
             ))
@@ -892,7 +902,7 @@ mod tests {
         // Each agent has 3 rows of `file/test/shared`; cap of 2 drops 1
         // per agent → total 2 dropped, 4 remaining.
         assert_eq!(stats.observations_per_resource, 2);
-        let count: (i64,) = sqlx::query_as(&sql("SELECT COUNT(*) FROM observations"))
+        let count: (i64,) = sqlx::query_as(&store.sql("SELECT COUNT(*) FROM observations"))
             .fetch_one(store.pool())
             .await
             .unwrap();
