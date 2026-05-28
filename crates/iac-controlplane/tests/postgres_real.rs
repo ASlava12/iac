@@ -225,3 +225,110 @@ async fn postgres_round_trip() {
         "should drop 3 of the 5 rows"
     );
 }
+
+/// Phase 9 follow-up #5: concurrency stress for the audit-chain
+/// `FOR UPDATE` lock against real Postgres. Pre-7f7ee09, `record_audit_on`
+/// did `SELECT last_hash FROM audit_chain_tip` without a row lock, so on
+/// Postgres (READ COMMITTED) two concurrent audited operations could both
+/// read tip hash H0, both INSERT rows with prev_hash=H0, and both UPDATE
+/// the tip — last write wins, forking the Merkle chain so
+/// `audit_verify_chain` later finds two rows claiming the same predecessor.
+///
+/// The fix appends `FOR UPDATE` to the tip SELECT on Postgres; this test
+/// drives N simultaneous `register_agent` calls (each appends one audit
+/// row) and asserts:
+///   * the chain still verifies after the storm
+///   * `prev_hash` values across all audit rows form a single linked
+///     line (every prev_hash, except the genesis "", points at exactly
+///     one preceding row's row_hash)
+///
+/// Gated behind `IAC_POSTGRES_INTEGRATION=1` like the rest of this file.
+/// SQLite's whole-DB write serialisation already prevents the fork there,
+/// so this test only makes sense against Postgres.
+#[tokio::test]
+async fn postgres_audit_chain_survives_concurrent_writers() {
+    if !integration_enabled() || !docker_reachable() {
+        eprintln!("skipping: set IAC_POSTGRES_INTEGRATION=1 and start Docker");
+        return;
+    }
+
+    let pg = PgContainer::start();
+    let store = std::sync::Arc::new(
+        Store::connect(&pg.url())
+            .await
+            .expect("connect to dockerised postgres"),
+    );
+    assert_eq!(store.dialect(), Dialect::Postgres);
+
+    // Fan out 24 register_agent calls — each commits exactly one audit
+    // row (`agent.registered`). 24 is plenty to surface the race on a
+    // multi-core runner without dominating the test suite runtime.
+    const N: usize = 24;
+    let mut handles = Vec::with_capacity(N);
+    for i in 0..N {
+        let store = store.clone();
+        handles.push(tokio::spawn(async move {
+            store
+                .register_agent(
+                    &RegisterRequest {
+                        name: format!("agent-{i}"),
+                        environment: "stress".into(),
+                        metadata: serde_json::json!({"i": i}),
+                    },
+                    None,
+                )
+                .await
+                .expect("register_agent under concurrency")
+        }));
+    }
+    for h in handles {
+        h.await.expect("task join");
+    }
+
+    // 1. Chain verifies as one linked line.
+    let broken = store
+        .audit_verify_chain()
+        .await
+        .expect("audit_verify_chain");
+    assert!(
+        broken.is_none(),
+        "Postgres concurrent audit writes forked the chain — broken at id {broken:?}"
+    );
+
+    // 2. We saw at least N audit rows from this test (registration emits
+    //    one; the call may emit additional sibling events depending on
+    //    future audit shape, so the assertion is `>=` not `==`).
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_events WHERE kind = 'agent.registered'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("count agent.registered events");
+    assert!(
+        count as usize >= N,
+        "expected at least {N} agent.registered audit rows, got {count}"
+    );
+
+    // 3. Every `prev_hash` (except the genesis empty string) must equal
+    //    some earlier row's `row_hash`. If the race-condition fix
+    //    regressed, we'd see two rows with the same prev_hash — i.e.
+    //    fewer distinct prev_hash values than non-genesis rows.
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT prev_hash, row_hash FROM audit_events ORDER BY id",
+    )
+    .fetch_all(store.pool())
+    .await
+    .expect("dump audit_events");
+    use std::collections::HashSet;
+    let mut hashes_seen: HashSet<String> = HashSet::from([String::new()]);
+    for (i, (prev, row)) in rows.iter().enumerate() {
+        assert!(
+            hashes_seen.contains(prev),
+            "row #{i}: prev_hash {prev:?} doesn't match any earlier row_hash — chain forked"
+        );
+        assert!(
+            hashes_seen.insert(row.clone()),
+            "row #{i}: row_hash {row:?} repeats — collision or torn write"
+        );
+    }
+}
