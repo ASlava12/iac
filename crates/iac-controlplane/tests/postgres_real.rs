@@ -298,12 +298,11 @@ async fn postgres_audit_chain_survives_concurrent_writers() {
     // 2. We saw at least N audit rows from this test (registration emits
     //    one; the call may emit additional sibling events depending on
     //    future audit shape, so the assertion is `>=` not `==`).
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM audit_events WHERE kind = 'agent.registered'",
-    )
-    .fetch_one(store.pool())
-    .await
-    .expect("count agent.registered events");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audit_events WHERE kind = 'agent.registered'")
+            .fetch_one(store.pool())
+            .await
+            .expect("count agent.registered events");
     assert!(
         count as usize >= N,
         "expected at least {N} agent.registered audit rows, got {count}"
@@ -313,12 +312,11 @@ async fn postgres_audit_chain_survives_concurrent_writers() {
     //    some earlier row's `row_hash`. If the race-condition fix
     //    regressed, we'd see two rows with the same prev_hash — i.e.
     //    fewer distinct prev_hash values than non-genesis rows.
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT prev_hash, row_hash FROM audit_events ORDER BY id",
-    )
-    .fetch_all(store.pool())
-    .await
-    .expect("dump audit_events");
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT prev_hash, row_hash FROM audit_events ORDER BY id")
+            .fetch_all(store.pool())
+            .await
+            .expect("dump audit_events");
     use std::collections::HashSet;
     let mut hashes_seen: HashSet<String> = HashSet::from([String::new()]);
     for (i, (prev, row)) in rows.iter().enumerate() {

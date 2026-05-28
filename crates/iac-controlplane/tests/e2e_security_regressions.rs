@@ -94,8 +94,20 @@ async fn desired_state_per_agent_does_not_leak_other_agents_resources() {
 
     // Two resources, distinct hostSelector. Server-side routing should drop
     // each into the matching agent's assignment payload.
-    let res_a = file_resource("only-on-a", "prod", "/tmp/iac-leak-a", "AAA", Some("host-A"));
-    let res_b = file_resource("only-on-b", "prod", "/tmp/iac-leak-b", "BBB", Some("host-B"));
+    let res_a = file_resource(
+        "only-on-a",
+        "prod",
+        "/tmp/iac-leak-a",
+        "AAA",
+        Some("host-A"),
+    );
+    let res_b = file_resource(
+        "only-on-b",
+        "prod",
+        "/tmp/iac-leak-b",
+        "BBB",
+        Some("host-B"),
+    );
 
     let resp = client()
         .post(server.endpoint("/v1/operations"))
@@ -178,10 +190,7 @@ async fn observations_reject_resource_id_in_wrong_env() {
     // Authenticated staging agent attempts to push an observation stamped
     // with a prod resource_id. Before b4b98e1 this was a clean 200 OK.
     let resp = client()
-        .post(server.endpoint(&format!(
-            "/v1/agents/{}/observations",
-            staging.agent_id
-        )))
+        .post(server.endpoint(&format!("/v1/agents/{}/observations", staging.agent_id)))
         .bearer_auth(&staging.token)
         .json(&ObservationBatch {
             items: vec![ObservationItem {
