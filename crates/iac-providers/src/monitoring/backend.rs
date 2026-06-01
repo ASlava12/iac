@@ -71,6 +71,18 @@ impl CheckBackend for StdNetBackend {
 
 /// Try to TCP-connect to `host:port` within `timeout`. Returns
 /// `Healthy` on accepted connection, `Unhealthy(reason)` otherwise.
+/// Cloud-metadata endpoints have no legitimate health-check use and are
+/// the prize target for an SSRF via a crafted `monitoring.check`. We
+/// reject them specifically while still allowing loopback / RFC1918 —
+/// probing a local/internal `/healthz` is monitoring's primary, legitimate
+/// use case, so a blanket private-IP block would break the feature.
+fn is_metadata_addr(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.octets() == [169, 254, 169, 254],
+        std::net::IpAddr::V6(v6) => v6 == "fd00:ec2::254".parse::<std::net::Ipv6Addr>().unwrap(),
+    }
+}
+
 pub(crate) fn check_tcp(target: &str, timeout: Duration) -> CheckOutcome {
     let addrs: Vec<_> = match target.to_socket_addrs() {
         Ok(it) => it.collect(),
@@ -78,6 +90,11 @@ pub(crate) fn check_tcp(target: &str, timeout: Duration) -> CheckOutcome {
     };
     if addrs.is_empty() {
         return CheckOutcome::Unhealthy(format!("DNS resolve {target}: no addresses"));
+    }
+    if addrs.iter().any(|a| is_metadata_addr(a.ip())) {
+        return CheckOutcome::Unhealthy(format!(
+            "refusing to probe cloud-metadata endpoint via {target} (SSRF guard)"
+        ));
     }
     // Try each resolved address (e.g. dual-stack hostname). First
     // success wins; otherwise return the last error.
@@ -105,6 +122,11 @@ pub(crate) fn check_http(url: &str, expected_status: u16, timeout: Duration) -> 
     };
     if addrs.is_empty() {
         return CheckOutcome::Unhealthy(format!("DNS {target}: no addresses"));
+    }
+    if addrs.iter().any(|a| is_metadata_addr(a.ip())) {
+        return CheckOutcome::Unhealthy(format!(
+            "refusing to probe cloud-metadata endpoint via {target} (SSRF guard)"
+        ));
     }
     let addr = addrs[0];
     let mut stream = match TcpStream::connect_timeout(&addr, timeout) {

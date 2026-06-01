@@ -574,6 +574,13 @@ pub mod v1 {
         assignment_id: &str,
         operation_id: &str,
         created_at: &str,
+        // v2: `expires_at` is now part of the signed message (empty string
+        // when the server sets no expiry). Previously it rode the envelope
+        // OUTSIDE the signature, so an on-path attacker on a plain-HTTP
+        // deployment could rewrite/extend it and the signature still
+        // verified — making the per-assignment expiry forgeable. Binding
+        // it here closes that before any code starts populating the field.
+        expires_at: &str,
         payload_json: &[u8],
     ) -> Vec<u8> {
         use sha2::{Digest, Sha256};
@@ -581,7 +588,7 @@ pub mod v1 {
         hasher.update(payload_json);
         let payload_sha = hex::encode(hasher.finalize());
         format!(
-            "iac-assignment-v1\n{agent_id}\n{assignment_id}\n{operation_id}\n{created_at}\n{payload_sha}\n"
+            "iac-assignment-v2\n{agent_id}\n{assignment_id}\n{operation_id}\n{created_at}\n{expires_at}\n{payload_sha}\n"
         )
         .into_bytes()
     }

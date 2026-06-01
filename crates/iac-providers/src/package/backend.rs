@@ -102,6 +102,10 @@ impl PackageBackend for AptBackend {
             "Dpkg::Options::=--force-confdef",
             "-o",
             "Dpkg::Options::=--force-confold",
+            // `--` ends option parsing: the package atom can never be
+            // read as an apt-get flag (belt-and-suspenders with the
+            // spec-level leading-dash rejection).
+            "--",
             target.as_str(),
         ])?;
         if !ok {
@@ -114,7 +118,7 @@ impl PackageBackend for AptBackend {
     }
 
     fn remove(&self, name: &str) -> Result<()> {
-        let (ok, _stdout, stderr) = Self::run(&["apt-get", "remove", "--yes", name])?;
+        let (ok, _stdout, stderr) = Self::run(&["apt-get", "remove", "--yes", "--", name])?;
         if !ok {
             return Err(Error::provider(
                 "package",

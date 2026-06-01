@@ -1,42 +1,25 @@
-# Configuration for `cargo audit`.
+# cargo-audit configuration.
 #
-# We ignore advisories below only after verifying the affected crate is
-# present in `Cargo.lock` as an unused, phantom optional dependency — i.e.
-# `cargo build` does not compile it into any binary in this workspace.
-# Each entry must include the verification command and reasoning.
+# This MIRRORS the `[advisories].ignore` list in `deny.toml` so that
+# `cargo audit` and `cargo deny check advisories` agree on policy — keep
+# the two in sync. Every entry is a documented, accepted exception, not a
+# silent suppression; see deny.toml for the per-advisory rationale.
+#
+# Summary: the wasmtime advisories are gated behind the OPT-IN `wasm`
+# feature (default = [] across iac-agent / iac-providers / iac-cli), so
+# default fleet builds link no wasmtime. Tracked follow-up: bump wasmtime
+# to >=36.0.7 before re-enabling `wasm` by default.
 
 [advisories]
 ignore = [
-    # RUSTSEC-2023-0071: Marvin attack on RSA decryption timing.
-    #
-    # Path:  rsa 0.9.x ← sqlx-mysql ← sqlx 0.8.x ← iac-controlplane.
-    #
-    # Phase 2a uses sqlx with only the `sqlite` backend feature enabled
-    # (see workspace Cargo.toml). `sqlx-mysql` is declared `optional = true`
-    # in sqlx 0.8.6's Cargo.toml and is NOT activated by our feature set, but
-    # cargo records optional deps in Cargo.lock regardless. Verified that
-    # neither `rsa` nor `sqlx-mysql` compile into our binaries:
-    #
-    #   $ cargo tree -i rsa
-    #   warning: nothing to print.
-    #   $ cargo build -p iac-controlplane 2>&1 | grep -i rsa  # empty
-    #   $ ls target/debug/deps/ | grep -i 'rsa\|mysql'        # empty
-    #
-    # We will revisit when sqlx-mysql drops `rsa` or when we move to a
-    # different storage layer.
-    "RUSTSEC-2023-0071",
-
-    # RUSTSEC-2025-0134: rustls-pemfile is unmaintained (informational
-    # warning, not a vulnerability).
-    #
-    # Path:  rustls-pemfile 2.2.0
-    #          ← iac-controlplane (direct, for TLS cert parsing)
-    #          ← iac-agent (direct, for TLS cert parsing)
-    #          ← axum-server 0.7.3 (transitive)
-    #
-    # The crate is functional and ships maintained APIs; the upstream is
-    # winding down in favor of `rustls-pki-types`'s built-in PEM helpers.
-    # We will migrate to `pki_types::pem` once axum-server does. Tracked
-    # as a Phase 8+ backlog item.
-    "RUSTSEC-2025-0134",
+    # The wasmtime/wasmtime-wasi advisories are FIXED by the bump to
+    # 36.0.7 — no ignores needed. Only the unmaintained-crate and
+    # unreachable-rsa exceptions remain (see deny.toml for rationale).
+    # unmaintained (transitive) — no safe bump yet
+    "RUSTSEC-2024-0436",  # paste
+    "RUSTSEC-2025-0134",  # rustls-pemfile
+    # rsa: pulled only by the OPTIONAL, never-enabled sqlx-mysql driver.
+    # `cargo tree -i rsa --target all` is empty — stale lock artifact,
+    # compiled into nothing. No upstream fix exists. See deny.toml.
+    "RUSTSEC-2023-0071",  # rsa — unreachable (mysql driver disabled)
 ]

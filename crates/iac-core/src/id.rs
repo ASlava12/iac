@@ -27,13 +27,25 @@ impl ResourceId {
     }
 
     /// Filesystem-safe form for state/checkpoint paths.
-    /// Replaces `/` with `__` so it can be used as a single path segment.
+    ///
+    /// A sanitized, human-readable prefix (for at-a-glance debugging) plus
+    /// a short hash of the *canonical* `(kind, environment, name)` so two
+    /// distinct resources can never collide onto the same on-disk path.
+    /// Sanitization alone is non-injective — `name = "a/b"` and
+    /// `name = "a b"` both sanitize to `a_b`, and the `__` separator is
+    /// ambiguous against components that themselves contain `__` — which
+    /// previously let one resource's applied-state / checkpoint silently
+    /// overwrite another's.
     pub fn fs_key(&self) -> String {
+        let digest = crate::hash::sha256_hex(
+            format!("{}\u{0}{}\u{0}{}", self.kind, self.environment, self.name).as_bytes(),
+        );
         format!(
-            "{}__{}__{}",
+            "{}__{}__{}__{}",
             sanitize(&self.kind),
             sanitize(&self.environment),
-            sanitize(&self.name)
+            sanitize(&self.name),
+            &digest[..12]
         )
     }
 
@@ -82,7 +94,28 @@ mod tests {
     #[test]
     fn fs_key_is_safe() {
         let id = ResourceId::new("systemd.unit", "prod", "nginx/foo");
-        assert_eq!(id.fs_key(), "systemd.unit__prod__nginx_foo");
+        // Sanitized prefix is preserved for readability; a hash suffix is
+        // appended for collision-resistance.
+        assert!(
+            id.fs_key().starts_with("systemd.unit__prod__nginx_foo__"),
+            "got {}",
+            id.fs_key()
+        );
+        // No path-separators / nul leaked into the key.
+        assert!(!id.fs_key().contains('/'));
+    }
+
+    #[test]
+    fn fs_key_is_injective_across_sanitization_collisions() {
+        // Distinct resources that sanitize to the same prefix must still
+        // get distinct keys (regression for the silent overwrite bug).
+        let a = ResourceId::new("file", "prod", "a/b").fs_key();
+        let b = ResourceId::new("file", "prod", "a b").fs_key();
+        assert_ne!(a, b, "sanitization-colliding names must not share a key");
+
+        let c = ResourceId::new("file", "prod__x", "y").fs_key();
+        let d = ResourceId::new("file", "prod", "x__y").fs_key();
+        assert_ne!(c, d, "separator-ambiguous components must not share a key");
     }
 
     #[test]

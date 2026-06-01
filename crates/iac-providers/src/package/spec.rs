@@ -43,6 +43,12 @@ impl PackageSpec {
         if self.name.contains(char::is_whitespace) {
             return Err("name must not contain whitespace".into());
         }
+        // Argument-injection guard: a name like `--reinstall` is all
+        // in-charset below but would be parsed by `apt-get` as an OPTION,
+        // changing the semantics of a root-privileged install/remove.
+        if self.name.starts_with('-') {
+            return Err("name must not start with '-' (parsed as an apt-get option)".into());
+        }
         // Restrict to safe characters: shell-out resistance for Phase 0.
         // Apt allows letters, digits, +, -, ., : (epoch in version), but the
         // name itself shouldn't include `:` (architecture suffix is allowed).
@@ -90,6 +96,19 @@ mod tests {
     fn rejects_unsafe_name() {
         let v: Value = serde_yaml_ng::from_str("name: \"nginx; rm -rf /\"").unwrap();
         assert!(PackageSpec::from_value(&v).is_err());
+    }
+
+    #[test]
+    fn rejects_option_injecting_package_names() {
+        // `--reinstall` / `-y` are all in-charset but would be parsed by
+        // apt-get as options — reject leading-dash names.
+        for bad in ["--reinstall", "-y", "--purge", "-oAPT"] {
+            let v: Value = serde_yaml_ng::from_str(&format!("name: {bad:?}")).unwrap();
+            assert!(
+                PackageSpec::from_value(&v).is_err(),
+                "should reject package name {bad:?}"
+            );
+        }
     }
 
     #[test]

@@ -18,41 +18,16 @@ all-features = true
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
-    # ───────────── wasmtime 26.0.1 advisories ─────────────
-    # We ship wasmtime as an OPT-OUT cargo feature on iac-agent /
-    # iac-providers (Phase 10, commit f3f0a21). Default builds carry
-    # the runtime, but `cargo build --no-default-features` on iac-agent
-    # produces a binary with no wasmtime linkage at all — the
-    # router/edge target audience builds without it.
-    #
-    # All 13 wasmtime advisories below trigger only when WASM
-    # *modules* are loaded. The trial harness doesn't load any; default
-    # production deployments without `[[wasm_providers]]` configured
-    # don't load any.
-    #
-    # Bumping wasmtime 26 → 44 (the latest fixed line) involves API
-    # changes across 7 trait signatures + WasiView reorganisation —
-    # tracked separately as TODO; out of scope for the Phase 9 fleet
-    # work because wasmtime can't be cross-compiled to MIPS anyway,
-    # which made the feature flag the right immediate response.
-    "RUSTSEC-2025-0046",  # wasmtime: fd_renumber WASIp1 panic
-    "RUSTSEC-2025-0118",  # wasmtime: shared linear memory unsound API
-    "RUSTSEC-2026-0020",  # wasmtime: WASI resource exhaustion
-    "RUSTSEC-2026-0021",  # wasmtime: wasi:http fields panic
-    "RUSTSEC-2026-0085",  # wasmtime: flags component panic
-    "RUSTSEC-2026-0086",  # wasmtime: 64-bit table host data leakage
-    "RUSTSEC-2026-0087",  # wasmtime: f64x2.splat segfault on x86-64
-    "RUSTSEC-2026-0088",  # wasmtime: lazy initialization
-    "RUSTSEC-2026-0089",  # wasmtime: panic on resume
-    "RUSTSEC-2026-0091",  # wasmtime: OOB string transcoding
-    "RUSTSEC-2026-0092",  # wasmtime: misaligned UTF-16 panic
-    "RUSTSEC-2026-0093",  # wasmtime: heap OOB read transcoding
-    "RUSTSEC-2026-0094",  # wasmtime: table.grow Winch
-    "RUSTSEC-2026-0095",  # wasmtime: Winch sandbox escape
-    "RUSTSEC-2026-0096",  # wasmtime: aarch64 Cranelift sandbox escape
+    # ───────────── wasmtime ─────────────
+    # The 16 wasmtime / wasmtime-wasi advisories (RUSTSEC-2026-0094..0096,
+    # -0149, et al.) are FIXED: wasmtime is bumped to 36.0.7, the patched
+    # line covering all of them. No ignores needed. `wasm` is also an
+    # opt-in feature (default = []), so default fleet builds don't link it
+    # at all — defence in depth, not a CVE crutch. Keep `audit.toml` in
+    # sync with this list.
 
-    # `paste` is unmaintained but still functions. wasmtime depends
-    # on it transitively; will retire when wasmtime upgrades.
+    # `paste` is unmaintained but still functions. Pulled transitively
+    # (wasmtime, opt-in only); will retire when the dep drops it.
     "RUSTSEC-2024-0436",  # paste — unmaintained
     # `rustls-pemfile` v2 is unmaintained but no safe upgrade exists
     # at time of writing (rustls hasn't picked up its replacement
@@ -61,6 +36,14 @@ ignore = [
     # the crate just parses PEM files we already trust at config-load
     # time. Track upstream rustls release plan for the retirement.
     "RUSTSEC-2025-0134",  # rustls-pemfile — unmaintained
+
+    # `rsa` (Marvin timing attack) is pulled by `sqlx-mysql`, which is an
+    # OPTIONAL sqlx driver we never enable (no `mysql` feature; the `any`
+    # feature does not pull it). Verified unreachable: `cargo tree -i rsa
+    # --target all` prints nothing — rsa/sqlx-mysql are stale Cargo.lock
+    # entries, compiled into no binary. No fixed `rsa` upgrade exists
+    # upstream regardless. Re-check if we ever enable the mysql driver.
+    "RUSTSEC-2023-0071",  # rsa — unreachable (sqlx-mysql, mysql disabled)
 ]
 
 # ---- licenses ------------------------------------------------------

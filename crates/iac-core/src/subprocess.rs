@@ -18,6 +18,7 @@
 
 use std::io::{Read, Write};
 use std::process::{Command, ExitStatus};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// Polling tick. The host wakes this often to check whether the
@@ -106,9 +107,26 @@ impl std::error::Error for SubprocessError {
 /// `BrokenPipe` on the stdin write is treated as benign: a child
 /// that exits before reading its input is a legitimate
 /// `stdout`-only producer (think `echo '{...}'`). Genuine I/O
-/// errors during stdin write surface as a [`SubprocessError::Wait`]
-/// after the child reaps (we capture the exit status; the caller
-/// sees stderr).
+/// errors during stdin write are logged at debug; the caller still
+/// sees the child's stderr/exit.
+///
+/// ## Concurrency model
+///
+/// stdout, stderr and stdin are each handled by a dedicated thread
+/// so no single pipe buffer can ever deadlock the wait:
+///
+/// * Pre-fix, the parent only drained stdout/stderr *after* the
+///   child exited. A child that wrote more than the ~64 KiB OS pipe
+///   buffer before exiting blocked on `write()` forever; the parent
+///   never saw the exit and the call burned the full `timeout` then
+///   SIGKILLed a perfectly healthy process.
+/// * Pre-fix, the timeout branch did a blocking `read_to_end`
+///   *before* `kill()`. If the child held the pipe open (e.g. a
+///   `sleep` with inherited stdout), that read blocked until the
+///   child exited on its own — so the timeout never fired. We now
+///   `kill()` first, which closes the write ends, lets the reader
+///   threads finish, and collects whatever was buffered with a hard
+///   [`POST_KILL_REAP_WINDOW`] bound.
 pub fn run_with_timeout(
     mut cmd: Command,
     stdin_bytes: &[u8],
@@ -117,39 +135,31 @@ pub fn run_with_timeout(
     let started = Instant::now();
     let mut child = cmd.spawn().map_err(SubprocessError::Spawn)?;
 
-    // Feed stdin first. We're synchronous so a child that fills
-    // its OS-level pipe buffer (~64 KiB on Linux) before we get
-    // here will block — but the trial's plugin envelopes are far
-    // smaller than that, and the alternative (background thread
-    // for the write) doubles the complexity for no operator-
-    // visible win.
-    if let Some(stdin) = child.stdin.as_mut() {
-        match stdin.write_all(stdin_bytes) {
+    // Drain stdout/stderr on their own threads so the child can
+    // never block on a full pipe buffer while we wait for exit.
+    let stdout_rx = child.stdout.take().map(spawn_reader);
+    let stderr_rx = child.stderr.take().map(spawn_reader);
+
+    // Feed stdin on its own thread too: a child that fills its stdin
+    // pipe buffer before reading would otherwise deadlock the parent
+    // here. The thread drops the handle on completion → child sees EOF.
+    if let Some(mut stdin) = child.stdin.take() {
+        let bytes = stdin_bytes.to_vec();
+        std::thread::spawn(move || match stdin.write_all(&bytes) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
-            Err(e) => {
-                // Don't surface raw I/O — let the wait branch
-                // collect stderr so the operator sees what the
-                // child complained about.
-                tracing::debug!("subprocess stdin write: {e}");
-            }
-        }
+            Err(e) => tracing::debug!("subprocess stdin write: {e}"),
+        });
     }
-    // Drop stdin → EOF for the child. Some plugins block on read
-    // until they see EOF.
-    drop(child.stdin.take());
 
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                if let Some(s) = child.stdout.as_mut() {
-                    s.read_to_end(&mut stdout).ok();
-                }
-                if let Some(s) = child.stderr.as_mut() {
-                    s.read_to_end(&mut stderr).ok();
-                }
+                // Child exited → write ends are closed, so the reader
+                // threads finish promptly. recv() blocks only until
+                // they flush their final buffer.
+                let stdout = stdout_rx.and_then(|rx| rx.recv().ok()).unwrap_or_default();
+                let stderr = stderr_rx.and_then(|rx| rx.recv().ok()).unwrap_or_default();
                 return Ok(Output {
                     status,
                     stdout,
@@ -158,22 +168,11 @@ pub fn run_with_timeout(
             }
             Ok(None) => {
                 if started.elapsed() >= timeout {
-                    // Capture whatever's already buffered before
-                    // the kill so diagnostics survive the reap.
-                    let mut partial_stdout = Vec::new();
-                    let mut partial_stderr = Vec::new();
-                    if let Some(s) = child.stdout.as_mut() {
-                        s.read_to_end(&mut partial_stdout).ok();
-                    }
-                    if let Some(s) = child.stderr.as_mut() {
-                        s.read_to_end(&mut partial_stderr).ok();
-                    }
+                    // Kill FIRST so the write ends close and the
+                    // reader threads can complete; then collect their
+                    // partial output with a hard deadline so a
+                    // grandchild holding the pipe can't pin us.
                     let _ = child.kill();
-                    // Bounded reap loop. If the child still hasn't
-                    // exited in POST_KILL_REAP_WINDOW (very
-                    // unlikely after SIGKILL), we let init reap
-                    // it on agent exit — we'd rather return than
-                    // pin the host thread.
                     let reap_deadline = Instant::now() + POST_KILL_REAP_WINDOW;
                     while Instant::now() < reap_deadline {
                         match child.try_wait() {
@@ -181,6 +180,12 @@ pub fn run_with_timeout(
                             _ => std::thread::sleep(POLL_INTERVAL),
                         }
                     }
+                    let partial_stdout = stdout_rx
+                        .and_then(|rx| rx.recv_timeout(POST_KILL_REAP_WINDOW).ok())
+                        .unwrap_or_default();
+                    let partial_stderr = stderr_rx
+                        .and_then(|rx| rx.recv_timeout(POST_KILL_REAP_WINDOW).ok())
+                        .unwrap_or_default();
                     return Err(SubprocessError::Timeout {
                         elapsed: started.elapsed(),
                         partial_stdout,
@@ -192,6 +197,19 @@ pub fn run_with_timeout(
             Err(e) => return Err(SubprocessError::Wait(e)),
         }
     }
+}
+
+/// Spawn a thread that drains `reader` to EOF and ships the bytes
+/// back over a channel. Errors are swallowed: a read error yields
+/// whatever was captured so far (diagnostics-grade output).
+fn spawn_reader<R: Read + Send + 'static>(mut reader: R) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    rx
 }
 
 #[cfg(test)]
@@ -273,5 +291,47 @@ mod tests {
         let c = Command::new("/this/binary/does/not/exist");
         let err = run_with_timeout(c, b"", Duration::from_secs(1)).unwrap_err();
         assert!(matches!(err, SubprocessError::Spawn(_)));
+    }
+
+    #[test]
+    fn large_stdout_does_not_deadlock() {
+        // Regression: a child that writes far more than the ~64 KiB
+        // OS pipe buffer before exiting used to deadlock — the parent
+        // didn't drain stdout until after exit, but the child blocked
+        // on write() before it could exit. With reader threads the
+        // full output comes back and the child exits cleanly.
+        let out = run_with_timeout(
+            cmd("/bin/sh", &["-c", "yes abcdefgh | head -c 1000000"]),
+            b"",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 1_000_000);
+    }
+
+    #[test]
+    fn timeout_fires_promptly_when_child_holds_pipe_open() {
+        // Regression: the timeout branch used to `read_to_end` before
+        // `kill()`. A child that keeps stdout open (here `sleep`, whose
+        // inherited stdout fd stays open) made that read block until
+        // the child exited on its own (10 s), so the 200 ms deadline
+        // never fired. Now we kill first; the call must return well
+        // before the natural 10 s exit.
+        let started = Instant::now();
+        let result = run_with_timeout(
+            cmd("/bin/sh", &["-c", "sleep 10"]),
+            b"",
+            Duration::from_millis(200),
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(result, Err(SubprocessError::Timeout { .. })),
+            "expected Timeout, got {result:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "timeout did not fire promptly: {elapsed:?}"
+        );
     }
 }

@@ -168,6 +168,25 @@ impl Store {
             ",
         )?;
 
+        // Downgrade guard: refuse to run against a store written by a
+        // NEWER agent binary. A future schema may change a column's
+        // meaning, and an older binary would silently misread it. The
+        // module header promised this "fails loudly"; enforce it.
+        let max_version: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if max_version > SCHEMA_VERSION {
+            anyhow::bail!(
+                "agent store schema is v{max_version} but this binary only supports \
+                 v{SCHEMA_VERSION}; refusing to run against a newer store (downgrade). \
+                 Run the matching or newer agent build."
+            );
+        }
+
         let exists: bool = tx
             .query_row(
                 "SELECT 1 FROM schema_version WHERE version = ?",

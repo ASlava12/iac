@@ -53,6 +53,7 @@ impl TestServer {
             wal_checkpoint_interval_secs: 0,
             shutdown_timeout_secs: 1,
             trusted_proxies: vec![],
+            agent_enrollment_token: None,
         };
         let store = Store::connect(&cfg.database_url).await.unwrap();
         let signer = std::sync::Arc::new(
@@ -277,6 +278,7 @@ async fn submit_with_no_admin_configured_returns_400() {
         wal_checkpoint_interval_secs: 0,
         shutdown_timeout_secs: 1,
         trusted_proxies: vec![],
+        agent_enrollment_token: None,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(

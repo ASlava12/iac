@@ -215,6 +215,7 @@ async fn agent_rejects_envelope_with_wrong_signature() {
         &tampered.assignment_id,
         &tampered.operation_id,
         &tampered.created_at,
+        tampered.expires_at.as_deref().unwrap_or(""),
         &payload_json,
     );
     let bad_sig = attacker.sign(&msg);
@@ -259,6 +260,7 @@ async fn agent_rejects_envelope_with_wrong_signature() {
         &payload_changed.assignment_id,
         &payload_changed.operation_id,
         &payload_changed.created_at,
+        payload_changed.expires_at.as_deref().unwrap_or(""),
         &payload_json,
     );
     use ed25519_dalek::Verifier;

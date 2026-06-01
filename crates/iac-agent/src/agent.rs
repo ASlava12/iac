@@ -586,6 +586,18 @@ impl Agent {
             warn!(error = %e, "auto-rotation attempt failed");
         }
 
+        // Prune the replay-dedup table so it can't grow without bound on a
+        // long-lived agent. `vacuum_replay` existed but was never wired
+        // into the loop; rows older than 7d (well past the 24h envelope
+        // freshness window) are safe to drop. Cheap indexed DELETE.
+        let store = self.inner.store.clone();
+        match task::spawn_blocking(move || store.vacuum_replay(7)).await {
+            Ok(Ok(n)) if n > 0 => debug!(pruned = n, "vacuumed replay-dedup table"),
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => warn!(error = %e, "replay-table vacuum failed"),
+            Err(e) => warn!(error = %e, "replay vacuum task panicked"),
+        }
+
         Ok(summary)
     }
 

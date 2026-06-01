@@ -2716,6 +2716,23 @@ impl Store {
                     .map_err(|e| ApiError::Internal(format!("ttl span: {e}")))?,
             )
             .map_err(|e| ApiError::Internal(format!("ttl arithmetic: {e}")))?;
+        // Concurrency: delete the OLD token FIRST and make it the gate.
+        // Two concurrent refreshes of the same token would otherwise
+        // (on Postgres READ COMMITTED) both SELECT the row, both INSERT
+        // a fresh token, and both DELETE — yielding TWO live tokens from
+        // one rotation. By deleting first and requiring exactly one row
+        // affected, the loser's DELETE re-evaluates against committed
+        // state, returns 0, and we bail. SQLite serialises writers so
+        // it can't happen there, but the gate is correct on both.
+        let deleted = sqlx::query(&self.sql("DELETE FROM user_tokens WHERE token_hash = ?"))
+            .bind(&old_hash)
+            .execute(&mut *tx)
+            .await?;
+        if deleted.rows_affected() != 1 {
+            // Another refresh already rotated this token out from under us.
+            tx.rollback().await.ok();
+            return Err(ApiError::Unauthorized);
+        }
         sqlx::query(&self.sql(
             "INSERT INTO user_tokens (token_hash, user_id, issued_at, expires_at)
              VALUES (?, ?, ?, ?)",
@@ -2726,10 +2743,6 @@ impl Store {
         .bind(expires.to_string())
         .execute(&mut *tx)
         .await?;
-        sqlx::query(&self.sql("DELETE FROM user_tokens WHERE token_hash = ?"))
-            .bind(&old_hash)
-            .execute(&mut *tx)
-            .await?;
         tx.commit().await?;
 
         Ok((
@@ -2975,12 +2988,18 @@ async fn ensure_active_admin_remains<'a>(
     change: ProposedChange<'_>,
 ) -> ApiResult<()> {
     use crate::identity::Role;
-    let rows = sqlx::query(&sql(
-        dialect,
-        "SELECT id, roles_json, disabled_at FROM users",
-    ))
-    .fetch_all(conn)
-    .await?;
+    // Concurrency: two tx each demoting a *different* admin could both
+    // read "2 active admins", each see after-count = 1 > 0, pass, and
+    // together leave zero admins. On Postgres (READ COMMITTED) we close
+    // this with `FOR UPDATE` so the second tx blocks on the row locks
+    // until the first commits, then re-reads the updated roles. SQLite
+    // serialises writers DB-wide already and rejects `FOR UPDATE`
+    // syntax, so we append it only on Postgres.
+    let select = match dialect {
+        Dialect::Postgres => "SELECT id, roles_json, disabled_at FROM users FOR UPDATE",
+        Dialect::Sqlite => "SELECT id, roles_json, disabled_at FROM users",
+    };
+    let rows = sqlx::query(&sql(dialect, select)).fetch_all(conn).await?;
 
     let mut before = 0i64;
     let mut after = 0i64;

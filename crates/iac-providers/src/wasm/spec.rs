@@ -177,6 +177,18 @@ fn is_sensitive_host_path(p: &std::path::Path) -> bool {
         "/sys",
         "/dev",
         "/boot",
+        "/run",     // runtime sockets incl. docker.sock
+        "/var/run", // legacy alias for /run
+        "/home",    // user homes / SSH keys
+        "/usr",     // system binaries / libraries
+        "/bin",
+        "/sbin",
+        "/var/lib/docker", // docker images/containers/volumes
+        // NOTE: `/var/lib/iac` itself is intentionally NOT blocked — the
+        // documented plugin-state pattern is a writable preopen of
+        // `/var/lib/iac/<plugin>/state`. `/opt` and `/srv` likewise stay
+        // allowed (legitimate app/service data a plugin may manage). Only
+        // the agent's and CP's own state roots below are off-limits.
         "/var/lib/iac-agent",        // agent's own state dir
         "/var/lib/iac-controlplane", // control-plane's state dir
     ];
@@ -252,6 +264,16 @@ impl WasmProviderSpec {
                 return Err(format!(
                     "wasi.preopens host {} maps a sensitive system path; \
                      set `unsafe_host = true` in this preopen to opt in",
+                    p.host.display()
+                ));
+            }
+            // Even an `unsafe_host` opt-in must stay read-only for a
+            // sensitive path: reading /etc/os-release is defensible, but a
+            // WRITABLE mount of /etc, /run (docker.sock), /home, etc. is an
+            // RCE/credential-theft primitive with no legitimate use.
+            if p.writable && is_sensitive_host_path(&p.host) {
+                return Err(format!(
+                    "wasi.preopens host {} is a sensitive system path and must not be writable",
                     p.host.display()
                 ));
             }

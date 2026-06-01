@@ -16,6 +16,13 @@ tempfile = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+# `wasm` OFF by default: pulls wasmtime (patched 36.0.7), which can't
+# cross-compile to MIPS and bloats the binary. Opt in with
+# `--features wasm` to apply `wasm.module` resources locally.
+default = []
+wasm = ["iac-providers/wasm"]
+
 [dependencies]
 iac-core = { workspace = true }
 iac-providers = { workspace = true }

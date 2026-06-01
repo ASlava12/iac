@@ -92,16 +92,24 @@ pub async fn require_role(
     crate::identity::require_role(state, token, role).await
 }
 
-/// Phase 9 follow-up: pick the IP that the per-IP rate-limit buckets
-/// should key by. If the raw socket peer is in `trusted_proxies`,
-/// read the leftmost entry in `X-Forwarded-For` instead (that's
-/// the canonical "originating client" position in RFC 7239). Any
-/// other peer keeps using the socket IP, so a non-proxied client
-/// can't spoof the header to dodge a bucket.
+/// Pick the IP that the per-IP rate-limit buckets should key by.
 ///
-/// Malformed header (no parseable IP) falls back to the socket IP
-/// with a debug-level log — better to bucket the proxy itself than
-/// to skip the check entirely.
+/// If the socket peer is NOT in `trusted_proxies`, the header is ignored
+/// and we bucket by the socket IP — an untrusted client can't spoof
+/// `X-Forwarded-For` to dodge a bucket.
+///
+/// If the peer IS a trusted proxy, we take the **rightmost entry that is
+/// not itself a trusted proxy**: we peel trusted-proxy hops off the
+/// right of the chain and return the address the nearest trusted proxy
+/// actually observed. Taking the *leftmost* entry (the old behaviour) is
+/// exploitable — a client behind the proxy sends
+/// `X-Forwarded-For: <spoofed>` and the proxy *appends* the real peer,
+/// so leftmost is fully attacker-chosen, defeating the per-IP register /
+/// login caps. Rightmost-after-peeling is what the trusted proxy
+/// vouches for. (OWASP "X-Forwarded-For" guidance.)
+///
+/// Malformed / all-trusted header falls back to the socket IP with a
+/// debug log — better to bucket the proxy itself than skip the check.
 pub fn effective_client_ip(
     headers: &axum::http::HeaderMap,
     socket_addr: std::net::SocketAddr,
@@ -115,37 +123,39 @@ pub fn effective_client_ip(
         return socket_ip;
     };
     let Ok(s) = hv.to_str() else { return socket_ip };
-    // X-Forwarded-For: client, proxy1, proxy2  → leftmost is the
-    // originating client. Strip whitespace.
-    let leftmost = s.split(',').next().unwrap_or("").trim();
-    // Three shapes to handle:
-    //   `[2001:db8::1]:443`  bracketed v6 with port
-    //   `1.2.3.4:5678`        v4 with port (some proxies)
-    //   `2001:db8::1` / `1.2.3.4`  bare IP
-    // Try bare-IP-parse first to keep IPv6-without-port working
-    // (multi-colon string that's a valid v6 → use as-is).
-    let bare = if leftmost.starts_with('[') {
-        // Bracketed v6: trim `[...]` and optional `:port` suffix.
-        let after_close = leftmost.trim_start_matches('[');
-        after_close.split(']').next().unwrap_or(after_close)
-    } else if leftmost.parse::<std::net::IpAddr>().is_ok() {
-        leftmost
-    } else if leftmost.matches(':').count() == 1 {
-        // v4-with-port shape.
-        leftmost.split(':').next().unwrap_or(leftmost)
-    } else {
-        leftmost
-    };
-    match bare.parse::<std::net::IpAddr>() {
-        Ok(ip) => ip,
-        Err(_) => {
-            tracing::debug!(
-                header = %s,
-                "X-Forwarded-For from trusted proxy not parseable as IP — falling back to socket IP"
-            );
-            socket_ip
+    // Walk right-to-left: skip entries that are themselves trusted
+    // proxies, return the first remaining (the real client as seen by
+    // the nearest trusted hop). All-trusted / none-parseable → socket.
+    for entry in s.split(',').rev() {
+        let Some(ip) = parse_xff_entry(entry.trim()) else {
+            continue;
+        };
+        if trusted_proxies.contains(&ip) {
+            continue;
         }
+        return ip;
     }
+    tracing::debug!(
+        header = %s,
+        "X-Forwarded-For from trusted proxy had no non-proxy IP — falling back to socket IP"
+    );
+    socket_ip
+}
+
+/// Parse one `X-Forwarded-For` entry into an [`IpAddr`], tolerating the
+/// `[v6]:port`, `v4:port` and bare-IP shapes proxies emit.
+fn parse_xff_entry(entry: &str) -> Option<std::net::IpAddr> {
+    let bare = if entry.starts_with('[') {
+        let after_close = entry.trim_start_matches('[');
+        after_close.split(']').next().unwrap_or(after_close)
+    } else if entry.parse::<std::net::IpAddr>().is_ok() {
+        entry
+    } else if entry.matches(':').count() == 1 {
+        entry.split(':').next().unwrap_or(entry)
+    } else {
+        entry
+    };
+    bare.parse::<std::net::IpAddr>().ok()
 }
 
 #[cfg(test)]
@@ -175,13 +185,47 @@ mod tests {
     }
 
     #[test]
-    fn trusted_proxy_returns_xff_leftmost() {
-        // Socket is the trusted proxy; X-F-F leftmost is the real
-        // originating client.
+    fn trusted_proxy_returns_rightmost_non_proxy() {
+        // Socket is the trusted proxy, which appended itself on the
+        // right; the real client is the rightmost non-proxy entry.
         let hm = h("1.2.3.4, 10.0.0.1");
         let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
         let ip = effective_client_ip(&hm, socket, &proxy());
         assert_eq!(ip.to_string(), "1.2.3.4");
+    }
+
+    #[test]
+    fn trusted_proxy_ignores_client_spoofed_leftmost() {
+        // Attacker behind the proxy sets "X-F-F: 9.9.9.9"; the proxy
+        // APPENDS the attacker's real IP (1.2.3.4). Old leftmost logic
+        // returned the attacker-chosen 9.9.9.9 (bucket evasion). We must
+        // return the appended real IP instead.
+        let hm = h("9.9.9.9, 1.2.3.4");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "1.2.3.4");
+    }
+
+    #[test]
+    fn multiple_trusted_proxies_peeled_from_right() {
+        let trusted = vec![
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+        ];
+        let hm = h("1.2.3.4, 10.0.0.2, 10.0.0.1");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &trusted);
+        assert_eq!(ip.to_string(), "1.2.3.4");
+    }
+
+    #[test]
+    fn all_trusted_chain_falls_back_to_socket() {
+        // Degenerate: every hop is a trusted proxy → no client IP to
+        // trust, bucket the socket peer.
+        let hm = h("10.0.0.1, 10.0.0.1");
+        let socket = "10.0.0.1:5000".parse::<SocketAddr>().unwrap();
+        let ip = effective_client_ip(&hm, socket, &proxy());
+        assert_eq!(ip.to_string(), "10.0.0.1");
     }
 
     #[test]

@@ -30,7 +30,7 @@ use serde_yaml_ng::Value as YamlValue;
 use std::path::Path;
 use wasmtime::component::{Component, Linker as ComponentLinker, ResourceTable};
 use wasmtime::{Config, Engine, ResourceLimiter, Store};
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 // `bindgen!` synthesises Rust types + a `Plugin` instantiation
 // helper from the .wit. We pull in only the world we actually need;
@@ -75,11 +75,13 @@ struct CompState {
 }
 
 impl WasiView for CompState {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        &mut self.wasi
-    }
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.resources
+    // wasmtime-wasi 36 folded the old `ctx()`/`table()` pair into a single
+    // `ctx()` returning a `WasiCtxView` that bundles both.
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.resources,
+        }
     }
 }
 
@@ -252,11 +254,12 @@ impl WasmComponentProvider {
         // Phase 7de: register WASI preview2 imports only when the
         // operator opted in. Empty config keeps the linker pristine
         // — plugins that never reference `wasi:*` interfaces don't
-        // pay the linker setup cost. wasmtime-wasi 26 splits the
-        // surface into sync vs async; the sync variant matches our
-        // synchronous `Provider::observe` blocking-pool model.
+        // pay the linker setup cost. wasmtime-wasi 36 moved the
+        // preview2 linker helpers under the `p2` module; the sync
+        // variant matches our synchronous `Provider::observe`
+        // blocking-pool model.
         if !self.spec.wasi.is_empty() {
-            wasmtime_wasi::add_to_linker_sync(&mut linker)
+            wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
                 .map_err(|e| Error::provider(&self.spec.kind, format!("link wasi: {e}")))?;
         }
         Plugin::instantiate(store, &self.component, &linker)

@@ -16,6 +16,10 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Process-local counter for unique temp-file names in [`write_json`].
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Outcome of a planning phase. Pure: no side effects on the host.
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,7 +122,7 @@ const EXECUTOR_OPERATIONS_KEEP: usize = 200;
 /// State directory layout:
 /// ```text
 /// <state-dir>/
-///   applied/<kind>__<env>__<name>.json    # last applied state per resource
+///   applied/<kind>__<env>__<name>__<hash>.json  # last applied state per resource
 ///   operations/<ulid>/
 ///     operation.json                      # operation record (final)
 ///     plan.json                           # the plan that was executed
@@ -437,9 +441,28 @@ impl<'a> Executor<'a> {
         // Reverse-time order: highest ULID first.
         checkpoints.sort_by_key(|entry| std::cmp::Reverse(entry.1.id));
 
+        // Best-effort: attempt every checkpoint even if one fails, rather
+        // than `?`-bailing on the first error and leaving the system
+        // half-reverted (the worst state — neither applied nor undone).
+        // Collect failures and surface them as one aggregate error.
+        let mut errors: Vec<String> = Vec::new();
         for (workspace, cp, resource) in checkpoints {
-            let provider = self.registry.require(&resource.kind)?;
-            provider.rollback(&resource, &cp, &workspace)?;
+            let rid = resource.id();
+            match self.registry.require(&resource.kind) {
+                Ok(provider) => {
+                    if let Err(e) = provider.rollback(&resource, &cp, &workspace) {
+                        errors.push(format!("{rid}: {e}"));
+                    }
+                }
+                Err(e) => errors.push(format!("{rid}: {e}")),
+            }
+        }
+        if !errors.is_empty() {
+            return Err(Error::Command(format!(
+                "rollback completed with {} checkpoint failure(s): {}",
+                errors.len(),
+                errors.join("; ")
+            )));
         }
         Ok(())
     }
@@ -533,21 +556,44 @@ fn ensure_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).map_err(|e| Error::Io {
         path: path.into(),
         source: e,
-    })
+    })?;
+    // State / checkpoint / operation dirs can hold resolved-secret-bearing
+    // specs and apply results — keep them owner-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value)?;
     let parent = path.parent().unwrap_or(Path::new("."));
     ensure_dir(parent)?;
+    // Unique temp name per writer: a shared `.<name>.tmp` lets two
+    // concurrent writers to the same target interleave bytes and publish
+    // a torn file via the rename. pid + a process-local counter is
+    // collision-free across threads and processes.
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("out")
+        ".{}.{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("out"),
+        std::process::id(),
+        seq
     ));
     fs::write(&tmp, &bytes).map_err(|e| Error::Io {
         path: tmp.clone(),
         source: e,
     })?;
+    // 0600 before publish: applied-state / checkpoint / apply-result JSON
+    // can carry resolved secret material; keep it owner-only at rest
+    // (defense-in-depth alongside diff redaction).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+    }
     fs::rename(&tmp, path).map_err(|e| Error::Io {
         path: path.into(),
         source: e,

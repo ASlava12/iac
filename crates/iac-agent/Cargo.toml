@@ -18,10 +18,12 @@ name = "iac-agent"
 path = "src/main.rs"
 
 [features]
-default = ["wasm"]
+# `wasm` OFF by default: wasmtime (patched 36.0.7) can't cross-compile to
+# MIPS and bloats the binary, so fleet/edge agent builds stay lean and
+# portable. Opt in with `--features wasm` on capable hosts.
+default = []
 # Phase 10: WASM-module provider. Requires wasmtime/cranelift, which
-# does NOT support MIPS architectures. Disable for MIPS / OpenWrt
-# cross-compiles via `--no-default-features`.
+# does NOT support MIPS architectures.
 wasm = ["iac-providers/wasm"]
 
 [dependencies]

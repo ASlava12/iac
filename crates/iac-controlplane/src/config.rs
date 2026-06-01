@@ -121,6 +121,14 @@ pub struct Config {
     /// presence (so a malicious client can't spoof X-Forwarded-For to
     /// dodge a bucket).
     pub trusted_proxies: Vec<std::net::IpAddr>,
+    /// Shared bootstrap secret required by `POST /v1/agents/register`.
+    /// When `Some(non-empty)`, an agent must present it in the
+    /// `X-Iac-Enrollment-Token` header to register — closing the
+    /// "anyone who can reach the control-plane can enroll a `prod`
+    /// agent and pull its assignments/secrets" hole. When `None`
+    /// (default), registration stays open for backward compatibility
+    /// and the server logs a loud warning on every registration.
+    pub agent_enrollment_token: Option<String>,
 }
 
 /// Phase 7ck: declarative SSH push target. Validated at server
@@ -421,6 +429,8 @@ struct RawConfig {
     shutdown_timeout_secs: u64,
     #[serde(default)]
     trusted_proxies: Vec<std::net::IpAddr>,
+    #[serde(default)]
+    agent_enrollment_token: Option<String>,
 }
 
 fn default_wal_checkpoint_interval() -> u64 {
@@ -572,6 +582,7 @@ impl Config {
             wal_checkpoint_interval_secs: raw.wal_checkpoint_interval_secs,
             shutdown_timeout_secs: raw.shutdown_timeout_secs,
             trusted_proxies: raw.trusted_proxies,
+            agent_enrollment_token: raw.agent_enrollment_token,
         })
     }
 

@@ -173,6 +173,73 @@ fn is_ipv6_private(ip: &std::net::Ipv6Addr) -> bool {
     (segs[0] & 0xfe00) == 0xfc00
 }
 
+/// Classify a *resolved* IP as a blocked SSRF target.
+fn ip_is_blocked(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_private()
+                || v4.is_unspecified()
+                || v4.octets() == [169, 254, 169, 254]
+        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || is_ipv6_private(&v6),
+    }
+}
+
+/// Extract the bare host (no scheme / userinfo / port / path) from a URL.
+fn url_host(url: &str) -> Option<&str> {
+    let host_part = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host = host_part.split(['/', '?', '#']).next()?;
+    let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
+    let host = host
+        .rsplit_once(':')
+        .filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
+        .map(|(h, _)| h)
+        .unwrap_or(host);
+    (!host.is_empty()).then_some(host)
+}
+
+/// Resolve the URL host at dispatch time and reject if it — or any
+/// address it resolves to — is private / loopback / link-local /
+/// metadata. The config-load `validate_webhook_url` check only looked at
+/// the literal host string; this closes the DNS-resolves-to-private gap
+/// (and, together with `redirect(Policy::none())`, the redirect gap).
+/// A residual DNS-rebind window remains (resolve here vs. connect inside
+/// reqwest) — that's the documented perimeter caveat.
+async fn assert_egress_allowed(url: &str) -> Result<(), String> {
+    let host = url_host(url).ok_or_else(|| format!("url {url:?} has no host"))?;
+    if is_private_or_metadata_host(host) {
+        return Err(format!("host {host:?} is a private/metadata target"));
+    }
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        return if ip_is_blocked(ip) {
+            Err(format!("host {host:?} is a blocked IP"))
+        } else {
+            Ok(())
+        };
+    }
+    let port: u16 = if url.starts_with("https://") { 443 } else { 80 };
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| format!("dns resolve {host:?}: {e}"))?;
+    for addr in addrs {
+        if ip_is_blocked(addr.ip()) {
+            return Err(format!(
+                "host {host:?} resolves to blocked address {}",
+                addr.ip()
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Default for WebhooksConfig {
     fn default() -> Self {
         Self {
@@ -608,6 +675,11 @@ impl WebhookDispatcher {
                 #[allow(clippy::expect_used)]
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(5))
+                    // SSRF: never follow redirects. A receiver at an
+                    // allowed URL could otherwise 302 us to
+                    // 169.254.169.254 / an internal service, bypassing
+                    // the config-load-time host check entirely.
+                    .redirect(reqwest::redirect::Policy::none())
                     .build()
                     .expect("reqwest client");
                 client
@@ -1087,6 +1159,21 @@ impl WebhookDispatcher {
                 return;
             }
         };
+
+        // SSRF guard at dispatch time: re-check the (possibly DNS-backed)
+        // target right before sending. `allow_private_urls` opts out for
+        // operators who intentionally point webhooks at internal hosts.
+        if !self.config.allow_private_urls
+            && let Err(reason) = assert_egress_allowed(&webhook.url).await
+        {
+            tracing::warn!(
+                name = %webhook.name,
+                url = %webhook.url,
+                reason = %reason,
+                "webhook target blocked by SSRF guard; not dispatching"
+            );
+            return;
+        }
 
         let mut req = self
             .http

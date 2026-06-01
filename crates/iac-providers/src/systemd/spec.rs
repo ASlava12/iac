@@ -60,6 +60,22 @@ impl SystemdUnitSpec {
         if self.name.contains(char::is_whitespace) {
             return Err("name must not contain whitespace".into());
         }
+        // Argument-injection guard: a name like `--root=/x.service` or
+        // `--global` passes the whitespace check and would be parsed by
+        // `systemctl` as an OPTION, not a unit, redirecting a
+        // root-privileged operation. Reject leading `-` and restrict to
+        // the systemd unit-name charset.
+        if self.name.starts_with('-') {
+            return Err("name must not start with '-' (parsed as a systemctl option)".into());
+        }
+        if let Some(c) = self.name.chars().find(|c| {
+            !(c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '@' | '-' | '\\'))
+        }) {
+            return Err(format!(
+                "unsafe character {c:?} in unit name {:?}",
+                self.name
+            ));
+        }
         Ok(())
     }
 
@@ -93,5 +109,34 @@ mod tests {
         let s = SystemdUnitSpec::from_value(&v).unwrap();
         assert_eq!(s.unit_name(), "backup.timer");
         assert!(!s.active);
+    }
+
+    #[test]
+    fn rejects_option_injecting_unit_names() {
+        // Argument-injection guard: names that systemctl would parse as
+        // options must be refused before reaching the backend.
+        for bad in ["--global", "-.mount", "--root=/tmp/x.service", "a b", "x;y"] {
+            let v: Value = serde_yaml_ng::from_str(&format!("name: {bad:?}")).unwrap();
+            assert!(
+                SystemdUnitSpec::from_value(&v).is_err(),
+                "should reject unit name {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_normal_unit_names() {
+        for ok in [
+            "nginx",
+            "backup.timer",
+            "foo@bar.service",
+            "my-svc_1.service",
+        ] {
+            let v: Value = serde_yaml_ng::from_str(&format!("name: {ok:?}")).unwrap();
+            assert!(
+                SystemdUnitSpec::from_value(&v).is_ok(),
+                "should accept unit name {ok:?}"
+            );
+        }
     }
 }

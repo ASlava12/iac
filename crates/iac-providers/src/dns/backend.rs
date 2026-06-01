@@ -141,7 +141,18 @@ impl DnsBackend for CloudflareCli {
                     format!("Cloudflare list response missing `result`: {resp}"),
                 )
             })?;
-        if let Some(rec) = records.first() {
+        // Defense: the list URL filters by name+type, but don't trust the
+        // API to honour it — match explicitly before returning a record we
+        // might then UPDATE or DELETE. Acting on `.first()` blindly risks
+        // mutating the wrong record if the API ever returns a fuzzy/partial
+        // match or extra rows.
+        let wanted_type = record_type.as_str();
+        let matching = records.iter().find(|rec| {
+            let name = rec.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let rtype = rec.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            name.eq_ignore_ascii_case(fqdn) && rtype.eq_ignore_ascii_case(wanted_type)
+        });
+        if let Some(rec) = matching {
             return Ok(Some(DnsRecord {
                 id: rec.get("id").and_then(|v| v.as_str()).unwrap_or("").into(),
                 fqdn: rec
@@ -260,8 +271,12 @@ fn curl_get(url: &str, auth: &str) -> Result<String> {
         "--max-time",
         "20",
         "--fail-with-body",
-        "-H",
-        auth,
+        // Read the Authorization header from a config on stdin (`-K -`)
+        // so the Bearer token never lands in argv / `ps` /
+        // `/proc/<pid>/cmdline` (mirrors the ACME provider's _FILE
+        // approach). The non-secret Content-Type stays inline.
+        "-K",
+        "-",
         "-H",
         "Content-Type: application/json",
         url,
@@ -271,11 +286,24 @@ fn curl_get(url: &str, auth: &str) -> Result<String> {
         .stderr(Stdio::piped());
     run_capture_stdout(
         cmd,
-        b"",
+        curl_auth_config(auth).as_bytes(),
         DNS_API_TIMEOUT,
         "dns.record",
         &format!("curl GET {url}"),
     )
+}
+
+/// Build a one-line curl config (`-K`) carrying the auth header, fed via
+/// stdin so the token stays out of the process argv.
+fn curl_auth_config(auth: &str) -> String {
+    // Cloudflare tokens are `[A-Za-z0-9_-]`; no quote-escaping needed, but
+    // strip any stray `"`/newline defensively so a malformed token can't
+    // inject extra config directives.
+    let safe: String = auth
+        .chars()
+        .filter(|c| *c != '"' && *c != '\n' && *c != '\r')
+        .collect();
+    format!("header = \"{safe}\"\n")
 }
 
 fn curl_request(method: &str, url: &str, auth: &str, body: Option<&str>) -> Result<String> {
@@ -287,8 +315,9 @@ fn curl_request(method: &str, url: &str, auth: &str, body: Option<&str>) -> Resu
         "--fail-with-body",
         "-X",
         method,
-        "-H",
-        auth,
+        // Auth header via stdin config (`-K -`); token stays out of argv.
+        "-K",
+        "-",
         "-H",
         "Content-Type: application/json",
     ]);
@@ -301,7 +330,7 @@ fn curl_request(method: &str, url: &str, auth: &str, body: Option<&str>) -> Resu
         .stderr(Stdio::piped());
     run_capture_stdout(
         cmd,
-        b"",
+        curl_auth_config(auth).as_bytes(),
         DNS_API_TIMEOUT,
         "dns.record",
         &format!("curl {method} {url}"),
@@ -320,11 +349,11 @@ fn curl_delete(url: &str, auth: &str) -> Result<String> {
     curl_request("DELETE", url, auth, None)
 }
 
-/// Minimal URL-encoding for query-string values. Operators put domain
-/// names and record types in there — both safe ASCII — but `+` would
-/// be interpreted as a space and `%` as an escape, so we escape both.
-/// Anything else passes through. Avoids pulling in the `urlencoding`
-/// crate for two characters worth of behaviour.
+/// Percent-encode a query-string value per RFC 3986: every byte outside
+/// the unreserved set (`A-Za-z0-9-_.~`) is `%XX`-escaped. This is the
+/// full encoding, not a two-character shortcut — it keeps domain names /
+/// record types safe even if they contain reserved characters. Avoids
+/// pulling in the `urlencoding` crate.
 fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

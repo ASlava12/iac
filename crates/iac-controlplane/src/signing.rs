@@ -291,6 +291,7 @@ impl ServerSigner {
         assignment_id: &str,
         operation_id: &str,
         created_at: &str,
+        expires_at: &str,
         payload_json: &[u8],
     ) -> Result<String> {
         let msg = iac_core::protocol::v1::canonical_assignment_message(
@@ -298,6 +299,7 @@ impl ServerSigner {
             assignment_id,
             operation_id,
             created_at,
+            expires_at,
             payload_json,
         );
         let state = self.state.load();
@@ -535,7 +537,14 @@ mod tests {
         let signer = ServerSigner::load_or_create(dir.path()).unwrap();
         let payload = br#"{"resources":[]}"#;
         let signature_b64 = signer
-            .sign("agent-1", "asg-1", "op-1", "2026-01-01T00:00:00Z", payload)
+            .sign(
+                "agent-1",
+                "asg-1",
+                "op-1",
+                "2026-01-01T00:00:00Z",
+                "",
+                payload,
+            )
             .unwrap();
 
         let msg = iac_core::protocol::v1::canonical_assignment_message(
@@ -543,6 +552,7 @@ mod tests {
             "asg-1",
             "op-1",
             "2026-01-01T00:00:00Z",
+            "",
             payload,
         );
         let pub_bytes = B64.decode(signer.public_key_b64().unwrap()).unwrap();
@@ -647,7 +657,7 @@ mod tests {
         // that the active id always resolves.
         let _ = intermediate;
         // Also: sign() never panicked across all those rotations.
-        let _ = signer.sign("a", "b", "c", "d", b"{}").unwrap();
+        let _ = signer.sign("a", "b", "c", "d", "", b"{}").unwrap();
     }
 
     #[test]
@@ -660,9 +670,10 @@ mod tests {
 
         // Sign with new active. Verify only the NEW pubkey accepts.
         let payload = br#"{}"#;
-        let sig_b64 = signer.sign("a", "b", "c", "2026", payload).unwrap();
-        let msg =
-            iac_core::protocol::v1::canonical_assignment_message("a", "b", "c", "2026", payload);
+        let sig_b64 = signer.sign("a", "b", "c", "2026", "", payload).unwrap();
+        let msg = iac_core::protocol::v1::canonical_assignment_message(
+            "a", "b", "c", "2026", "", payload,
+        );
         let pub_bytes = B64.decode(&new_pub).unwrap();
         let mut buf = [0u8; 32];
         buf.copy_from_slice(&pub_bytes);

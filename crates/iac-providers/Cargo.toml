@@ -32,10 +32,12 @@ base64 = { workspace = true }
 parking_lot = { workspace = true }
 # Phase 7dc: WebAssembly plugin runtime. Sandboxed third extension
 # point — hard memory cap + fuel-based CPU limit, no default I/O.
-# Phase 10: gated behind `wasm` feature so MIPS / OpenWrt cross-
-# compile (which can't link cranelift) builds without it. Default
-# enabled — most x86_64 / aarch64 deployments want WASM modules
-# available.
+# Pinned to wasmtime 36.0.7 — the patched line that clears the
+# RUSTSEC-2026-0094..0096 / -0149 advisories.
+# `wasm` is OFF by default and gated behind the feature: wasmtime can't
+# cross-compile to MIPS/OpenWrt and bloats the binary, so lean default
+# builds stay portable to every target; capable hosts opt in with
+# `--features wasm`.
 wasmtime = { workspace = true, optional = true }
 # Phase 7de: capability-driven WASI preview2 imports — component
 # plugins can opt into preopened directories / env vars / stdio.
@@ -51,11 +53,13 @@ tracing = { workspace = true }
 rustix = { workspace = true }
 
 [features]
-default = ["wasm"]
+# `wasm` is OFF by default: wasmtime (now patched 36.0.7) can't
+# cross-compile to MIPS and bloats the binary, while the file/firewall/
+# systemd/package/docker/... providers all stay available without it.
+# Opt in with `--features wasm` on capable hosts.
+default = []
 # Phase 10: WASM-module provider. Requires wasmtime/cranelift, which
-# does NOT support MIPS architectures. Disable for MIPS / OpenWrt
-# cross-compiles — the file/firewall/systemd/package providers all
-# stay available without it.
+# does NOT support MIPS architectures.
 wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
 
 [dev-dependencies]

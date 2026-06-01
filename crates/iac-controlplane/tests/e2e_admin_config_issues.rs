@@ -58,6 +58,7 @@ async fn spawn(
         wal_checkpoint_interval_secs: 0,
         shutdown_timeout_secs: 1,
         trusted_proxies: vec![],
+        agent_enrollment_token: None,
     };
     let store = Store::connect(&cfg.database_url).await.unwrap();
     let signer = std::sync::Arc::new(

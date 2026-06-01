@@ -100,33 +100,36 @@ impl Systemctl for RealSystemctl {
         Ok(parse_show(&output))
     }
 
+    // `--` ends option parsing so a unit name can never be read as a
+    // `systemctl` flag (defense-in-depth alongside the spec-level
+    // leading-dash rejection).
     fn enable(&self, unit: &str) -> Result<()> {
-        Self::run(&["enable", unit])?;
+        Self::run(&["enable", "--", unit])?;
         Ok(())
     }
 
     fn disable(&self, unit: &str) -> Result<()> {
-        Self::run(&["disable", unit])?;
+        Self::run(&["disable", "--", unit])?;
         Ok(())
     }
 
     fn start(&self, unit: &str) -> Result<()> {
-        Self::run(&["start", unit])?;
+        Self::run(&["start", "--", unit])?;
         Ok(())
     }
 
     fn stop(&self, unit: &str) -> Result<()> {
-        Self::run(&["stop", unit])?;
+        Self::run(&["stop", "--", unit])?;
         Ok(())
     }
 
     fn restart(&self, unit: &str) -> Result<()> {
-        Self::run(&["restart", unit])?;
+        Self::run(&["restart", "--", unit])?;
         Ok(())
     }
 
     fn reload(&self, unit: &str) -> Result<()> {
-        Self::run(&["reload", unit])?;
+        Self::run(&["reload", "--", unit])?;
         Ok(())
     }
 }

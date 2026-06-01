@@ -9,9 +9,6 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("io error: {0}")]
-    IoSimple(#[from] std::io::Error),
-
     #[error("yaml parse error in {path}: {source}")]
     Yaml {
         path: PathBuf,

@@ -67,9 +67,10 @@ Build from source on anything else: `cargo install --path crates/iac-cli`.
 Pre-production. Functionally complete; static-audit-clean across six rounds
 (see TASKS.md). Wire format stable in v1. SQLite backend exercised on a
 Raspberry Pi 4 trial (10 agents, 1000 ops at 50 RPS, 0 errors after the
-Phase 8.7 SQLite-busy fix); Postgres backend wired for larger fleets but
-not yet trialled there. Real fleet validation (10 VPS) pending. See
-[TASKS.md](TASKS.md) for the phased roadmap and what's been shipped.
+Phase 8.7 SQLite-busy fix). Phase 9 fleet validation (10 VPS, two regions)
+is closed: F1 soak (baseline / burst / density / 72h), F2, F6, F7 and F8 all
+PASS on the real fleet. A security-remediation pass is in progress on top of
+that. See [TASKS.md](TASKS.md) for the phased roadmap and what's been shipped.
 
 ## Documentation
 

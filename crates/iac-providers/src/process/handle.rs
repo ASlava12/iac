@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 use serde_json::Value as Json;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc;
 use std::time::Instant;
 
 pub struct PluginHandle {
@@ -44,7 +45,14 @@ struct State {
 struct RunningProc {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
+    /// Complete NDJSON lines delivered by a dedicated reader thread.
+    /// Reading through a channel (rather than a blocking `fill_buf`
+    /// on the calling thread) is what makes the per-call deadline
+    /// real: `BufRead::fill_buf` blocks until a byte arrives, so a
+    /// plugin that never writes (and never closes stdout) would
+    /// otherwise hang the worker past any timeout. The reader thread
+    /// exits when the child's stdout closes (i.e. on kill/exit).
+    lines: mpsc::Receiver<std::io::Result<String>>,
 }
 
 impl PluginHandle {
@@ -239,15 +247,20 @@ impl PluginHandle {
             .stdin
             .take()
             .ok_or_else(|| Error::provider(&self.spec.kind, "child stdin missing after spawn"))?;
-        let stdout =
-            BufReader::new(child.stdout.take().ok_or_else(|| {
-                Error::provider(&self.spec.kind, "child stdout missing after spawn")
-            })?);
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::provider(&self.spec.kind, "child stdout missing after spawn"))?;
+        // Drain stdout on a dedicated thread so a per-call deadline can
+        // actually fire even when the plugin goes silent without closing
+        // the pipe. The thread ends when stdout closes (kill/exit).
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || reader_loop(stdout, &tx));
 
         let mut proc = RunningProc {
             child,
             stdin,
-            stdout,
+            lines: rx,
         };
         // Read the first line as the hello message.
         let deadline = Instant::now() + self.spec.handshake_timeout();
@@ -344,53 +357,93 @@ fn write_line<W: Write>(w: &mut W, line: &str) -> std::io::Result<()> {
 const MAX_NDJSON_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 fn read_line_until(proc: &mut RunningProc, deadline: Instant) -> std::io::Result<String> {
-    // BufRead::read_line is blocking. To enforce a deadline without
-    // pulling in a runtime, we run a polling loop using available()
-    // bytes plus a short sleep. We accept a bit of latency on bursts
-    // — plugin handshakes are small, calls are small, this is fine.
-    let mut accumulated = String::new();
+    // The reader thread delivers complete lines (or a terminal error)
+    // over the channel; we just wait for the next one up to the
+    // deadline. `recv_timeout(0)` returns immediately, so a deadline
+    // already in the past surfaces as a clean TimedOut rather than a
+    // hang — the bug this replaced (`fill_buf` blocked before the
+    // deadline check ever ran).
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match proc.lines.recv_timeout(remaining) {
+        Ok(line) => line,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "deadline",
+        )),
+        // Sender dropped → reader thread ended → stdout closed (the
+        // child exited or was killed). Surface as EOF; the caller's
+        // transport classifier treats "read: EOF" as a crash and
+        // respawns when `restart_on_crash` is set.
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "EOF",
+        )),
+    }
+}
+
+/// Reader-thread body: pull newline-delimited lines off the child's
+/// stdout and hand each one (trimmed) to the channel. Enforces
+/// [`MAX_NDJSON_LINE_BYTES`] *incrementally* — a plugin that drip-feeds
+/// bytes without ever emitting `\n` is cut off before it can OOM the
+/// host (the previous on-thread `read_line` would have buffered the
+/// whole tail first). Exits on EOF, send error (receiver gone), or a
+/// read error.
+fn reader_loop(stdout: std::process::ChildStdout, tx: &mpsc::Sender<std::io::Result<String>>) {
+    let mut reader = BufReader::new(stdout);
+    let mut line: Vec<u8> = Vec::new();
     loop {
-        // Cheap "anything to read?" probe: try a non-blocking peek
-        // through fill_buf. If the buffer has data, drain a line.
-        let buf = proc.stdout.fill_buf()?;
-        if !buf.is_empty() {
-            let n = proc.stdout.read_line(&mut accumulated)?;
-            if n == 0 && accumulated.is_empty() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "EOF",
-                ));
+        line.clear();
+        let mut capped = false;
+        loop {
+            let available = match reader.fill_buf() {
+                Ok(b) => b,
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            };
+            if available.is_empty() {
+                // EOF. Flush a trailing partial line if any, then stop.
+                if !line.is_empty() && !capped {
+                    let _ = tx.send(Ok(String::from_utf8_lossy(&line).into_owned()));
+                }
+                return; // dropping tx disconnects the channel
             }
-            // `read_line` returns the bytes including the trailing
-            // `\n` if it found one. Without `\n` it returns whatever
-            // was in the buffer and we loop. Cap before looping.
-            if accumulated.len() > MAX_NDJSON_LINE_BYTES {
-                return Err(std::io::Error::other(format!(
-                    "ndjson line exceeded {MAX_NDJSON_LINE_BYTES} bytes \
-                     without newline; refusing to buffer further"
-                )));
+            if let Some(nl) = available.iter().position(|&b| b == b'\n') {
+                if !capped {
+                    line.extend_from_slice(&available[..nl]);
+                }
+                reader.consume(nl + 1);
+                break;
             }
-            if accumulated.ends_with('\n') {
-                return Ok(accumulated.trim_end_matches('\n').to_string());
+            let take = available.len();
+            if !capped {
+                line.extend_from_slice(available);
+                if line.len() > MAX_NDJSON_LINE_BYTES {
+                    let _ = tx.send(Err(std::io::Error::other(format!(
+                        "ndjson line exceeded {MAX_NDJSON_LINE_BYTES} bytes \
+                         without newline; refusing to buffer further"
+                    ))));
+                    // Keep draining-and-discarding this line until its
+                    // newline so the stream re-syncs, but never buffer more.
+                    capped = true;
+                    line.clear();
+                }
             }
-            // No newline yet — keep polling for more data.
+            reader.consume(take);
+        }
+        if capped {
+            // We already reported the over-length error; skip emitting
+            // this (now-discarded) line and move to the next.
             continue;
         }
-        if Instant::now() >= deadline {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "deadline",
-            ));
+        if tx
+            .send(Ok(String::from_utf8_lossy(&line).into_owned()))
+            .is_err()
+        {
+            return; // receiver gone
         }
-        // Has the child exited?
-        match proc.child.try_wait() {
-            Ok(Some(status)) => {
-                return Err(std::io::Error::other(format!("child exited: {status}")));
-            }
-            Ok(None) => {}
-            Err(e) => return Err(e),
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 
@@ -452,6 +505,50 @@ echo '{"id":1,"result":{"present":true,"spec":{"name":"x"}}}'
         let hello = handle.hello().unwrap();
         assert_eq!(hello.kind, "t.k");
         assert_eq!(hello.capability_keys, vec!["{{ name }}"]);
+    }
+
+    #[test]
+    fn call_times_out_when_plugin_goes_silent() {
+        // Regression (security): a plugin that completes the handshake,
+        // reads the request, then goes silent WITHOUT closing stdout
+        // used to hang the worker forever — the blocking `fill_buf`
+        // ran before the deadline check. The reader-thread + recv_timeout
+        // design must surface a read timeout within ~call_timeout.
+        let _guard = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let plugin = mk_plugin_script(
+            tmp.path(),
+            r#"
+echo '{"hello":{"protocol_version":1,"kind":"t.k","capability_keys":[],"methods":["observe"]}}'
+read REQ
+sleep 30
+"#,
+        );
+        let spec = ExternalProviderSpec {
+            kind: "t.k".into(),
+            binary: plugin,
+            args: vec![],
+            env: vec![],
+            restart_on_crash: false,
+            handshake_timeout_secs: 10,
+            call_timeout_secs: 1,
+            binary_sha256: None,
+        };
+        let handle = PluginHandle::new(spec);
+        let start = Instant::now();
+        let err = handle
+            .call("observe", serde_json::json!({"spec": {"name": "x"}}))
+            .unwrap_err();
+        let elapsed = start.elapsed();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("read"),
+            "expected read/timeout error, got: {msg}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "call did not time out promptly: {elapsed:?}"
+        );
     }
 
     #[test]

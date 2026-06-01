@@ -278,6 +278,7 @@ impl TestServerBuilder {
             wal_checkpoint_interval_secs: self.wal_checkpoint_interval_secs,
             shutdown_timeout_secs: self.shutdown_timeout_secs,
             trusted_proxies: self.trusted_proxies,
+            agent_enrollment_token: None,
         };
 
         let resolved_config_path = if self.config_path.is_some() {

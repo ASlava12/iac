@@ -310,6 +310,10 @@ spec:
 /// observe → drift → apply → re-observe (no drift) the same way as
 /// shellout / external-process variants. Module is compiled from WAT
 /// in-process so the test doesn't depend on a wasm32 toolchain.
+// `wasm` is an opt-in feature (security-remediation): default builds link
+// no wasmtime, so these wasm-provider tests only run under
+// `cargo test -p iac-agent --features wasm`.
+#[cfg(feature = "wasm")]
 #[tokio::test]
 async fn wasm_provider_observes_and_applies() {
     let dir = TempDir::new().unwrap();
@@ -444,6 +448,7 @@ spec: {}
 /// wasm artifact isn't present (machines without `wasm32-unknown-
 /// unknown` installed), the test prints a skip notice and exits
 /// cleanly.
+#[cfg(feature = "wasm")]
 #[tokio::test]
 async fn wasm_component_provider_observes_and_applies() {
     let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -566,6 +571,7 @@ spec:
 ///
 /// Skip cleanly when the fixture isn't built — CI without `wasm32-
 /// wasip2` installed shouldn't fail this test.
+#[cfg(feature = "wasm")]
 #[tokio::test]
 async fn wasi_preview2_preopen_round_trips_a_file() {
     let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -672,6 +678,7 @@ spec:
 /// config. The plugin's `read_to_string` fails because the WASI
 /// linker isn't even registered. Confirms the empty-config path
 /// preserves the no-I/O sandbox guarantee.
+#[cfg(feature = "wasm")]
 #[tokio::test]
 async fn wasi_preopen_omitted_means_no_filesystem_access() {
     let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -6,7 +6,6 @@
 //! (the long-running NDJSON-RPC daemon).
 
 use super::handle::PluginHandle;
-use super::proto::methods;
 use super::spec::ExternalProviderSpec;
 use crate::plugin::{CapabilityKeysStrategy, PluginProvider, PluginRuntime};
 use iac_core::Result;
@@ -81,13 +80,6 @@ impl PluginRuntime for ExternalRuntime {
         )
     }
 }
-
-// Phase 7di.1: `methods::*` constants are still exported from
-// `super::proto` for tests that reach for them; nothing in this file
-// needs them anymore (literals everywhere thanks to the unified
-// PluginProvider).
-#[allow(unused_imports)]
-use methods as _legacy_methods_constants;
 
 #[cfg(test)]
 mod tests {

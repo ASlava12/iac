@@ -65,6 +65,34 @@ async fn register(
         .rate_limiter
         .check_and_record_register(&client_ip.to_string())
         .await?;
+    // Enrollment authentication. When the operator has configured a
+    // shared bootstrap secret, the agent must present it in the
+    // `X-Iac-Enrollment-Token` header (constant-time compared). When
+    // unset, registration stays open (backward compatible) but we warn
+    // loudly so an unauthenticated control-plane doesn't pass silently.
+    match state.config().agent_enrollment_token.as_deref() {
+        Some(expected) if !expected.is_empty() => {
+            let provided = headers
+                .get("x-iac-enrollment-token")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !crate::auth::ct_eq(provided.as_bytes(), expected.as_bytes()) {
+                tracing::warn!(
+                    client_ip = %client_ip,
+                    "agent registration rejected: missing/invalid X-Iac-Enrollment-Token"
+                );
+                return Err(ApiError::Unauthorized);
+            }
+        }
+        _ => {
+            tracing::warn!(
+                client_ip = %client_ip,
+                "UNAUTHENTICATED agent registration: agent_enrollment_token is not set, \
+                 so any client that can reach the control-plane can enroll an agent and \
+                 pull its assignments. Set agent_enrollment_token to require a bootstrap secret."
+            );
+        }
+    }
     // Phase 7cc: read TTL config from live snapshot so SIGHUP reload
     // picks up changes for new registrations without a restart.
     let ttl = state.config().agent_token_ttl_secs;
@@ -248,6 +276,7 @@ async fn list_assignments(
                 &env.assignment_id,
                 &env.operation_id,
                 &env.created_at,
+                env.expires_at.as_deref().unwrap_or(""),
                 &payload_json,
             )
             .map_err(|e| crate::error::ApiError::Internal(format!("signing failed: {e}")))?;

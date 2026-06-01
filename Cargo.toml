@@ -177,12 +177,15 @@ parking_lot = "0.12"
 # We disable wasmtime's default features to keep the binary small —
 # the runtime feature gives us module compilation+execution without
 # pulling in async, jit code-cache, or debugger hooks we don't use.
-wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime", "std", "gc", "component-model"] }
+# wasmtime 36 split the `gc` umbrella: enabling component-model/GC types
+# now also requires an explicit collector feature (`gc-drc` = deferred
+# reference counting). Without it, `Engine::new` errors at runtime.
+wasmtime = { version = "36", default-features = false, features = ["cranelift", "runtime", "std", "gc", "gc-drc", "component-model"] }
 # Phase 7de: WASI preview2 imports for component-model plugins —
 # capability-driven I/O (preopen-only filesystem, scoped env, opt-in
 # stdio). Plugins that don't declare any wasi capabilities still see
 # the empty linker we ship today.
-wasmtime-wasi = "26"
+wasmtime-wasi = "36"
 wat = "1"
 # Phase 7dd: convert core-wasm + WIT into component bytes at test
 # time. Lets the test fixture stay as plain WAT — we promote it to

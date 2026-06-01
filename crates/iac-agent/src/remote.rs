@@ -151,12 +151,22 @@ impl Client {
             id.migrate_legacy_pubkey();
             id
         } else {
-            let resp = http
+            // Enrollment auth: when the operator has set a shared
+            // bootstrap secret on the control-plane, the agent presents it
+            // via `X-Iac-Enrollment-Token`. Sourced from the
+            // `IAC_ENROLLMENT_TOKEN` env var (set it in the agent's
+            // systemd EnvironmentFile) so the secret never lands in the
+            // on-disk identity file. Absent → header omitted (open
+            // enrollment, backward compatible).
+            let mut req = http
                 .post(format!("{server_url}/v1/agents/register"))
-                .json(&register)
-                .send()
-                .await
-                .context("registering with control-plane")?;
+                .json(&register);
+            if let Ok(tok) = std::env::var("IAC_ENROLLMENT_TOKEN")
+                && !tok.is_empty()
+            {
+                req = req.header("x-iac-enrollment-token", tok);
+            }
+            let resp = req.send().await.context("registering with control-plane")?;
             let status = resp.status();
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
@@ -521,6 +531,7 @@ impl Client {
             &env.assignment_id,
             &env.operation_id,
             &env.created_at,
+            env.expires_at.as_deref().unwrap_or(""),
             &payload_json,
         );
         let sig_bytes = B64

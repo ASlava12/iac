@@ -20,9 +20,9 @@ pub struct Policy {
     pub r#match: PolicyMatch,
     #[serde(default)]
     pub requires_approval: bool,
-    /// Phase 6d placeholder — Phase 6e RBAC reads this and gates `.../approve`
-    /// on the caller's role membership. Today any admin token holder can
-    /// approve regardless of this field.
+    /// Per-policy approver allowlist. Enforced: `.../approve` checks the
+    /// caller against this list in addition to the RBAC role gate. An
+    /// empty list means "any caller holding the approve role".
     #[serde(default)]
     pub approvers: Vec<String>,
     /// Phase 7n: per-policy rate limit. When this policy matches, the

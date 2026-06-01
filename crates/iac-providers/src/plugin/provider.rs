@@ -353,7 +353,22 @@ impl<R: PluginRuntime> Provider for PluginProvider<R> {
                     .call("capability_keys", self.envelope(resource))
                 {
                     Ok(raw) => self.decode("capability_keys", raw),
-                    Err(_) => Ok(Vec::new()),
+                    // Distinguish "plugin doesn't implement this optional
+                    // method" (→ no keys, fine) from a transport/runtime
+                    // failure (→ propagate, fail-closed). Swallowing a
+                    // transport error as "no keys" would silently widen
+                    // authorization whenever a plugin is merely flaky.
+                    Err(e) => {
+                        let msg = e.to_string();
+                        let transport = msg.contains("EOF")
+                            || msg.contains("read:")
+                            || msg.contains("write:")
+                            || msg.contains("not running")
+                            || msg.contains("timed out")
+                            || msg.contains("deadline")
+                            || msg.contains("ndjson line exceeded");
+                        if transport { Err(e) } else { Ok(Vec::new()) }
+                    }
                 }
             }
         }

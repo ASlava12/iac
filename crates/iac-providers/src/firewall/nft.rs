@@ -163,10 +163,33 @@ impl FirewallBackend for NftablesBackend {
                 format!("nft list failed: {}", stderr.trim()),
             ));
         }
+        // Track the enclosing `table <family> <name> { chain <name> { ...`
+        // context as we descend the ruleset, so the matched rule carries
+        // its real table/chain. Previously these came back empty, making
+        // verify/diff see `chain "" -> <desired>` and report perpetual
+        // drift / never converge.
         let needle = format!("comment \"iac:{name}\"");
+        let mut cur_table = String::new();
+        let mut cur_chain = String::new();
         for line in stdout.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("table ") {
+                // "table inet filter {" → [family, name]
+                let mut it = rest.split_whitespace();
+                let _family = it.next();
+                cur_table = it.next().unwrap_or("").to_string();
+                cur_chain = String::new();
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("chain ") {
+                cur_chain = rest.split_whitespace().next().unwrap_or("").to_string();
+                continue;
+            }
             if line.contains(&needle) {
-                return Ok(Some(parse_nft_rule_line(line, name, family)));
+                let mut rule = parse_nft_rule_line(line, name, family);
+                rule.table = cur_table.clone();
+                rule.chain = cur_chain.clone();
+                return Ok(Some(rule));
             }
         }
         Ok(None)

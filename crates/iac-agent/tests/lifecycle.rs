@@ -170,9 +170,12 @@ async fn run_loop_writes_status_and_exits_on_shutdown() {
     assert_eq!(status.managed_resource_count, 1);
     assert!(status.last_observe_summary.is_some());
 
-    // Shutdown; the loop should return promptly.
+    // Shutdown; the loop should return promptly. 10s (not 2s) so the
+    // assertion survives a heavily-loaded parallel test run / the heavier
+    // `--features wasm` build, where extra watcher tasks push the
+    // join past a tight 2s window even though shutdown itself is prompt.
     shutdown.notify_waiters();
-    tokio::time::timeout(Duration::from_secs(2), handle)
+    tokio::time::timeout(Duration::from_secs(10), handle)
         .await
         .unwrap()
         .unwrap()

@@ -552,7 +552,25 @@ pub(crate) fn extract_routing(
         .map(str::to_string);
 
     let resource_id = format!("{kind}/{environment}/{name}");
-    let resource_json = serde_json::to_string(raw)?;
+    // Canonicalize the stored payload: stamp the resolved environment
+    // into `metadata.environment` so it is never absent downstream.
+    // Without this, a manifest that omits the field is stored raw; the
+    // agent then deserializes it as the `"default"` env (breaking its
+    // resource_id), and `list_desired_state_for_agent` — which rebuilds
+    // the (op, resource) pair from the payload — skips it because the
+    // env is empty, silently under-delivering desired state.
+    let mut canonical = raw.clone();
+    if let Some(meta) = canonical
+        .as_object_mut()
+        .map(|o| o.entry("metadata").or_insert_with(|| serde_json::json!({})))
+        .and_then(|m| m.as_object_mut())
+    {
+        meta.insert(
+            "environment".to_string(),
+            serde_json::Value::String(environment.clone()),
+        );
+    }
+    let resource_json = serde_json::to_string(&canonical)?;
     Ok(ResourceForRouting {
         resource_id,
         kind,
