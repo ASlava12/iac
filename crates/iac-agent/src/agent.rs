@@ -30,11 +30,21 @@ use iac_providers::wasm::{WasmComponentProvider, WasmRuntimeAdapter, WasmRuntime
 use jiff::Timestamp;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Instant;
 use tokio::sync::{Notify, RwLock};
 use tokio::task;
 use tokio::time::Instant as TokioInstant;
 use tracing::{debug, error, info, warn};
+
+/// Unix-seconds of the last successful signing-key bundle refresh.
+/// Process-global (one agent per process) throttle so the periodic
+/// refresh doesn't hit the control-plane every observe cycle.
+static LAST_KEY_REFRESH: AtomicI64 = AtomicI64::new(0);
+
+/// How often the agent re-fetches the server's signing-key bundle so it
+/// follows key rotation without a restart.
+const KEY_REFRESH_INTERVAL_SECS: i64 = 3600;
 
 #[derive(Debug, Clone)]
 pub struct Agent {
@@ -563,6 +573,7 @@ impl Agent {
         // Best-effort push to control-plane.
         if let Err(e) = self.push_to_remote(&summary).await {
             warn!(error = %e, "remote push failed");
+            self.reset_remote_if_auth_error(&e).await;
         }
 
         // Best-effort: drain any assignments waiting for us. Done after the
@@ -571,7 +582,11 @@ impl Agent {
             && let Err(e) = self.drain_assignments().await
         {
             warn!(error = %e, "draining assignments failed");
+            self.reset_remote_if_auth_error(&e).await;
         }
+
+        // Follow server signing-key rotation (throttled).
+        self.maybe_refresh_signing_keys().await;
 
         // Phase 7da.4: auto-rotate the bearer token before it expires.
         // Server returns `expires_at` in `RegisterResponse`; the
@@ -632,6 +647,49 @@ impl Agent {
             );
         }
         Ok(())
+    }
+
+    /// Periodically re-fetch the server's signing-key bundle so a
+    /// long-lived, continuously-connected agent follows key rotation
+    /// (otherwise it stays pinned to the bundle from its first connect
+    /// and rejects envelopes signed by a newly-rotated key). Throttled
+    /// to [`KEY_REFRESH_INTERVAL_SECS`]; best-effort.
+    async fn maybe_refresh_signing_keys(&self) {
+        let now = Timestamp::now().as_second();
+        let last = LAST_KEY_REFRESH.load(Ordering::Relaxed);
+        if last != 0 && now.saturating_sub(last) < KEY_REFRESH_INTERVAL_SECS {
+            return;
+        }
+        let mut guard = self.inner.remote.write().await;
+        let Some(client) = guard.as_mut() else {
+            return;
+        };
+        match client
+            .refresh_signing_keys(&self.inner.config.identity_file)
+            .await
+        {
+            Ok(()) => {
+                LAST_KEY_REFRESH.store(now, Ordering::Relaxed);
+                debug!("refreshed server signing-key bundle");
+            }
+            Err(e) => warn!(error = %e, "signing-key refresh failed"),
+        }
+    }
+
+    /// If a remote call failed because the control-plane rejected our
+    /// credentials (401 / Unauthorized — e.g. the token expired past the
+    /// rotation window or the agent was revoked), drop the client so the
+    /// next cycle's lazy-reconnect re-registers. A false positive only
+    /// costs one idempotent re-register, so string-matching the error
+    /// chain is an acceptable signal here.
+    async fn reset_remote_if_auth_error(&self, e: &anyhow::Error) {
+        let msg = format!("{e:#}");
+        if msg.contains("401") || msg.contains("Unauthorized") {
+            warn!(
+                "control-plane rejected agent credentials — dropping client to force re-registration"
+            );
+            *self.inner.remote.write().await = None;
+        }
     }
 
     /// Phase 9-F6 follow-up: send a single lightweight heartbeat at

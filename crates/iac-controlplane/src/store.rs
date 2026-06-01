@@ -1642,6 +1642,32 @@ impl Store {
     /// ('fetched' but older than ASSIGNMENT_LEASE_SECS without a
     /// result POST). Without this, an agent that crashed between
     /// GET and POST orphans the assignment indefinitely.
+    /// Return claimed-but-not-yet-shipped assignments to `pending` so the
+    /// agent's next poll re-serves them immediately. Called when secret
+    /// resolution or signing fails AFTER `fetch_pending_assignments` has
+    /// already marked the rows `fetched` — without this, a transient
+    /// resolver/signer error would strand the assignment for a full lease
+    /// window (the agent received nothing it could apply). Only reverts
+    /// rows still in `fetched` (a row the agent meanwhile completed is
+    /// left alone).
+    pub async fn revert_assignment_claims(&self, assignment_ids: &[String]) -> ApiResult<()> {
+        if assignment_ids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for id in assignment_ids {
+            sqlx::query(&self.sql(
+                "UPDATE assignments SET status = 'pending', fetched_at = NULL
+                 WHERE id = ? AND status = 'fetched'",
+            ))
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn fetch_pending_assignments(
         &self,
         agent_id: &str,
